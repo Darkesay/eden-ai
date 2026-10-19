@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="100%" height="100%">
+  <defs>
+    <linearGradient id="edenGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#059669" />
+      <stop offset="100%" stop-color="#34D399" />
+    </linearGradient>
+  </defs>
+  <circle cx="128" cy="128" r="128" fill="#10B981" opacity="0.1"/>
+  <path d="M128 224C75 224 40 181 40 128C40 75 75 32 128 32C181 32 216 75 216 128C216 181 181 224 128 224Z" fill="url(#edenGrad)"/>
+  <path d="M128 48L128 208" stroke="white" stroke-width="12" stroke-linecap="round" opacity="0.3"/>
+  <path d="M128 160L80 104" stroke="white" stroke-width="12" stroke-linecap="round" opacity="0.3"/>
+  <path d="M128 112L176 56" stroke="white" stroke-width="12" stroke-linecap="round" opacity="0.3"/>
+</svg>
