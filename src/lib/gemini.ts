@@ -1,13 +1,25 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || (typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_GEMINI_API_KEY || '') : ''),
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
+export function getGeminiApiKey(): string {
+  const envKey = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) ||
+                 (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) ||
+                 '';
+  if (envKey && envKey !== 'MY_GEMINI_API_KEY') return envKey;
+  return '';
+}
+
+export function getAi(): GoogleGenAI {
+  return new GoogleGenAI({
+    apiKey: getGeminiApiKey(),
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      }
     }
-  }
-});
+  });
+}
+
+const ai = getAi();
 
 export interface PlantAnalysisResult {
   species: string;
@@ -226,10 +238,24 @@ export async function analyzePlantImage(
 ): Promise<PlantAnalysisResult> {
   const selectedLang = NIGERIAN_LANGUAGES.find(l => l.id === languageId) || NIGERIAN_LANGUAGES[0];
 
+  let mimeType = 'image/jpeg';
+  let cleanData = base64Image.trim();
+
+  if (cleanData.startsWith('data:')) {
+    const match = cleanData.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      const detected = match[1].toLowerCase();
+      mimeType = (detected === 'image/png' || detected === 'image/webp') ? detected : 'image/jpeg';
+      cleanData = match[2];
+    }
+  } else {
+    cleanData = cleanData.replace(/^data:image\/\w+;base64,/, "");
+  }
+
   const imagePart = {
     inlineData: {
-      mimeType: "image/jpeg",
-      data: base64Image.replace(/^data:image\/\w+;base64,/, ""),
+      mimeType,
+      data: cleanData,
     },
   };
 
@@ -389,6 +415,100 @@ export async function generateSpeechAudio(
   return base64Audio;
 }
 
+/**
+ * Local Agronomist Knowledge Base fallback for when offline, during network
+ * interruptions, or when Gemini API key is not yet provisioned in production.
+ */
+function getLocalAgronomistFallback(
+  message: string,
+  languageId: string,
+  cropType?: string,
+  errDetails?: string
+): string {
+  const m = message.toLowerCase().trim();
+  const crop = cropType || 'greenhouse crops';
+  const hasKeyIssue = Boolean(errDetails && (
+    errDetails.toLowerCase().includes('api key') ||
+    errDetails.toLowerCase().includes('api_key') ||
+    errDetails.toLowerCase().includes('unauthenticated') ||
+    errDetails.toLowerCase().includes('forbidden')
+  ));
+
+  let reply = '';
+
+  // 1. Greetings
+  if (m === 'hi' || m === 'hello' || m === 'hey' || m.startsWith('hi ') || m.startsWith('hello ') || m === 'sannu' || m === 'ekaro' || m === 'ndewo' || m.includes('how far')) {
+    if (languageId === 'ha') {
+      reply = `Sannu manomi! Ni ne masanin shuke-shuken EDENS AI, tare da haɗin gwiwar RA. Yaya ${crop} ɗinka ke ciki a yau? Zan iya taimaka maka da yanayin zafin greenhouse, ruwa, da maganin cututtuka.`;
+    } else if (languageId === 'yo') {
+      reply = `Ẹ ǹlẹ́ o àgbẹ̀! Èmi ni onímọ̀ EDENS AI, pẹ̀lú agbára RA. Báwo ni àwọn irúgbìn ${crop} rẹ ṣe ń ṣe lónìí? Mo wà níbí láti ràn ọ́ lọ́wọ́ pẹ̀lú omi, ooru, àti àtọ́jú ilẹ̀.`;
+    } else if (languageId === 'ig') {
+      reply = `Nnọọ ezigbo onye ọrụ ugbo! Abụ m ọkachamara EDENS AI, site na nkwado RA. Kedu ka ${crop} gị si na-eme taa? Enwere m ike inyere gị aka na nlekọta mmiri, okpomọkụ, na ọgwụgwọ ọrịa osisi.`;
+    } else if (languageId === 'pcm') {
+      reply = `How far my master farmer! Welcome to EDENS AI, powered by RA. I dey monitor your ${crop} well-well. Wetin you wan ask me about watering, pest control, or greenhouse heat today?`;
+    } else {
+      reply = `Hello farmer! Welcome to EDENS AI, powered by RA. Your greenhouse monitoring is active. How are your ${crop} performing today? You can ask me about watering schedules, pest defense, climate tuning, or visual diagnosis.`;
+    }
+  }
+  // 2. Yellowing leaves / chlorosis
+  else if (m.includes('yellow') || m.includes('leaf') || m.includes('leaves') || m.includes('chlorosis') || m.includes('rawa') || m.includes('gbẹ')) {
+    if (languageId === 'pcm') {
+      reply = `Yellow leaf fit happen because of three main reasons for greenhouse: 1) Too much water wey dey choke the roots, 2) Nitrogen hunger, or 3) Early fungal blight. Make you check your soil moisture first — aim for 50-60%. If soil dey too wet, reduce pumping for 24 hours. If moisture dey normal, add compost tea or organic nitrogen booster.`;
+    } else if (languageId === 'ha') {
+      reply = `Ganyen da ke zama rawaya yakan faru ne saboda yawan ruwa da ke shake jijiyoyin shuka, ko rashin sinadarin Nitrogen, ko cutar fungal. Fara duba ma'aunin ruwan ƙasa (ya kasance tsakanin 50-60%). Idan ƙasa ta yi laushi da yawa, dakatar da ban-ruwa na ɗan lokaci.`;
+    } else {
+      reply = `Yellowing foliage (chlorosis) in greenhouse ${crop} is most commonly caused by root zone waterlogging or nitrogen deficiency. 1) Verify soil moisture is within 50–65%. 2) Ensure container drainage is unobstructed. 3) Apply a balanced organic fertilizer or foliar spray to rapidly restore chlorophyll vigor.`;
+    }
+  }
+  // 3. Pest / insect control
+  else if (m.includes('pest') || m.includes('insect') || m.includes('aphid') || m.includes('whitefly') || m.includes('mite') || m.includes('worm') || m.includes('kwari') || m.includes('kòkòrò')) {
+    if (languageId === 'pcm') {
+      reply = `For organic pest control without chemical: 1) Boil fresh Dongoyaro (Neem) leaves, leave the water make e cool, mix am with small black soap or liquid detergent, spray under the leaves in the cool evening. 2) Put yellow sticky traps around the greenhouse for whiteflies. 3) Dust small wood ash for the stem base.`;
+    } else if (languageId === 'ha') {
+      reply = `Hanyar magance kwari ba tare da sinadarai masu guba ba: 1) Tafasa ganyen Dogon Yaro (Neem), a bar shi ya huce, a gauraya da ɗan sabulu marar zafi, a fesa a ƙarƙashin ganye da yamma. 2) A kafa tarkon kwari mai launin rawaya.`;
+    } else {
+      reply = `For safe, non-toxic greenhouse pest management: 1) Prepare Neem leaf (Dongoyaro) cold-pressed aqueous extract with 0.1% potassium soap as a surfactant; spray the undersides of leaves during early morning or sunset. 2) Install yellow and blue chromatic sticky traps for whiteflies and thrips. 3) Dust horticultural wood ash around container bases to deter crawling larvae.`;
+    }
+  }
+  // 4. Watering & irrigation
+  else if (m.includes('water') || m.includes('irrigation') || m.includes('moisture') || m.includes('dry') || m.includes('ruwa') || m.includes('omi') || m.includes('mmiri')) {
+    if (languageId === 'pcm') {
+      reply = `Watering rule for greenhouse: Early morning (6:30am – 8:30am) na the best time so the root go take water before afternoon heat. Keep soil moisture between 50% and 65%. Never spray water directly on the leaves when sun dey hot to prevent fungus and leaf burn.`;
+    } else {
+      reply = `Optimal irrigation for greenhouse ${crop}: Irrigate during early morning hours (06:30 – 08:30) to establish hydraulic turgor before peak transpiration. Target soil moisture between 50% and 65%. Avoid overhead spraying; use drip lines at the root collar to eliminate leaf surface humidity that breeds bacterial spot.`;
+    }
+  }
+  // 5. Temperature and climate
+  else if (m.includes('temp') || m.includes('heat') || m.includes('hot') || m.includes('cold') || m.includes('ventil') || m.includes('fan') || m.includes('zafi') || m.includes('ooru')) {
+    if (languageId === 'pcm') {
+      reply = `For greenhouse, keep temperature between 22°C and 28°C. Once e pass 30°C, flowers fit drop and tomato no go set fruit. Make you open the roof vents, turn on circulation fan, and use 50% shade net if sun too harsh.`;
+    } else {
+      reply = `Greenhouse thermal management: Maintain ambient canopy temperature between 22°C and 28°C for optimal pollination and fruit set. When temperatures exceed 30°C, trigger automated roof vents and circulation fans to evacuate the hot ceiling layer and prevent flower blossom abortion.`;
+    }
+  }
+  // 6. General Agricultural Guidance
+  else {
+    if (languageId === 'ha') {
+      reply = `Masanin EDENS AI na kula da yanayin ${crop} ɗinka. Don samun kyakkyawan amfani, kula da daidaita ruwa, zafin daki, da kuma bincika ganyaye akai-akai don gano alamun cuta ko kwari da wuri.`;
+    } else if (languageId === 'yo') {
+      reply = `Onímọ̀ EDENS AI ń tọ́jú àwọn ohun ọ̀gbìn ${crop} rẹ. Láti rí ìkórè tó dára, rí i dájú pé omi àti ooru wà ní ìwọ̀ntúnwọ̀nsì, kí o sì máa ṣàyẹ̀wò àwọn ewé déédéé.`;
+    } else if (languageId === 'ig') {
+      reply = `Ọkachamara EDENS AI na-elekọta ${crop} gị. Maka ezigbo owuwe ihe ubi, debe oke mmiri na okpomọkụ n'ụzọ ziri ezi, na-enyochakwa akwụkwọ nri mgbe niile maka ọrịa ma ọ bụ ahụhụ.`;
+    } else if (languageId === 'pcm') {
+      reply = `EDENS AI agronomist dey here for your ${crop}! Make you keep your greenhouse between 22°C-28°C and soil moisture around 55%. Ask me any question about pests, fertilizer, or harvest!`;
+    } else {
+      reply = `As your EDENS AI agronomist, I recommend keeping your greenhouse ${crop} canopy within 22°C–28°C and soil moisture between 50% and 65%. Feel free to ask about specific symptoms, organic fertilizers, watering schedules, or pest control.`;
+    }
+  }
+
+  // If running on Vercel without GEMINI_API_KEY injected, append a helpful note
+  if (hasKeyIssue) {
+    reply += `\n\n*(Tip: To enable live Gemini AI reasoning on Vercel, add \`GEMINI_API_KEY\` in your Vercel Project Settings → Environment Variables).*`;
+  }
+
+  return reply;
+}
+
 export async function consultAgronomist(
   message: string,
   languageId: string = 'pcm',
@@ -419,27 +539,64 @@ ${contextData ? `Current Greenhouse telemetry context:
 - Humidity: ${contextData.humidity ?? 65}%
 - Soil Moisture: ${contextData.soilMoisture ?? 50}%` : ''}`;
 
-  // Build conversational contents
-  const recentHistory = history.slice(-6).map(h => ({
-    role: h.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: h.content }]
-  }));
+  // Build conversational contents adhering strictly to Gemini's multi-turn requirements:
+  // 1. The first turn MUST have role 'user' (Gemini rejects conversations starting with 'model')
+  // 2. Turns must alternate strictly between 'user' and 'model'
+  const validHistory: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
+  let expectedRole: 'user' | 'model' = 'user';
+
+  for (const item of history) {
+    if (!item.content || !item.content.trim()) continue;
+    const itemRole: 'user' | 'model' = item.role === 'assistant' ? 'model' : 'user';
+
+    // Gemini requires the first turn in contents to be 'user'
+    if (validHistory.length === 0 && itemRole !== 'user') {
+      continue;
+    }
+
+    if (itemRole === expectedRole) {
+      validHistory.push({
+        role: itemRole,
+        parts: [{ text: item.content }]
+      });
+      expectedRole = expectedRole === 'user' ? 'model' : 'user';
+    }
+  }
+
+  // If the last history turn is 'user', remove it so appending userTurn will not cause two consecutive user turns
+  if (validHistory.length > 0 && validHistory[validHistory.length - 1].role === 'user') {
+    validHistory.pop();
+  }
+
+  const slicedHistory = validHistory.slice(-6);
 
   const userTurn = {
-    role: 'user',
+    role: 'user' as const,
     parts: [{ text: `[Speaking in ${selectedLang.name}]: ${message}` }]
   };
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3.8-flash",
-    contents: [...recentHistory, userTurn],
-    config: {
-      systemInstruction,
-      temperature: 0.7,
-      maxOutputTokens: 800,
-    }
-  });
+  const contents = [...slicedHistory, userTurn];
 
-  return response.text || "EDENS AI cannot respond at the moment. Please try again.";
+  try {
+    const client = getAi();
+    const response = await client.models.generateContent({
+      model: "gemini-3.8-flash",
+      contents,
+      config: {
+        systemInstruction,
+        temperature: 0.7,
+        maxOutputTokens: 800,
+      }
+    });
+
+    if (response.text?.trim()) {
+      return response.text.trim();
+    }
+  } catch (err: any) {
+    console.warn("Gemini consultAgronomist warning:", err.message);
+    return getLocalAgronomistFallback(message, languageId, contextData?.cropType, err.message);
+  }
+
+  return getLocalAgronomistFallback(message, languageId, contextData?.cropType);
 }
 

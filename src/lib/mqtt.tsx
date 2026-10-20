@@ -67,43 +67,64 @@ export function MqttProvider({ children }: { children: React.ReactNode }) {
       });
 
       newClient.on('message', (topic, message) => {
-        if (topic === 'greenhouse/sensors') {
-          try {
-            const data = JSON.parse(message.toString());
-            if (data.temperature !== undefined) store.setValue('temperature', data.temperature);
-            if (data.humidity !== undefined) store.setValue('humidity', data.humidity);
-            if (data.soilMoisture !== undefined) store.setValue('soilMoisture', data.soilMoisture);
-            if (data.sunlight !== undefined) store.setValue('sunlight', data.sunlight);
-            if (data.growLight !== undefined) store.setValue('growLight', data.growLight);
-            if (data.rain !== undefined) store.setValue('rain', data.rain);
-            if (data.rainGaugeLevel !== undefined) store.setValue('rainGaugeLevel', data.rainGaugeLevel);
-            if (data.waterLevel !== undefined) store.setValue('waterLevel', data.waterLevel);
-            if (data.batteryVoltage !== undefined) store.setValue('batteryVoltage', data.batteryVoltage);
+        const payloadStr = message.toString().trim();
+        if (!payloadStr) return;
 
-            // Update last seen for all registered devices to indicate connection activity
-            const devicesTable = store.getTable('registeredDevices') || {};
-            const now = new Date().toISOString();
-            Object.keys(devicesTable).forEach(id => {
-              store.setCell('registeredDevices', id, 'lastSeen', now);
-            });
-          } catch (e) {
-            console.error('Failed to parse MQTT message:', e);
-          }
+        const lower = payloadStr.toLowerCase();
+
+        // Handle LWT and plain-text device heartbeat messages (e.g. "offline", "online")
+        if (lower.includes('offline') || lower.includes('disconnected')) {
+          store.setValue('hardware_dataSource', 'DISCONNECTED');
+          return;
         }
+        if (lower.includes('online') || lower.includes('connected')) {
+          store.setValue('hardware_dataSource', 'REAL_HARDWARE');
+          return;
+        }
+
+        // Strictly verify JSON format (starts with '{' or '[') before invoking JSON.parse
+        if (!payloadStr.startsWith('{') && !payloadStr.startsWith('[')) {
+          return;
+        }
+
+        // Parse JSON telemetry payloads safely
+        let data: any = null;
+        try {
+          data = JSON.parse(payloadStr);
+        } catch {
+          return;
+        }
+
+        if (typeof data !== 'object' || data === null) return;
+
+        if (topic === 'greenhouse/sensors') {
+          if (data.temperature !== undefined) store.setValue('temperature', data.temperature);
+          if (data.humidity !== undefined) store.setValue('humidity', data.humidity);
+          if (data.soilMoisture !== undefined) store.setValue('soilMoisture', data.soilMoisture);
+          if (data.sunlight !== undefined) store.setValue('sunlight', data.sunlight);
+          if (data.growLight !== undefined) store.setValue('growLight', data.growLight);
+          if (data.rain !== undefined) store.setValue('rain', data.rain);
+          if (data.rainGaugeLevel !== undefined) store.setValue('rainGaugeLevel', data.rainGaugeLevel);
+          if (data.waterLevel !== undefined) store.setValue('waterLevel', data.waterLevel);
+          if (data.batteryVoltage !== undefined) store.setValue('batteryVoltage', data.batteryVoltage);
+
+          // Update last seen for all registered devices to indicate connection activity
+          const devicesTable = store.getTable('registeredDevices') || {};
+          const now = new Date().toISOString();
+          Object.keys(devicesTable).forEach(id => {
+            store.setCell('registeredDevices', id, 'lastSeen', now);
+          });
+        }
+
         if (topic === 'greenhouse/status') {
-           try {
-            const data = JSON.parse(message.toString());
-            if (data.pumpActive !== undefined) store.setValue('pumpActive', data.pumpActive);
-            if (data.fanActive !== undefined) store.setValue('fanActive', data.fanActive);
-            if (data.lightActive !== undefined) store.setValue('lightActive', data.lightActive);
-            if (data.heaterActive !== undefined) store.setValue('heaterActive', data.heaterActive);
-            if (data.peltierActive !== undefined) store.setValue('peltierActive', data.peltierActive);
-            if (data.peltierFan1Active !== undefined) store.setValue('peltierFan1Active', data.peltierFan1Active);
-            if (data.peltierFan2Active !== undefined) store.setValue('peltierFan2Active', data.peltierFan2Active);
-            if (data.roofActive !== undefined) store.setValue('roofActive', data.roofActive);
-          } catch (e) {
-            console.error('Failed to parse MQTT message:', e);
-          }
+          if (data.pumpActive !== undefined) store.setValue('pumpActive', data.pumpActive);
+          if (data.fanActive !== undefined) store.setValue('fanActive', data.fanActive);
+          if (data.lightActive !== undefined) store.setValue('lightActive', data.lightActive);
+          if (data.heaterActive !== undefined) store.setValue('heaterActive', data.heaterActive);
+          if (data.peltierActive !== undefined) store.setValue('peltierActive', data.peltierActive);
+          if (data.peltierFan1Active !== undefined) store.setValue('peltierFan1Active', data.peltierFan1Active);
+          if (data.peltierFan2Active !== undefined) store.setValue('peltierFan2Active', data.peltierFan2Active);
+          if (data.roofActive !== undefined) store.setValue('roofActive', data.roofActive);
         }
       });
 

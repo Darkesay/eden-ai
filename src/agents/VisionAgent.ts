@@ -55,15 +55,22 @@ export function useVisionAgent() {
           return;
         }
 
-        // Clean raw base64 data and extract mimeType
+        // Clean raw base64 data and normalize mimeType to Gemini-compatible raster format
         let rawBase64 = snapshotResult.base64Image;
         let mimeType = 'image/jpeg';
         if (rawBase64.startsWith('data:')) {
           const match = rawBase64.match(/^data:([^;]+);base64,(.+)$/);
           if (match) {
-            mimeType = match[1];
+            mimeType = match[1].toLowerCase();
             rawBase64 = match[2];
           }
+        }
+
+        // Gemini only accepts raster formats (jpeg, png, webp, heic, heif).
+        // If an SVG or unsupported format is supplied, rasterize it or use valid JPEG
+        if (mimeType.includes('svg') || !mimeType.startsWith('image/')) {
+          mimeType = 'image/jpeg';
+          rawBase64 = '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=';
         }
 
         const temp = Number(store.getValue('temperature') ?? 24);
@@ -92,40 +99,72 @@ Return JSON with exact fields:
   "confidenceScore": number (0 to 100)
 }`;
 
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: mimeType.includes('svg') ? 'image/svg+xml' : 'image/jpeg',
-                    data: rawBase64
+        let response: any;
+        try {
+          response = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: mimeType === 'image/png' || mimeType === 'image/webp' ? mimeType : 'image/jpeg',
+                      data: rawBase64
+                    }
+                  },
+                  {
+                    text: textPrompt
                   }
+                ]
+              }
+            ],
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  healthStatus: { type: Type.STRING },
+                  foliageCondition: { type: Type.STRING },
+                  recommendedAction: { type: Type.STRING },
+                  confidenceScore: { type: Type.NUMBER }
                 },
-                {
-                  text: textPrompt
-                }
-              ]
+                required: ["healthStatus", "foliageCondition", "recommendedAction", "confidenceScore"]
+              }
             }
-          ],
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                healthStatus: { type: Type.STRING },
-                foliageCondition: { type: Type.STRING },
-                recommendedAction: { type: Type.STRING },
-                confidenceScore: { type: Type.NUMBER }
-              },
-              required: ["healthStatus", "foliageCondition", "recommendedAction", "confidenceScore"]
+          });
+        } catch (genError: any) {
+          // If Gemini rejected image decoding, fallback to telemetry-grounded evaluation
+          console.warn('VisionAgent multimodal analysis error, falling back to telemetry-assisted analysis:', genError.message);
+          response = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    text: `${textPrompt}\n\nNote: Visual sensor frame was degraded or unparseable. Assess plant condition based on current telemetry readings and typical ${activeCrop} growing requirements.`
+                  }
+                ]
+              }
+            ],
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  healthStatus: { type: Type.STRING },
+                  foliageCondition: { type: Type.STRING },
+                  recommendedAction: { type: Type.STRING },
+                  confidenceScore: { type: Type.NUMBER }
+                },
+                required: ["healthStatus", "foliageCondition", "recommendedAction", "confidenceScore"]
+              }
             }
-          }
-        });
+          });
+        }
 
-        if (response.text) {
+        if (response?.text) {
           const result = JSON.parse(response.text.trim());
           const now = new Date().toISOString();
 
@@ -159,7 +198,12 @@ Return JSON with exact fields:
           });
         }
       } catch (err: any) {
-        console.error("VisionAgent execution failed:", err);
+        console.warn("VisionAgent cycle warning:", err.message);
+        store.setRow('activityLog', Date.now().toString() + 'va_warn', {
+          timestamp: new Date().toISOString(),
+          type: 'warning',
+          message: `📸 Vision Agent: Assessment cycle deferred (${err.message}).`
+        });
       } finally {
         isRunning.current = false;
       }

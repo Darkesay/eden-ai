@@ -1138,38 +1138,147 @@ class HardwareService {
   }
 
   private generateSimulatedPlantSnapshot(): string {
-    // Creates a realistic botanical simulation plant frame via SVG to Data URL
-    const svg = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
-        <defs>
-          <radialGradient id="bg" cx="50%" cy="50%" r="70%">
-            <stop offset="0%" stop-color="#0f1f14" />
-            <stop offset="100%" stop-color="#050805" />
-          </radialGradient>
-          <linearGradient id="leafGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="#10B981" />
-            <stop offset="100%" stop-color="#047857" />
-          </linearGradient>
-        </defs>
-        <rect width="640" height="480" fill="url(#bg)" />
-        <g transform="translate(320, 360)">
-          <!-- Stem -->
-          <path d="M 0 0 Q -15 -120 0 -220" stroke="#065f46" stroke-width="8" fill="none" stroke-linecap="round" />
-          <!-- Leaves -->
-          <path d="M 0 -80 Q -80 -120 -110 -80 Q -70 -50 0 -80" fill="url(#leafGrad)" />
-          <path d="M 0 -130 Q 90 -170 120 -130 Q 80 -100 0 -130" fill="url(#leafGrad)" />
-          <path d="M 0 -180 Q -70 -230 -100 -200 Q -60 -160 0 -180" fill="url(#leafGrad)" />
-          <path d="M 0 -220 Q 50 -280 80 -250 Q 50 -210 0 -220" fill="url(#leafGrad)" />
-          <!-- Fruit -->
-          <circle cx="20" cy="-140" r="16" fill="#ef4444" opacity="0.9" />
-          <circle cx="-25" cy="-90" r="14" fill="#f59e0b" opacity="0.9" />
-        </g>
-        <text x="24" y="40" fill="#10B981" font-family="monospace" font-size="14" font-weight="bold">EDENS AI · SIMULATED BOTANICAL FRAME</text>
-        <text x="24" y="62" fill="#888" font-family="monospace" font-size="11">SIMULATION MODE · CONNECT ESP32-CAM FOR LIVE FEED</text>
-        <text x="24" y="456" fill="#059669" font-family="monospace" font-size="11">CROP: TOMATO (SOLANUM LYCOPERSICUM) · HEALTH: HEALTHY</text>
-      </svg>
-    `;
-    return `data:image/svg+xml;base64,${btoa(svg)}`;
+    // 1. In browser environment, render real botanical simulation canvas to a genuine JPEG Data URL
+    if (typeof document !== 'undefined') {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 640;
+        canvas.height = 480;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          // Dark botanical ambient background with radial vignette
+          const bgGrad = ctx.createRadialGradient(320, 240, 60, 320, 240, 380);
+          bgGrad.addColorStop(0, '#14291c');
+          bgGrad.addColorStop(1, '#060c08');
+          ctx.fillStyle = bgGrad;
+          ctx.fillRect(0, 0, 640, 480);
+
+          // Greenhouse framework struts
+          ctx.strokeStyle = 'rgba(25, 60, 38, 0.4)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(320, 0); ctx.lineTo(320, 480);
+          ctx.moveTo(0, 240); ctx.lineTo(640, 240);
+          ctx.moveTo(0, 120); ctx.lineTo(640, 120);
+          ctx.moveTo(0, 360); ctx.lineTo(640, 360);
+          ctx.stroke();
+
+          // Main tomato stem
+          ctx.save();
+          ctx.translate(320, 430);
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.quadraticCurveTo(-20, -150, 0, -290);
+          ctx.lineWidth = 12;
+          ctx.strokeStyle = '#1b5e32';
+          ctx.lineCap = 'round';
+          ctx.stroke();
+
+          // Side stem branches
+          ctx.lineWidth = 6;
+          ctx.strokeStyle = '#227b42';
+          ctx.beginPath();
+          ctx.moveTo(-5, -110);
+          ctx.quadraticCurveTo(-70, -170, -110, -200);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(0, -180);
+          ctx.quadraticCurveTo(60, -230, 95, -260);
+          ctx.stroke();
+
+          // Helper to draw realistic leaves with veins
+          const drawLeaf = (x: number, y: number, angle: number, scaleX: number, scaleY: number) => {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle);
+            ctx.scale(scaleX, scaleY);
+
+            const leafGrad = ctx.createLinearGradient(-50, -25, 50, 25);
+            leafGrad.addColorStop(0, '#10b981');
+            leafGrad.addColorStop(0.5, '#059669');
+            leafGrad.addColorStop(1, '#047857');
+            ctx.fillStyle = leafGrad;
+
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.bezierCurveTo(-35, -45, -70, -20, -90, 0);
+            ctx.bezierCurveTo(-70, 25, -35, 35, 0, 0);
+            ctx.fill();
+
+            // Leaf primary & secondary veins
+            ctx.strokeStyle = 'rgba(167, 243, 208, 0.6)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(-85, 0);
+            ctx.moveTo(-30, 0); ctx.lineTo(-45, -12);
+            ctx.moveTo(-30, 0); ctx.lineTo(-45, 12);
+            ctx.moveTo(-55, 0); ctx.lineTo(-70, -8);
+            ctx.moveTo(-55, 0); ctx.lineTo(-70, 8);
+            ctx.stroke();
+
+            ctx.restore();
+          };
+
+          drawLeaf(-5, -80, -0.3, 1.4, 1.2);
+          drawLeaf(5, -140, 2.7, 1.5, 1.3);
+          drawLeaf(-15, -190, -0.6, 1.3, 1.2);
+          drawLeaf(0, -230, 2.4, 1.2, 1.1);
+          drawLeaf(0, -280, -0.1, 1.0, 1.0);
+          drawLeaf(-105, -195, -1.2, 0.9, 0.9);
+          drawLeaf(90, -255, 1.8, 0.9, 0.9);
+
+          // Tomato Fruits
+          // Ripe red tomato
+          const radRed = ctx.createRadialGradient(25, -145, 4, 30, -140, 24);
+          radRed.addColorStop(0, '#f87171');
+          radRed.addColorStop(0.65, '#dc2626');
+          radRed.addColorStop(1, '#7f1d1d');
+          ctx.fillStyle = radRed;
+          ctx.beginPath();
+          ctx.arc(30, -140, 22, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Orange turning tomato
+          const radOrange = ctx.createRadialGradient(-35, -95, 3, -30, -90, 18);
+          radOrange.addColorStop(0, '#fde047');
+          radOrange.addColorStop(0.65, '#ea580c');
+          radOrange.addColorStop(1, '#9a3412');
+          ctx.fillStyle = radOrange;
+          ctx.beginPath();
+          ctx.arc(-30, -90, 18, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.restore();
+
+          // HUD Telemetry Header
+          ctx.fillStyle = 'rgba(0, 15, 8, 0.75)';
+          ctx.fillRect(16, 16, 608, 54);
+          ctx.strokeStyle = '#059669';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(16, 16, 608, 54);
+
+          ctx.font = 'bold 13px monospace';
+          ctx.fillStyle = '#10b981';
+          ctx.fillText('🌿 EDENS AI · BOTANICAL CANOPY SIMULATION (640x480 JPEG)', 30, 38);
+
+          ctx.font = '11px monospace';
+          ctx.fillStyle = '#a7f3d0';
+          const temp = store.getValue('temperature') ?? 24.5;
+          const hum = store.getValue('humidity') ?? 62;
+          const soil = store.getValue('soilMoisture') ?? 50;
+          ctx.fillText(`CROP: TOMATO | TEMP: ${temp}°C | HUMIDITY: ${hum}% | SOIL: ${soil}% | VIGOR: 94%`, 30, 56);
+
+          return canvas.toDataURL('image/jpeg', 0.88);
+        }
+      } catch (err) {
+        console.warn('Canvas simulation snapshot rendering fallback:', err);
+      }
+    }
+
+    // 2. Fallback valid 1x1 JPEG Data URI (SOI 0xFF 0xD8 ... EOI 0xFF 0xD9)
+    return 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=';
   }
 }
 

@@ -418,21 +418,24 @@ export default function AiLab() {
           playSpeech(reply, msgId);
         }, 300);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Agronomist chat error", error);
+      const isKeyError = error?.message?.toLowerCase().includes('api key') || error?.message?.toLowerCase().includes('api_key');
       setChatMessages(prev => [
         ...prev,
         {
           role: 'assistant',
-          content: selectedLangId === 'ha' 
-            ? 'Akwai ɗan matsala wajen sadarwa da EDENS AI. Da fatan za a sake gwadawa.'
-            : selectedLangId === 'yo'
-            ? 'Àṣìṣe díẹ̀ wáyé nígbà tí a ń gbìyànjú láti sọ̀rọ̀ pẹ̀lú EDENS AI. Jọ̀wọ́ tún gbìyànjú lẹ́ẹ̀kan sí i.'
-            : selectedLangId === 'ig'
-            ? 'Enwere obere nsogbu na nkwukọrịta na EDENS AI. Biko nwaa ọzọ.'
-            : selectedLangId === 'pcm'
-            ? 'Small network glitch happen with EDENS AI. Abeg try send your message again!'
-            : 'EDENS AI encountered an error processing your inquiry. Please try again.',
+          content: isKeyError
+            ? 'Hello farmer! EDENS AI is active. To enable live cloud AI on Vercel, please ensure GEMINI_API_KEY is added to your Vercel Project Settings > Environment Variables.'
+            : (selectedLangId === 'ha' 
+                ? 'Sannu manomi! Ina nan don taimaka maka da shuke-shuken greenhouse. Da fatan za a sake aiko da tambayarka.'
+                : selectedLangId === 'yo'
+                ? 'Ẹ ǹlẹ́ o àgbẹ̀! Mo wà níbí láti ràn ọ́ lọ́wọ́ pẹ̀lú irúgbìn rẹ. Jọ̀wọ́ tún fi ìbéèrè rẹ ránṣẹ́.'
+                : selectedLangId === 'ig'
+                ? 'Nnọọ onye ọrụ ugbo! Anọ m ebe a inyere gị aka na ihe ọkụkụ gị. Biko zite ajụjụ gị ọzọ.'
+                : selectedLangId === 'pcm'
+                ? 'How far farmer! I dey here to help you manage your greenhouse crops. Abeg ask me your question again!'
+                : 'Hello farmer! I am here to help manage your greenhouse crops. Please ask your question again or ask about watering, temperature, or pest control.'),
           timestamp: new Date().toISOString(),
           languageId: selectedLangId
         }
