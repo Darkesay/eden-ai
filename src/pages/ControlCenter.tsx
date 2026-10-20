@@ -12,6 +12,9 @@ import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { SettingsPanel } from '../components/SettingsPanel';
 import { HarvestWidget } from '../components/HarvestWidget';
+import { DataSourceBadge } from '../components/DataSourceBadge';
+import { CameraStream } from '../components/CameraStream';
+import { hardwareService } from '../lib/hardwareService';
 
 function CircularGauge({ value, max, unit, label, colorStops, gradientId }: any) {
   const radius = 36;
@@ -63,65 +66,108 @@ function CircularGauge({ value, max, unit, label, colorStops, gradientId }: any)
 function DeviceToggle({ label, stateKey, topic, icon: Icon, extraIcon: ExtraIcon, statusActive = 'ACTIVE', statusIdle = 'IDLE' }: any) {
   const active = useStoreValue(stateKey, false);
   const { publish, status } = useMqtt();
+  const [interlockWarning, setInterlockWarning] = useState<string | null>(null);
 
-  const toggle = () => {
+  const toggle = async () => {
     try {
       const newState = !active;
       
-      // Update local state and logs immediately for perceived performance
+      // Map stateKey to hardware device
+      let res: { success: boolean; message: string; interlockTriggered?: boolean } | null = null;
+      if (stateKey === 'roofActive') {
+        res = await hardwareService.setRoof(newState ? 'open' : 'close');
+      } else if (stateKey === 'pumpActive') {
+        res = await hardwareService.setOverride('pump', newState ? 'on' : 'off');
+      } else if (stateKey === 'fanActive' || stateKey === 'peltierFan1Active' || stateKey === 'peltierFan2Active') {
+        res = await hardwareService.setOverride('fan', newState ? 'on' : 'off');
+      } else if (stateKey === 'heaterActive') {
+        res = await hardwareService.setOverride('heater', newState ? 'on' : 'off');
+      } else if (stateKey === 'peltierActive') {
+        res = await hardwareService.setOverride('peltier', newState ? 'on' : 'off');
+      } else if (stateKey === 'lightActive') {
+        res = await hardwareService.setOverride('light', newState ? 'on' : 'off');
+      }
+
+      if (res && res.interlockTriggered) {
+        setInterlockWarning(res.message);
+        setTimeout(() => setInterlockWarning(null), 4000);
+        store.setRow('activityLog', Date.now().toString(), {
+          timestamp: new Date().toISOString(),
+          type: 'alert',
+          message: `🚨 ${res.message}`
+        });
+        return;
+      }
+
       store.setValue(stateKey, newState);
       store.setRow('activityLog', Date.now().toString(), {
         timestamp: new Date().toISOString(),
         type: 'info',
-        message: `${label} manually turned ${newState ? 'ON' : 'OFF'} by user.`,
+        message: `${label} manually switched ${newState ? 'ON' : 'OFF'} by user.`,
         topic
       });
 
       if (status !== 'demo') {
-         publish(topic, newState ? 'ON' : 'OFF');
+        publish(topic, newState ? 'ON' : 'OFF');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setInterlockWarning(e.message || 'Command failed to execute');
+      setTimeout(() => setInterlockWarning(null), 3000);
     }
   };
 
   return (
-    <button 
-      onClick={toggle}
-      className="w-full text-left flex items-center justify-between p-4 rounded-2xl bg-[#FFFFFF] dark:bg-[#040404] border border-[#D1E8D1] dark:border-[#1A2A1A] backdrop-blur-sm group hover:border-[#10B981]/50 dark:hover:border-[#10B981]/50 transition-all"
-    >
-      <div className="flex items-center gap-4">
-        <div className={cn("p-2.5 rounded-xl transition-colors duration-500", active ? "bg-gradient-to-br from-[#10B981]/20 to-[#059669]/20 text-[#10B981] shadow-[0_0_15px_rgba(16,185,129,0.2)]" : "bg-black/5 dark:bg-[#080808] text-gray-400 group-hover:text-gray-300 border border-transparent group-hover:border-[#1A2A1A]")}>
-          <Icon size={24} />
-        </div>
-        <div className="flex flex-col">
-          <span className="font-semibold text-sm tracking-tight">{label}</span>
-          <div className="flex items-center gap-1.5 mt-0.5">
-            <div className={cn("w-1.5 h-1.5 rounded-full", active ? "bg-[#10B981] animate-pulse" : "bg-gray-400 opacity-50")}></div>
-            <span className={cn("text-[10px] uppercase font-mono tracking-wider font-bold", active ? "text-[#10B981]" : "text-gray-500")}>
-              {active ? statusActive : statusIdle}
-            </span>
+    <div className="space-y-1.5">
+      <button 
+        onClick={toggle}
+        className="w-full text-left flex items-center justify-between p-4 rounded-2xl bg-[#FFFFFF] dark:bg-[#040404] border border-[#D1E8D1] dark:border-[#1A2A1A] backdrop-blur-sm group hover:border-[#10B981]/50 dark:hover:border-[#10B981]/50 transition-all cursor-pointer"
+      >
+        <div className="flex items-center gap-4">
+          <div className={cn("p-2.5 rounded-xl transition-colors duration-500", active ? "bg-gradient-to-br from-[#10B981]/20 to-[#059669]/20 text-[#10B981] shadow-[0_0_15px_rgba(16,185,129,0.2)]" : "bg-black/5 dark:bg-[#080808] text-gray-400 group-hover:text-gray-300 border border-transparent group-hover:border-[#1A2A1A]")}>
+            <Icon size={24} />
+          </div>
+          <div className="flex flex-col">
+            <span className="font-semibold text-sm tracking-tight">{label}</span>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <div className={cn("w-1.5 h-1.5 rounded-full", active ? "bg-[#10B981] animate-pulse" : "bg-gray-400 opacity-50")}></div>
+              <span className={cn("text-[10px] uppercase font-mono tracking-wider font-bold", active ? "text-[#10B981]" : "text-gray-500")}>
+                {active ? statusActive : statusIdle}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
-      <div className="flex items-center gap-3">
-        {ExtraIcon && <ExtraIcon active={active} />}
-        <div 
-          className={cn(
-            "relative inline-flex h-8 w-14 items-center rounded-full transition-colors duration-300 shadow-inner",
-            active ? "bg-gradient-to-r from-[#10B981] to-[#059669]" : "bg-[#F0F0F0] dark:bg-[#080808] border border-[#D1E8D1] dark:border-[#1A2A1A]"
-          )}
-        >
-          <motion.span 
-            layout
+        <div className="flex items-center gap-3">
+          {ExtraIcon && <ExtraIcon active={active} />}
+          <div 
             className={cn(
-              "inline-block h-6 w-6 rounded-full bg-white shadow-md flex items-center justify-center pointer-events-none transition-all duration-300",
-              active ? "ml-7" : "ml-1"
+              "relative inline-flex h-8 w-14 items-center rounded-full transition-colors duration-300 shadow-inner",
+              active ? "bg-gradient-to-r from-[#10B981] to-[#059669]" : "bg-[#F0F0F0] dark:bg-[#080808] border border-[#D1E8D1] dark:border-[#1A2A1A]"
             )}
-          />
+          >
+            <motion.span 
+              layout
+              className={cn(
+                "inline-block h-6 w-6 rounded-full bg-white shadow-md flex items-center justify-center pointer-events-none transition-all duration-300",
+                active ? "ml-7" : "ml-1"
+              )}
+            />
+          </div>
         </div>
-      </div>
-    </button>
+      </button>
+
+      {interlockWarning && (
+        <motion.div
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0 }}
+          className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-400 text-xs font-mono leading-tight flex items-start gap-2"
+        >
+          <span className="shrink-0 text-sm">🛡️</span>
+          <span>{interlockWarning}</span>
+        </motion.div>
+      )}
+    </div>
   );
 }
 
@@ -243,6 +289,9 @@ export default function ControlCenter() {
         </div>
         <SettingsPanel />
       </div>
+
+      {/* Real Hardware / Simulated / Cached / Disconnected Banner */}
+      <DataSourceBadge variant="banner" />
 
       <AnimatePresence>
         {latestPendingAction && (
@@ -536,17 +585,8 @@ export default function ControlCenter() {
                  </div>
                </div>
              </CardHeader>
-             <CardContent className="flex-1 p-6 pt-0 mt-6 flex flex-col gap-4">
-               <div className="w-full aspect-video bg-[#050505] rounded-2xl overflow-hidden relative border border-[#222] shadow-[inset_0_0_50px_rgba(0,0,0,0.8)]">
-                 {camUrl ? (
-                   <img src={camUrl} alt="ESP32-CAM Stream" className="w-full h-full object-cover opacity-80 mix-blend-luminosity hover:mix-blend-normal hover:opacity-100 transition-all duration-700" />
-                 ) : (
-                   <div className="w-full h-full flex flex-col items-center justify-center text-gray-600 font-mono text-sm gap-3">
-                       <Video size={32} className="opacity-20 mb-2" />
-                       <span className="tracking-[0.2em] opacity-50 uppercase font-bold text-[10px]">NO CAMERA CONNECTED</span>
-                   </div>
-                 )}
-               </div>
+             <CardContent className="flex-1 p-5 pt-3 flex flex-col gap-4">
+               <CameraStream showControls={true} />
              </CardContent>
            </Card>
 

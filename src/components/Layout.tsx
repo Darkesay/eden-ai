@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useMqtt } from '../lib/mqtt';
-import { Sun, Moon, LogOut, Loader2, Menu, X, LayoutDashboard, Brain, Cpu } from 'lucide-react';
+import { Sun, Moon, LogOut, Loader2, Menu, X, LayoutDashboard, Brain, Cpu, Sliders } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { OnboardingTour } from './OnboardingTour';
+import { DataSourceBadge } from './DataSourceBadge';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -58,6 +59,7 @@ export default function Layout() {
     { to: '/', label: 'Control Center' },
     { to: '/ai-lab', label: 'AI Lab' },
     { to: '/devices', label: 'Device Management' },
+    { to: '/hardware', label: 'Hardware Config' },
   ];
 
   return (
@@ -109,7 +111,9 @@ export default function Layout() {
             })}
           </nav>
 
-          <div className="hidden md:flex items-center gap-4">
+          <div className="hidden md:flex items-center gap-3">
+            <DataSourceBadge variant="badge" />
+
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#FFFFFF] dark:bg-[#080808] border border-[#D1E8D1] dark:border-[#1A2A1A]">
               <div className={cn(
                 "w-2 h-2 rounded-full",
@@ -118,7 +122,7 @@ export default function Layout() {
                 status === 'demo' ? 'bg-yellow-500' : 'bg-red-500'
               )} />
               <span className="text-xs font-mono uppercase tracking-wider opacity-80">
-                {status}
+                MQTT: {status}
               </span>
             </div>
 
@@ -151,6 +155,7 @@ export default function Layout() {
                 )}
               >
                 {link.to === '/' ? <LayoutDashboard size={20} /> : 
+                 link.to === '/hardware' ? <Sliders size={20} /> :
                  isAiLab ? (
                    <>
                      <img 

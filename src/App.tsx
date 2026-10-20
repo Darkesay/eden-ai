@@ -12,6 +12,7 @@ import Login from './pages/Login';
 import ControlCenter from './pages/ControlCenter';
 import AiLab from './pages/AiLab';
 import DeviceManagement from './pages/DeviceManagement';
+import HardwareConfigPage from './pages/HardwareConfig';
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -86,6 +87,7 @@ export default function App() {
               <Route index element={<ControlCenter />} />
               <Route path="ai-lab" element={<AiLab />} />
               <Route path="devices" element={<DeviceManagement />} />
+              <Route path="hardware" element={<HardwareConfigPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

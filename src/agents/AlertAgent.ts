@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { store } from '../lib/store';
+import { hardwareService } from '../lib/hardwareService';
 
 export function useAlertAgent() {
   useEffect(() => {
@@ -8,10 +9,16 @@ export function useAlertAgent() {
       if (!isEnabled) return;
 
       try {
-        const temp = Number(store.getValue('temperature') || 22);
-        const humidity = Number(store.getValue('humidity') || 50);
-        const waterLvl = Number(store.getValue('waterLevel') || 80);
-        const batt = Number(store.getValue('batteryVoltage') || 12);
+        const dataSource = hardwareService.getDataSource();
+        const freshnessSec = hardwareService.getSensorFreshnessSeconds();
+        const config = hardwareService.getConfig();
+
+        const temp = Number(store.getValue('temperature') ?? 22);
+        const humidity = Number(store.getValue('humidity') ?? 50);
+        const waterLvl = Number(store.getValue('waterLevel') ?? 80);
+        const batt = Number(store.getValue('batteryVoltage') ?? 12);
+        const rain = store.getValue('rain') === true;
+        const roofOpen = store.getValue('roofActive') === true;
         const plantHealth = store.getValue('plantHealthStatus') as string;
 
         const checkAlert = (id: string, condition: boolean, message: string, severity: 'warning' | 'critical') => {
@@ -34,13 +41,38 @@ export function useAlertAgent() {
           }
         };
 
-        checkAlert('temp_high', temp > 35, 'Temperature critically high', 'critical');
-        checkAlert('temp_low', temp < 10, 'Temperature critically low', 'critical');
-        checkAlert('hum_high', humidity > 90, 'Humidity critically high', 'critical');
-        checkAlert('hum_low', humidity < 20, 'Humidity critically low', 'critical');
-        checkAlert('water_low', waterLvl < 15, 'Water reservoir low', 'warning');
-        checkAlert('batt_low', batt < 10.5, 'Battery voltage critical', 'critical');
-        checkAlert('health_stress', plantHealth === 'Severe stress', 'Plant shows severe stress', 'critical');
+        // Hardware connection alerts
+        checkAlert(
+          'hw_disconnected',
+          config.mode !== 'simulation' && dataSource === 'DISCONNECTED',
+          'Main ESP32 controller is disconnected. Telemetry halted.',
+          'critical'
+        );
+
+        checkAlert(
+          'hw_stale_telemetry',
+          config.mode !== 'simulation' && dataSource === 'CACHED' && freshnessSec > 20,
+          `Sensor readings are stale (${freshnessSec}s since last packet). Reconnecting to ESP32...`,
+          'warning'
+        );
+
+        // Safety interlock emergency alert: Rain while roof is open
+        checkAlert(
+          'emergency_rain_roof',
+          rain && roofOpen,
+          'CRITICAL: Rain detected while greenhouse roof is open! Emergency roof closure engaged.',
+          'critical'
+        );
+
+        // Environmental condition alerts
+        checkAlert('temp_high', temp > 35, `Temperature critically high (${temp}°C). Heat damage risk.`, 'critical');
+        checkAlert('temp_low', temp < 10, `Temperature critically low (${temp}°C). Cold shock risk.`, 'critical');
+        checkAlert('hum_high', humidity > 90, `Humidity critically high (${humidity}%). Fungal pathogen risk.`, 'warning');
+        checkAlert('hum_low', humidity < 25, `Humidity critically low (${humidity}%). Foliage desiccation risk.`, 'warning');
+        checkAlert('water_crit_low', waterLvl < 10, `Irrigation reservoir critically low (${waterLvl}%). Pump locked off.`, 'critical');
+        checkAlert('water_warn_low', waterLvl >= 10 && waterLvl < 20, `Water reservoir running low (${waterLvl}%). Refill advised.`, 'warning');
+        checkAlert('batt_low', batt < 10.8, `Battery voltage critical (${batt.toFixed(1)}V). Controller brownout risk.`, 'critical');
+        checkAlert('health_stress', plantHealth === 'Severe stress', 'Plant visual analysis indicates severe foliage stress.', 'critical');
 
         store.setValue('agent_AlertAgent_lastRun', new Date().toISOString());
       } catch (err) {
@@ -48,8 +80,11 @@ export function useAlertAgent() {
       }
     };
 
-    const interval = setInterval(runAgent, 10000);
-    setTimeout(runAgent, 3000);
-    return () => clearInterval(interval);
+    const interval = setInterval(runAgent, 8000);
+    const timeout = setTimeout(runAgent, 3000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
   }, []);
 }
