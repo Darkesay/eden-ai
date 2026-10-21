@@ -76,13 +76,21 @@ export function CameraStream({ onCapture, className, showControls = true }: Came
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Prompt user for key or let them test authentication - never hardcode secrets in client
+    const token = prompt('Enter your CAMERA_UPLOAD_KEY to authorize this upload test:') || '';
+    if (!token.trim()) {
+      setUploadError('Upload aborted: CAMERA_UPLOAD_KEY is required to authenticate.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     setIsUploadingTest(true);
     setUploadError(null);
     setUploadSuccessMessage(null);
 
     try {
       const arrayBuffer = await file.arrayBuffer();
-      const res = await hardwareService.uploadCameraImage(arrayBuffer, 'edens_camera_secret_2026');
+      const res = await hardwareService.uploadCameraImage(arrayBuffer, token.trim());
       setUploadSuccessMessage(`Uploaded frame ${res.imageId} (${Math.round(res.sizeBytes / 1024)} KB) successfully!`);
       await refreshStatus();
       setTimeout(() => setUploadSuccessMessage(null), 5000);

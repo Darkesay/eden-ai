@@ -15,8 +15,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const isProd = process.env.NODE_ENV === 'production';
 const MAX_UPLOAD_MB = parseInt(process.env.CAMERA_MAX_UPLOAD_MB || '10', 10);
 
-// Camera Upload Storage Directories
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'camera');
+// Camera Upload Storage Directories (supports Render Persistent Disks via CAMERA_STORAGE_PATH)
+const STORAGE_BASE = process.env.CAMERA_STORAGE_PATH || process.env.UPLOADS_DIR || path.join(process.cwd(), 'uploads');
+const UPLOAD_DIR = path.join(STORAGE_BASE, 'camera');
 const HISTORY_DIR = path.join(UPLOAD_DIR, 'history');
 try {
   fs.mkdirSync(HISTORY_DIR, { recursive: true });
@@ -111,14 +112,27 @@ function getCameraBaseUrl(overrideHost?: string, overridePort?: number) {
 // --------------------------------------------------------------------
 
 /**
- * Helper to validate camera authorization without exposing secrets in logs.
+ * Helper to get configured camera secret from environment.
+ * NEVER falls back to any hardcoded or default public secret.
  */
-function isCameraAuthorized(req: express.Request): boolean {
-  const configuredKey = (
-    process.env.CAMERA_UPLOAD_KEY ||
-    process.env.HARDWARE_API_KEY ||
-    'edens_camera_secret_2026'
-  ).trim();
+function getCameraUploadSecret(): string {
+  return (process.env.CAMERA_UPLOAD_KEY || process.env.HARDWARE_API_KEY || '').trim();
+}
+
+/**
+ * Validates camera authorization against the configured secret key.
+ * Fails securely if the secret is unconfigured on the server.
+ */
+function isCameraAuthorized(req: express.Request): { authorized: boolean; status: number; error: string; message: string } {
+  const configuredKey = getCameraUploadSecret();
+  if (!configuredKey) {
+    return {
+      authorized: false,
+      status: 503,
+      error: 'SERVER_MISCONFIGURED',
+      message: 'CAMERA_UPLOAD_KEY is not configured on the server. Camera uploads are rejected for security.'
+    };
+  }
 
   // Accept credential from custom header, standard auth header, or query param
   const incomingHeaderKey = (req.headers['x-camera-key'] || req.headers['x-api-key']) as string | undefined;
@@ -130,7 +144,25 @@ function isCameraAuthorized(req: express.Request): boolean {
   const queryKey = (req.query.token || req.query.key || req.query.auth) as string | undefined;
 
   const keyToTest = (incomingHeaderKey || bearerKey || queryKey || '').trim();
-  return Boolean(keyToTest && keyToTest === configuredKey);
+  if (!keyToTest) {
+    return {
+      authorized: false,
+      status: 401,
+      error: 'UNAUTHORIZED_CAMERA',
+      message: 'Authentication failed. ESP32-CAM must provide valid credential via X-Camera-Key header or token query parameter.'
+    };
+  }
+
+  if (keyToTest !== configuredKey) {
+    return {
+      authorized: false,
+      status: 401,
+      error: 'UNAUTHORIZED_CAMERA',
+      message: 'Invalid camera authentication credential provided.'
+    };
+  }
+
+  return { authorized: true, status: 200, error: '', message: '' };
 }
 
 /**
@@ -176,11 +208,12 @@ function extractJpegBuffer(bodyBuffer: Buffer): { buffer: Buffer; error?: string
  * Primary intake endpoint for ESP32-CAM images.
  */
 app.post('/api/camera/upload', (req, res) => {
-  // 1. Authenticate Camera
-  if (!isCameraAuthorized(req)) {
-    return res.status(401).json({
-      error: 'UNAUTHORIZED_CAMERA',
-      message: 'Authentication failed. ESP32-CAM must provide valid credential via X-Camera-Key header or token query parameter.',
+  // 1. Authenticate Camera securely
+  const auth = isCameraAuthorized(req);
+  if (!auth.authorized) {
+    return res.status(auth.status).json({
+      error: auth.error,
+      message: auth.message,
       requiredHeader: 'X-Camera-Key',
       alternativeQueryParam: 'token'
     });

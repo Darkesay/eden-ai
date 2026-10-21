@@ -57,6 +57,7 @@ export default function HardwareConfigPage() {
   const [isUploadingSample, setIsUploadingSample] = useState(false);
   const [sampleUploadResult, setSampleUploadResult] = useState<any>(null);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [testCameraKey, setTestCameraKey] = useState('');
 
   // Diagnostic tests state
   const [testingEndpoint, setTestingEndpoint] = useState<string | null>(null);
@@ -95,6 +96,13 @@ export default function HardwareConfigPage() {
     setIsUploadingSample(true);
     setSampleUploadResult(null);
     try {
+      // User must provide key or enter test key - never hardcode secrets in client
+      const keyToUse = testCameraKey.trim() || prompt('Enter your CAMERA_UPLOAD_KEY to authorize the test upload:') || '';
+      if (!keyToUse) {
+        setSampleUploadResult({ success: false, error: 'Test upload aborted: CAMERA_UPLOAD_KEY is required to authenticate.' });
+        return;
+      }
+
       // Create a valid synthetic botanical JPEG canvas
       const canvas = document.createElement('canvas');
       canvas.width = 320;
@@ -115,7 +123,7 @@ export default function HardwareConfigPage() {
         canvas.toBlob((b) => resolve(b || new Blob()), 'image/jpeg', 0.85);
       });
       const arrayBuf = await blob.arrayBuffer();
-      const res = await hardwareService.uploadCameraImage(arrayBuf, 'edens_camera_secret_2026');
+      const res = await hardwareService.uploadCameraImage(arrayBuf, keyToUse);
       setSampleUploadResult({ success: true, data: res });
       const info = await hardwareService.getCameraUploadInfo();
       setUploadInfo(info);
@@ -661,9 +669,10 @@ export default function HardwareConfigPage() {
 camera_fb_t *fb = esp_camera_fb_get();
 if (fb) {
   HTTPClient http;
+  // Replace with your local gateway IP or Render production URL (e.g. https://your-app.onrender.com/api/camera/upload)
   http.begin("http://<SERVER_IP>:3000/api/camera/upload");
   http.addHeader("Content-Type", "image/jpeg");
-  http.addHeader("X-Camera-Key", "edens_camera_secret_2026");
+  http.addHeader("X-Camera-Key", "<YOUR_CAMERA_UPLOAD_KEY>");
   int httpResponseCode = http.POST(fb->buf, fb->len);
   if (httpResponseCode == 200) {
     String response = http.getString();
@@ -684,9 +693,10 @@ if (fb) {
 camera_fb_t *fb = esp_camera_fb_get();
 if (fb) {
   HTTPClient http;
+  // Replace with your local gateway IP or Render production URL (e.g. https://your-app.onrender.com/api/camera/upload)
   http.begin("http://<SERVER_IP>:3000/api/camera/upload");
   http.addHeader("Content-Type", "image/jpeg");
-  http.addHeader("X-Camera-Key", "edens_camera_secret_2026");
+  http.addHeader("X-Camera-Key", "<YOUR_CAMERA_UPLOAD_KEY>");
   int httpResponseCode = http.POST(fb->buf, fb->len);
   if (httpResponseCode == 200) {
     String response = http.getString();

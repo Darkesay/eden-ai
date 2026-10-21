@@ -296,6 +296,19 @@ async function runTestSuite() {
       assert.strictEqual(res.status, 401);
     });
 
+    // 3b. Strictly Reject Former Public Default Key (401)
+    await test('3b. POST /api/camera/upload strictly rejects former public default secret edens_camera_secret_2026', async () => {
+      const jpeg = createValidTestJpeg();
+      const res = await makeRequest('POST', '/api/camera/upload', {
+        'Content-Type': 'image/jpeg',
+        'X-Camera-Key': 'edens_camera_secret_2026',
+        'Content-Length': String(jpeg.length)
+      }, jpeg);
+      assert.strictEqual(res.status, 401);
+      const json = res.json();
+      assert.strictEqual(json.error, 'UNAUTHORIZED_CAMERA');
+    });
+
     // 4. Successful Upload with Header Auth (200)
     await test('4. POST /api/camera/upload accepts valid raw binary JPEG with X-Camera-Key header', async () => {
       const jpeg = createValidTestJpeg();
