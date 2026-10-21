@@ -181,10 +181,149 @@ export interface VoiceRecorderController {
   stream: MediaStream;
 }
 
+export type MicrophoneErrorCode = 
+  | 'PERMISSION_DENIED' 
+  | 'DEVICE_NOT_FOUND' 
+  | 'DEVICE_BUSY' 
+  | 'INSECURE_CONTEXT' 
+  | 'UNSUPPORTED_BROWSER' 
+  | 'EMPTY_AUDIO' 
+  | 'GENERIC_ERROR';
+
+export class MicrophoneAccessError extends Error {
+  code: MicrophoneErrorCode;
+  originalError?: any;
+
+  constructor(code: MicrophoneErrorCode, message: string, originalError?: any) {
+    super(message);
+    this.name = 'MicrophoneAccessError';
+    this.code = code;
+    this.originalError = originalError;
+  }
+}
+
+export interface MicrophoneSupportCheck {
+  supported: boolean;
+  isSecureContext: boolean;
+  hasGetUserMedia: boolean;
+  hasMediaRecorder: boolean;
+  permissionState?: 'granted' | 'denied' | 'prompt' | 'unknown';
+  errorReason?: 'INSECURE_CONTEXT' | 'UNSUPPORTED_BROWSER' | 'PERMISSION_DENIED';
+  message?: string;
+}
+
+/**
+ * Checks whether the browser and environment support microphone recording
+ * without prompting the user prematurely.
+ */
+export async function checkMicrophoneSupport(): Promise<MicrophoneSupportCheck> {
+  if (typeof window === 'undefined') {
+    return {
+      supported: false,
+      isSecureContext: false,
+      hasGetUserMedia: false,
+      hasMediaRecorder: false,
+      errorReason: 'UNSUPPORTED_BROWSER',
+      message: 'Running in non-browser environment.'
+    };
+  }
+
+  const isSecure = window.isSecureContext !== false;
+  const hasGetUserMedia = Boolean(navigator.mediaDevices?.getUserMedia || (navigator as any).getUserMedia);
+  const hasMediaRecorder = typeof MediaRecorder !== 'undefined';
+
+  let permissionState: 'granted' | 'denied' | 'prompt' | 'unknown' = 'unknown';
+  if (navigator.permissions && navigator.permissions.query) {
+    try {
+      const res = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+      permissionState = res.state as any;
+    } catch (_) {
+      // Permission query for microphone is not supported in all browsers
+    }
+  }
+
+  if (!isSecure) {
+    return {
+      supported: false,
+      isSecureContext: false,
+      hasGetUserMedia,
+      hasMediaRecorder,
+      permissionState,
+      errorReason: 'INSECURE_CONTEXT',
+      message: 'Microphone access requires a secure connection (HTTPS or localhost). Unencrypted HTTP blocks audio recording.'
+    };
+  }
+
+  if (!hasGetUserMedia || !hasMediaRecorder) {
+    return {
+      supported: false,
+      isSecureContext: true,
+      hasGetUserMedia,
+      hasMediaRecorder,
+      permissionState,
+      errorReason: 'UNSUPPORTED_BROWSER',
+      message: 'Your browser does not support audio recording (navigator.mediaDevices.getUserMedia / MediaRecorder).'
+    };
+  }
+
+  return {
+    supported: true,
+    isSecureContext: true,
+    hasGetUserMedia: true,
+    hasMediaRecorder: true,
+    permissionState
+  };
+}
+
+/**
+ * Validates audio file size and MIME type for voice note uploads.
+ */
+export function validateAudioFile(file: File, maxMb = 15): { valid: boolean; error?: string } {
+  if (!file) {
+    return { valid: false, error: 'No audio file selected.' };
+  }
+
+  const maxBytes = maxMb * 1024 * 1024;
+  if (file.size > maxBytes) {
+    return {
+      valid: false,
+      error: `Audio file (${(file.size / (1024 * 1024)).toFixed(1)}MB) exceeds maximum limit of ${maxMb}MB.`
+    };
+  }
+
+  if (file.size === 0) {
+    return { valid: false, error: 'The selected audio file is empty (0 bytes).' };
+  }
+
+  const type = (file.type || '').toLowerCase();
+  const name = (file.name || '').toLowerCase();
+  const allowedExts = ['.webm', '.wav', '.mp3', '.m4a', '.mp4', '.ogg', '.aac', '.flac'];
+  const hasValidExt = allowedExts.some(ext => name.endsWith(ext));
+  const hasValidType = type.startsWith('audio/') || type.includes('octet-stream') || type.startsWith('video/mp4') || type.startsWith('video/webm');
+
+  if (!hasValidType && !hasValidExt) {
+    return {
+      valid: false,
+      error: `Unsupported audio format "${file.type || name.split('.').pop()}". Supported formats: WebM, WAV, MP3, M4A, MP4, AAC, or OGG.`
+    };
+  }
+
+  return { valid: true };
+}
+
 /**
  * Starts recording audio from user microphone with optimal browser mimeType detection
+ * and detailed error categorization.
  */
 export async function startAudioRecording(): Promise<VoiceRecorderController> {
+  const support = await checkMicrophoneSupport();
+  if (!support.supported) {
+    if (support.errorReason === 'INSECURE_CONTEXT') {
+      throw new MicrophoneAccessError('INSECURE_CONTEXT', support.message || 'Microphone requires HTTPS or localhost.');
+    }
+    throw new MicrophoneAccessError('UNSUPPORTED_BROWSER', support.message || 'Browser does not support microphone input.');
+  }
+
   const getMedia = navigator.mediaDevices?.getUserMedia 
     ? (constraints: MediaStreamConstraints) => navigator.mediaDevices.getUserMedia(constraints)
     : (constraints: MediaStreamConstraints) => new Promise<MediaStream>((resolve, reject) => {
@@ -192,7 +331,7 @@ export async function startAudioRecording(): Promise<VoiceRecorderController> {
                                    (navigator as any).webkitGetUserMedia || 
                                    (navigator as any).mozGetUserMedia;
         if (!legacyGetUserMedia) {
-          reject(new Error("getUserMedia is not supported by your browser environment."));
+          reject(new MicrophoneAccessError('UNSUPPORTED_BROWSER', 'getUserMedia is not supported by your browser environment.'));
         } else {
           legacyGetUserMedia.call(navigator, constraints, resolve, reject);
         }
@@ -208,11 +347,26 @@ export async function startAudioRecording(): Promise<VoiceRecorderController> {
       } 
     });
   } catch (err: any) {
-    console.warn("First getUserMedia attempt failed, retrying with basic { audio: true }:", err);
     try {
       stream = await getMedia({ audio: true });
     } catch (secondErr: any) {
-      throw secondErr;
+      const eName = secondErr?.name || err?.name || '';
+      const eMsg = secondErr?.message || err?.message || '';
+
+      const lowerMsg = eMsg.toLowerCase();
+      if (eName === 'NotAllowedError' || eName === 'PermissionDeniedError' || lowerMsg.includes('permission') || lowerMsg.includes('not allowed')) {
+        throw new MicrophoneAccessError('PERMISSION_DENIED', 'Microphone permission was denied. Please allow microphone access in your browser or device settings.', secondErr);
+      }
+      if (eName === 'NotReadableError' || eName === 'TrackStartError' || lowerMsg.includes('in use') || lowerMsg.includes('busy')) {
+        throw new MicrophoneAccessError('DEVICE_BUSY', 'Your microphone is currently in use by another app or tab. Please close other audio apps and retry.', secondErr);
+      }
+      if (eName === 'NotFoundError' || eName === 'DevicesNotFoundError' || lowerMsg.includes('not found') || lowerMsg.includes('no device') || lowerMsg.includes('missing')) {
+        throw new MicrophoneAccessError('DEVICE_NOT_FOUND', 'No microphone device was detected. Please connect a microphone and retry.', secondErr);
+      }
+      if (eName === 'SecurityError' || lowerMsg.includes('insecure') || lowerMsg.includes('policy')) {
+        throw new MicrophoneAccessError('INSECURE_CONTEXT', 'Microphone access is restricted by security policy or insecure context.', secondErr);
+      }
+      throw new MicrophoneAccessError('GENERIC_ERROR', `Could not access microphone: ${eMsg || 'Unknown error.'}`, secondErr);
     }
   }
 
@@ -225,14 +379,22 @@ export async function startAudioRecording(): Promise<VoiceRecorderController> {
   ];
 
   let mimeType = '';
-  for (const t of preferredTypes) {
-    if (MediaRecorder.isTypeSupported(t)) {
-      mimeType = t;
-      break;
+  if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
+    for (const t of preferredTypes) {
+      if (MediaRecorder.isTypeSupported(t)) {
+        mimeType = t;
+        break;
+      }
     }
   }
 
-  const mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+  let mediaRecorder: MediaRecorder;
+  try {
+    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+  } catch (_) {
+    mediaRecorder = new MediaRecorder(stream);
+  }
+
   const chunks: BlobPart[] = [];
 
   mediaRecorder.ondataavailable = (e) => {
@@ -247,16 +409,26 @@ export async function startAudioRecording(): Promise<VoiceRecorderController> {
     stream,
     cancel: () => {
       try {
-        mediaRecorder.stop();
+        if (mediaRecorder.state !== 'inactive') {
+          mediaRecorder.stop();
+        }
       } catch (_) {}
-      stream.getTracks().forEach(track => track.stop());
+      stream.getTracks().forEach(track => {
+        try { track.stop(); } catch (_) {}
+      });
     },
     stop: () => {
       return new Promise((resolve, reject) => {
         mediaRecorder.onstop = async () => {
-          stream.getTracks().forEach(track => track.stop());
+          stream.getTracks().forEach(track => {
+            try { track.stop(); } catch (_) {}
+          });
           const finalType = mediaRecorder.mimeType || mimeType || 'audio/webm';
           const audioBlob = new Blob(chunks, { type: finalType });
+
+          if (audioBlob.size === 0) {
+            return reject(new MicrophoneAccessError('EMPTY_AUDIO', 'Audio recording captured 0 bytes. Please speak into your microphone and retry.'));
+          }
 
           try {
             const reader = new FileReader();
@@ -265,10 +437,10 @@ export async function startAudioRecording(): Promise<VoiceRecorderController> {
               resolve({
                 blob: audioBlob,
                 base64: base64Data,
-                mimeType: finalType.split(';')[0] // remove codecs part for Gemini inlineData
+                mimeType: finalType.split(';')[0]
               });
             };
-            reader.onerror = reject;
+            reader.onerror = () => reject(new MicrophoneAccessError('GENERIC_ERROR', 'Failed to read recorded audio data.'));
             reader.readAsDataURL(audioBlob);
           } catch (err) {
             reject(err);
@@ -276,8 +448,13 @@ export async function startAudioRecording(): Promise<VoiceRecorderController> {
         };
 
         try {
-          mediaRecorder.stop();
+          if (mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+          }
         } catch (err) {
+          stream.getTracks().forEach(track => {
+            try { track.stop(); } catch (_) {}
+          });
           reject(err);
         }
       });

@@ -52,12 +52,35 @@ import {
   base64PcmToWavUrl, 
   playAudioUrl, 
   stopAllAudio, 
-  speakWithBrowserTts 
+  speakWithBrowserTts,
+  MicrophoneAccessError,
+  validateAudioFile
 } from '../lib/audio';
 import { format } from 'date-fns';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { HardwareSetupGuide } from '../components/HardwareSetupGuide';
+
+// Voice interaction pipeline state & error categorization
+export type VoiceErrorType = 
+  | 'permission'
+  | 'not-found'
+  | 'busy'
+  | 'insecure-context'
+  | 'unsupported'
+  | 'empty-audio'
+  | 'file-invalid'
+  | 'transcription'
+  | 'ai-service';
+
+export interface VoiceErrorInfo {
+  type: VoiceErrorType;
+  title: string;
+  message: string;
+  actionHint?: string;
+  canRetryMic?: boolean;
+  canUploadFile?: boolean;
+}
 
 export default function AiLab() {
   const camUrl = useStoreValue('cameraUrl', import.meta.env.VITE_ESP32_CAM_STREAM_URL || '');
@@ -226,11 +249,11 @@ export default function AiLab() {
   const [isSending, setIsSending] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
-  // Microphone recording & speech-to-text
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [audioError, setAudioError] = useState<string | null>(null);
+  const [voiceState, setVoiceState] = useState<'ready' | 'requesting_mic' | 'recording' | 'uploading' | 'transcribing' | 'waiting_ai' | 'speaking' | 'completed' | 'error'>('ready');
+  const [voiceError, setVoiceError] = useState<VoiceErrorInfo | null>(null);
   const recorderRef = useRef<VoiceRecorderController | null>(null);
   const timerRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -240,34 +263,107 @@ export default function AiLab() {
       stopAllAudio();
       if (recorderRef.current) {
         recorderRef.current.cancel();
+        recorderRef.current = null;
       }
       if (timerRef.current) {
         clearInterval(timerRef.current);
+        timerRef.current = null;
       }
     };
   }, []);
 
   const startRecording = async () => {
-    setAudioError(null);
+    setVoiceError(null);
     stopAllAudio();
     setCurrentPlayingId(null);
+    setVoiceState('requesting_mic');
 
     try {
       const controller = await startAudioRecording();
       recorderRef.current = controller;
       setIsRecording(true);
+      setVoiceState('recording');
       setRecordingSeconds(0);
 
+      if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = setInterval(() => {
         setRecordingSeconds(s => s + 1);
       }, 1000);
     } catch (err: any) {
       console.error("Microphone access error:", err);
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setAudioError('Microphone permission denied. Please allow microphone access or upload an audio voice note.');
-      } else {
-        setAudioError(`Microphone unavailable (${err.message || 'permission error'}). You can also upload a voice note below.`);
+      setIsRecording(false);
+      setVoiceState('error');
+
+      if (err instanceof MicrophoneAccessError) {
+        if (err.code === 'PERMISSION_DENIED') {
+          setVoiceError({
+            type: 'permission',
+            title: 'Microphone Permission Blocked',
+            message: 'Your browser or device has blocked microphone access for this page.',
+            actionHint: 'Click the lock or camera/mic icon beside your address bar, switch Microphone to "Allow", then click Retry Microphone.',
+            canRetryMic: true,
+            canUploadFile: true
+          });
+          return;
+        }
+        if (err.code === 'DEVICE_NOT_FOUND') {
+          setVoiceError({
+            type: 'not-found',
+            title: 'No Microphone Detected',
+            message: 'No active microphone was detected on your computer or device.',
+            actionHint: 'Please connect a microphone or headset, or upload a voice note below.',
+            canRetryMic: true,
+            canUploadFile: true
+          });
+          return;
+        }
+        if (err.code === 'DEVICE_BUSY') {
+          setVoiceError({
+            type: 'busy',
+            title: 'Microphone In Use or Unavailable',
+            message: 'Your microphone is currently in use by another application or browser tab.',
+            actionHint: 'Close other applications using your microphone (e.g. Zoom, Teams) and click Retry Microphone.',
+            canRetryMic: true,
+            canUploadFile: true
+          });
+          return;
+        }
+        if (err.code === 'INSECURE_CONTEXT') {
+          setVoiceError({
+            type: 'insecure-context',
+            title: 'Microphone Restricted (Insecure Connection)',
+            message: 'Modern web browsers strictly require HTTPS or localhost to record live microphone audio.',
+            actionHint: 'Access EDENS AI over HTTPS or localhost, or upload a recorded voice note below.',
+            canRetryMic: false,
+            canUploadFile: true
+          });
+          return;
+        }
+        if (err.code === 'UNSUPPORTED_BROWSER') {
+          setVoiceError({
+            type: 'unsupported',
+            title: 'Microphone Recording Unsupported',
+            message: 'Your browser does not support standard audio recording APIs.',
+            actionHint: 'Try using Chrome, Safari, Edge, or Firefox, or use the Upload Voice Note button.',
+            canRetryMic: false,
+            canUploadFile: true
+          });
+          return;
+        }
       }
+
+      // Generic error fallback
+      const isPermission = err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError';
+      setVoiceError({
+        type: isPermission ? 'permission' : 'not-found',
+        title: isPermission ? 'Microphone Permission Blocked' : 'Microphone Unavailable',
+        message: err.message || 'Could not initialize microphone.',
+        actionHint: isPermission 
+          ? 'Allow microphone access in your browser site settings and click Retry Microphone.'
+          : 'Check your microphone device connection or upload an audio voice note.',
+        canRetryMic: true,
+        canUploadFile: true
+      });
     }
   };
 
@@ -282,6 +378,7 @@ export default function AiLab() {
     }
     setIsRecording(false);
     setRecordingSeconds(0);
+    setVoiceState('ready');
   };
 
   const stopAndTranscribe = async (autoSend: boolean = false) => {
@@ -294,6 +391,8 @@ export default function AiLab() {
 
     setIsRecording(false);
     setIsTranscribing(true);
+    setVoiceState('transcribing');
+    setVoiceError(null);
 
     try {
       const { base64, mimeType } = await recorderRef.current.stop();
@@ -301,20 +400,53 @@ export default function AiLab() {
 
       const transcribedText = await transcribeSpeechAudio(base64, mimeType, selectedLangId);
       setIsTranscribing(false);
+      setVoiceState('completed');
 
-      if (transcribedText) {
+      if (transcribedText && transcribedText.trim()) {
         if (autoSend) {
-          handleSendChat(transcribedText, true);
+          handleSendChat(transcribedText.trim(), true);
         } else {
-          setChatInput(transcribedText);
+          setChatInput(transcribedText.trim());
         }
       } else {
-        setAudioError(`Could not detect clear speech in ${activeLanguage.name}. Please try speaking a bit louder or closer to the mic.`);
+        setVoiceError({
+          type: 'empty-audio',
+          title: 'No Speech Detected',
+          message: `Could not detect clear spoken words in ${activeLanguage.name}.`,
+          actionHint: 'Please speak closer to your microphone or speak louder and try again.',
+          canRetryMic: true,
+          canUploadFile: true
+        });
       }
     } catch (err: any) {
       console.error("Speech transcription error:", err);
       setIsTranscribing(false);
-      setAudioError("Speech transcription error: " + (err.message || 'Failed to process voice'));
+      recorderRef.current = null;
+      setVoiceState('error');
+
+      if (err.code === 'EMPTY_AUDIO') {
+        setVoiceError({
+          type: 'empty-audio',
+          title: 'Empty Audio Recording',
+          message: err.message || 'Audio recording captured 0 bytes.',
+          actionHint: 'Please speak louder or closer to the microphone and retry.',
+          canRetryMic: true,
+          canUploadFile: true
+        });
+        return;
+      }
+
+      const isConfig = err.message && (err.message.includes('GEMINI_API_KEY') || err.message.includes('Render'));
+      setVoiceError({
+        type: isConfig ? 'ai-service' : 'transcription',
+        title: isConfig ? 'AI Service Configuration' : 'Speech Transcription Error',
+        message: err.message || 'Failed to process voice recording.',
+        actionHint: isConfig 
+          ? 'Please set GEMINI_API_KEY in your Render dashboard under Environment Variables.'
+          : 'Microphone recording completed, but transcription encountered an issue. You can type your question directly.',
+        canRetryMic: true,
+        canUploadFile: true
+      });
     }
   };
 
@@ -322,28 +454,88 @@ export default function AiLab() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // 1. Client-side validation: file size & MIME type
+    const validation = validateAudioFile(file, 15);
+    if (!validation.valid) {
+      setVoiceError({
+        type: 'file-invalid',
+        title: 'Invalid Audio File',
+        message: validation.error || 'The selected file is not a supported audio format.',
+        actionHint: 'Please select an audio file under 15MB (WebM, WAV, MP3, M4A, AAC, or OGG).',
+        canRetryMic: false,
+        canUploadFile: true
+      });
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setVoiceError(null);
     setIsTranscribing(true);
-    setAudioError(null);
+    setVoiceState('uploading');
 
     try {
       const reader = new FileReader();
       reader.onloadend = async () => {
         const base64Data = (reader.result as string).split(',')[1] || '';
         const mimeType = file.type || 'audio/webm';
-        const transcribedText = await transcribeSpeechAudio(base64Data, mimeType, selectedLangId);
-        setIsTranscribing(false);
+        setVoiceState('transcribing');
 
-        if (transcribedText) {
-          setChatInput(transcribedText);
-        } else {
-          setAudioError(`Could not recognize speech from uploaded audio.`);
+        try {
+          const transcribedText = await transcribeSpeechAudio(base64Data, mimeType, selectedLangId);
+          setIsTranscribing(false);
+          setVoiceState('completed');
+
+          if (transcribedText && transcribedText.trim()) {
+            setChatInput(transcribedText.trim());
+          } else {
+            setVoiceError({
+              type: 'empty-audio',
+              title: 'No Speech Recognized',
+              message: `Could not recognize speech from "${file.name}".`,
+              actionHint: 'Ensure the audio contains audible speech and has clear volume.',
+              canRetryMic: true,
+              canUploadFile: true
+            });
+          }
+        } catch (transcribeErr: any) {
+          setIsTranscribing(false);
+          setVoiceState('error');
+          const isConfig = transcribeErr.message && (transcribeErr.message.includes('GEMINI_API_KEY') || transcribeErr.message.includes('Render'));
+          setVoiceError({
+            type: isConfig ? 'ai-service' : 'transcription',
+            title: isConfig ? 'AI Service Configuration' : 'Voice Note Transcription Failed',
+            message: transcribeErr.message || 'Error processing uploaded voice note.',
+            actionHint: isConfig 
+              ? 'Set GEMINI_API_KEY in your Render dashboard Environment Variables.' 
+              : 'Check that the audio file is not corrupt and contains audible speech.',
+            canRetryMic: true,
+            canUploadFile: true
+          });
         }
       };
+
+      reader.onerror = () => {
+        setIsTranscribing(false);
+        setVoiceState('error');
+        setVoiceError({
+          type: 'file-invalid',
+          title: 'File Read Error',
+          message: 'Could not read audio file from disk.',
+          canUploadFile: true
+        });
+      };
+
       reader.readAsDataURL(file);
     } catch (err: any) {
       console.error("Audio upload error:", err);
       setIsTranscribing(false);
-      setAudioError("Error processing uploaded audio: " + err.message);
+      setVoiceState('error');
+      setVoiceError({
+        type: 'file-invalid',
+        title: 'Audio Upload Error',
+        message: err.message || 'Unexpected error processing file.',
+        canUploadFile: true
+      });
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -387,6 +579,7 @@ export default function AiLab() {
     setChatMessages(prev => [...prev, userMsg]);
     setChatInput('');
     setIsSending(true);
+    setVoiceState('waiting_ai');
 
     try {
       const reply = await consultAgronomist(
@@ -411,6 +604,7 @@ export default function AiLab() {
       };
 
       setChatMessages(prev => [...prev, assistantMsg]);
+      setVoiceState('completed');
 
       // If auto-speak is enabled, speak out the response in authentic native voice!
       if (autoSpeak) {
@@ -420,13 +614,14 @@ export default function AiLab() {
       }
     } catch (error: any) {
       console.error("Agronomist chat error", error);
-      const isKeyError = error?.message?.toLowerCase().includes('api key') || error?.message?.toLowerCase().includes('api_key');
+      setVoiceState('error');
+      const isKeyError = error?.message?.toLowerCase().includes('api key') || error?.message?.toLowerCase().includes('api_key') || error?.message?.includes('unconfigured') || error?.message?.includes('Render');
       setChatMessages(prev => [
         ...prev,
         {
           role: 'assistant',
           content: isKeyError
-            ? 'Hello farmer! EDENS AI is active. To enable live cloud AI on Vercel, please ensure GEMINI_API_KEY is added to your Vercel Project Settings > Environment Variables.'
+            ? 'Hello farmer! EDENS AI is active. To enable live cloud AI on Render, please ensure GEMINI_API_KEY is added to your Render Dashboard > Environment Variables.'
             : (selectedLangId === 'ha' 
                 ? 'Sannu manomi! Ina nan don taimaka maka da shuke-shuken greenhouse. Da fatan za a sake aiko da tambayarka.'
                 : selectedLangId === 'yo'
@@ -1037,8 +1232,25 @@ export default function AiLab() {
             )}
           </AnimatePresence>
 
+          {/* Voice Note Uploading Status Indicator */}
+          {voiceState === 'uploading' && (
+            <motion.div
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="p-3 rounded-2xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-between text-xs text-blue-500 dark:text-blue-400"
+            >
+              <div className="flex items-center gap-2">
+                <Loader2 size={16} className="animate-spin text-blue-500" />
+                <span className="font-semibold">
+                  Uploading and validating voice note for speech transcription...
+                </span>
+              </div>
+              <span className="text-[10px] font-mono opacity-70">EDENS AI Pipeline</span>
+            </motion.div>
+          )}
+
           {/* Audio Transcription Loading State */}
-          {isTranscribing && (
+          {isTranscribing && voiceState !== 'uploading' && (
             <motion.div
               initial={{ opacity: 0, y: -5 }}
               animate={{ opacity: 1, y: 0 }}
@@ -1054,65 +1266,79 @@ export default function AiLab() {
             </motion.div>
           )}
 
-          {/* Audio Error Alert & Permission Resolution Banner */}
-          {audioError && (
+          {/* Structured Voice Error / Diagnostic Resolution Banner */}
+          {voiceError && (
             <motion.div 
               initial={{ opacity: 0, y: -4 }}
               animate={{ opacity: 1, y: 0 }}
-              className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-500 space-y-2.5 shadow-sm"
+              className={cn(
+                "p-4 rounded-2xl border space-y-2.5 shadow-sm",
+                voiceError.type === 'permission' || voiceError.type === 'insecure-context'
+                  ? "bg-amber-500/10 border-amber-500/30 text-amber-500"
+                  : voiceError.type === 'ai-service'
+                  ? "bg-red-500/10 border-red-500/30 text-red-500"
+                  : "bg-blue-500/10 border-blue-500/30 text-blue-500 dark:text-blue-400"
+              )}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-2.5">
                   <AlertTriangle size={18} className="shrink-0 mt-0.5" />
                   <div className="space-y-1">
                     <p className="text-xs font-bold leading-tight">
-                      Microphone Access Blocked or Restricted
+                      {voiceError.title}
                     </p>
                     <p className="text-[11px] opacity-90 leading-relaxed text-foreground">
-                      Your browser denied microphone access for this page. To talk in Hausa, Yoruba, Igbo, or Pidgin:
+                      {voiceError.message}
                     </p>
-                    <ol className="text-[11px] list-decimal list-inside opacity-85 space-y-0.5 text-foreground">
-                      <li>Click the <strong className="text-amber-500 inline-flex items-center gap-0.5"><Lock size={10} /> lock icon</strong> or camera/mic icon beside the address bar.</li>
-                      <li>Switch <strong>Microphone</strong> from <em>Block</em> to <strong>Allow</strong>.</li>
-                      <li>Click <strong>Retry Microphone</strong> below, or tap <strong>Upload Voice Note</strong>.</li>
-                    </ol>
+                    {voiceError.actionHint && (
+                      <p className="text-[11px] opacity-80 leading-relaxed text-foreground font-medium">
+                        💡 {voiceError.actionHint}
+                      </p>
+                    )}
                   </div>
                 </div>
 
                 <button 
                   type="button" 
-                  onClick={() => setAudioError(null)}
-                  className="p-1 hover:bg-amber-500/20 text-amber-500 rounded-lg cursor-pointer shrink-0"
+                  onClick={() => setVoiceError(null)}
+                  className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded-lg cursor-pointer shrink-0 text-foreground opacity-60 hover:opacity-100"
+                  aria-label="Dismiss message"
                 >
                   <X size={15} />
                 </button>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-amber-500/20">
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={startRecording}
-                  className="bg-amber-500 hover:bg-amber-600 text-black font-bold h-7 px-3 rounded-xl text-xs cursor-pointer shadow-sm"
-                >
-                  <RefreshCw size={12} className="mr-1" /> Retry Microphone
-                </Button>
+              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-black/10 dark:border-white/10">
+                {voiceError.canRetryMic && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={startRecording}
+                    disabled={isRecording || isTranscribing}
+                    className="bg-[#10B981] hover:bg-[#059669] text-black font-bold h-7 px-3 rounded-xl text-xs cursor-pointer shadow-sm"
+                  >
+                    <RefreshCw size={12} className="mr-1" /> Retry Microphone
+                  </Button>
+                )}
 
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="border-amber-500/40 hover:bg-amber-500/10 text-amber-500 h-7 px-3 rounded-xl text-xs cursor-pointer"
-                >
-                  <Upload size={12} className="mr-1" /> Upload Voice Note
-                </Button>
+                {voiceError.canUploadFile && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isRecording || isTranscribing}
+                    className="border-current hover:bg-black/5 dark:hover:bg-white/5 h-7 px-3 rounded-xl text-xs cursor-pointer"
+                  >
+                    <Upload size={12} className="mr-1" /> Upload Voice Note
+                  </Button>
+                )}
 
                 <a
                   href={window.location.href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-400 hover:text-amber-300 underline px-2 py-1 ml-auto"
+                  className="inline-flex items-center gap-1 text-[11px] font-bold underline px-2 py-1 ml-auto opacity-80 hover:opacity-100"
                 >
                   <span>Open in Full Tab</span>
                   <ExternalLink size={12} />
@@ -1126,7 +1352,7 @@ export default function AiLab() {
             type="file" 
             ref={fileInputRef} 
             onChange={handleAudioFileUpload} 
-            accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm" 
+            accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm,.aac" 
             className="hidden" 
           />
 
@@ -1141,6 +1367,7 @@ export default function AiLab() {
             {/* Microphone Toggle Button */}
             <button
               type="button"
+              disabled={isSending || isTranscribing}
               onClick={() => {
                 if (isRecording) {
                   stopAndTranscribe(false);
@@ -1148,24 +1375,41 @@ export default function AiLab() {
                   startRecording();
                 }
               }}
-              title={isRecording ? "Stop Recording & Understand" : `Click to talk in ${activeLanguage.name} or Nigerian languages`}
+              title={
+                voiceState === 'requesting_mic' ? "Requesting microphone..." :
+                isRecording ? "Stop Recording & Transcribe" : 
+                `Click to speak in ${activeLanguage.name} or Nigerian languages`
+              }
               className={cn(
                 "p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-center shrink-0 relative group",
                 isRecording 
                   ? "bg-red-500 text-white border-red-600 animate-pulse shadow-[0_0_20px_rgba(239,68,68,0.6)]" 
-                  : "bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 hover:border-[#10B981] hover:text-[#10B981] text-foreground"
+                  : voiceState === 'requesting_mic'
+                  ? "bg-amber-500/20 text-amber-500 border-amber-500/40"
+                  : "bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 hover:border-[#10B981] hover:text-[#10B981] text-foreground",
+                (isSending || isTranscribing) && "opacity-50 cursor-not-allowed"
               )}
             >
-              {isRecording ? <Square size={18} /> : <Mic size={18} />}
+              {voiceState === 'requesting_mic' ? (
+                <Loader2 size={18} className="animate-spin text-amber-500" />
+              ) : isRecording ? (
+                <Square size={18} />
+              ) : (
+                <Mic size={18} />
+              )}
               <span className="sr-only">Microphone</span>
             </button>
 
             {/* Upload Audio File / Voice Note Button */}
             <button
               type="button"
+              disabled={isSending || isRecording || isTranscribing}
               onClick={() => fileInputRef.current?.click()}
               title={`Upload audio recording or WhatsApp voice note in ${activeLanguage.name}`}
-              className="p-3 rounded-2xl border bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 hover:border-[#10B981] hover:text-[#10B981] text-foreground transition-all cursor-pointer flex items-center justify-center shrink-0"
+              className={cn(
+                "p-3 rounded-2xl border bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 hover:border-[#10B981] hover:text-[#10B981] text-foreground transition-all cursor-pointer flex items-center justify-center shrink-0",
+                (isSending || isRecording || isTranscribing) && "opacity-50 cursor-not-allowed"
+              )}
             >
               <Upload size={18} />
               <span className="sr-only">Upload Voice Note</span>

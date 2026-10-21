@@ -236,6 +236,29 @@ export async function analyzePlantImage(
   base64Image: string,
   languageId: string = 'pcm'
 ): Promise<PlantAnalysisResult> {
+  const isBrowser = typeof window !== 'undefined' && typeof window.fetch === 'function';
+  if (isBrowser) {
+    try {
+      const res = await fetch('/api/ai/diagnose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64Image, languageId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.result) return data.result;
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        if (res.status === 503) {
+          throw new Error(errJson.message || 'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard.');
+        }
+      }
+    } catch (err: any) {
+      if (err.message && err.message.includes('GEMINI_API_KEY')) throw err;
+      console.warn("Backend /api/ai/diagnose note, attempting client fallback:", err.message);
+    }
+  }
+
   const selectedLang = NIGERIAN_LANGUAGES.find(l => l.id === languageId) || NIGERIAN_LANGUAGES[0];
 
   let mimeType = 'image/jpeg';
@@ -330,6 +353,33 @@ export async function transcribeSpeechAudio(
   mimeType: string = 'audio/webm',
   languageId: string = 'ha'
 ): Promise<string> {
+  const isBrowser = typeof window !== 'undefined' && typeof window.fetch === 'function';
+
+  if (isBrowser) {
+    const res = await fetch('/api/ai/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        audio: base64Audio,
+        mimeType,
+        languageId
+      })
+    });
+
+    if (!res.ok) {
+      let errorMsg = `Server returned HTTP ${res.status}`;
+      try {
+        const errJson = await res.json();
+        errorMsg = errJson.message || errJson.error || errorMsg;
+      } catch (_) {}
+      throw new Error(errorMsg);
+    }
+
+    const data = await res.json();
+    return data.transcript || '';
+  }
+
+  // Node.js direct SDK execution (for backend tests or server side)
   const selectedLang = NIGERIAN_LANGUAGES.find(l => l.id === languageId) || NIGERIAN_LANGUAGES[0];
 
   const audioPart = {
@@ -385,6 +435,24 @@ export async function generateSpeechAudio(
   voiceName: string = 'Kore',
   styleDescription: string = 'Warm, respectful, articulate African agronomist expert'
 ): Promise<string> {
+  const isBrowser = typeof window !== 'undefined' && typeof window.fetch === 'function';
+
+  if (isBrowser) {
+    try {
+      const res = await fetch('/api/ai/speech', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voiceName })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.pcmBase64) return data.pcmBase64;
+      }
+    } catch (e: any) {
+      console.warn("Backend speech API warning, falling back to direct/browser TTS:", e.message);
+    }
+  }
+
   const cleanText = text
     .replace(/[*#_`>~]/g, '')
     .replace(/\[.*?\]/g, '')
@@ -501,9 +569,9 @@ function getLocalAgronomistFallback(
     }
   }
 
-  // If running on Vercel without GEMINI_API_KEY injected, append a helpful note
+  // If running on Render without GEMINI_API_KEY injected, append a helpful note
   if (hasKeyIssue) {
-    reply += `\n\n*(Tip: To enable live Gemini AI reasoning on Vercel, add \`GEMINI_API_KEY\` in your Vercel Project Settings → Environment Variables).*`;
+    reply += `\n\n*(Tip: To enable live Gemini AI reasoning on Render, add \`GEMINI_API_KEY\` in your Render Dashboard → Environment Variables).*`;
   }
 
   return reply;
@@ -520,6 +588,43 @@ export async function consultAgronomist(
     soilMoisture?: number;
   }
 ): Promise<string> {
+  const isBrowser = typeof window !== 'undefined' && typeof window.fetch === 'function';
+
+  if (isBrowser) {
+    try {
+      const res = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          languageId,
+          history,
+          contextData
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.reply) return data.reply;
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        if (res.status === 503) {
+          throw new Error(errJson.message || 'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard environment variables.');
+        }
+        if (errJson.message) {
+          throw new Error(errJson.message);
+        }
+      }
+    } catch (fetchErr: any) {
+      if (fetchErr.message && (fetchErr.message.includes('GEMINI_API_KEY') || fetchErr.message.includes('Render') || fetchErr.message.includes('unconfigured'))) {
+        throw fetchErr;
+      }
+      console.warn("Backend chat endpoint note, falling back to local agronomist knowledge:", fetchErr.message);
+      return getLocalAgronomistFallback(message, languageId, contextData?.cropType, fetchErr.message);
+    }
+  }
+
+  // Node.js direct SDK execution
   const selectedLang = NIGERIAN_LANGUAGES.find(l => l.id === languageId) || NIGERIAN_LANGUAGES[0];
 
   const systemInstruction = `You are EDENS AI, an expert autonomous agricultural assistant and botanist for smart greenhouse farming in Nigeria and West Africa, powered by RA.

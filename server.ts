@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { GoogleGenAI, Type } from '@google/genai';
 
 dotenv.config();
 
@@ -14,6 +15,7 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const isProd = process.env.NODE_ENV === 'production';
 const MAX_UPLOAD_MB = parseInt(process.env.CAMERA_MAX_UPLOAD_MB || '10', 10);
+const MAX_AUDIO_MB = parseInt(process.env.AUDIO_MAX_UPLOAD_MB || '15', 10);
 
 // Camera Upload Storage Directories (supports Render Persistent Disks via CAMERA_STORAGE_PATH)
 const STORAGE_BASE = process.env.CAMERA_STORAGE_PATH || process.env.UPLOADS_DIR || path.join(process.cwd(), 'uploads');
@@ -70,8 +72,18 @@ app.use('/api/camera/upload', express.raw({
   limit: `${MAX_UPLOAD_MB}mb`
 }));
 
-// 2. Standard JSON parser for other API routes
-app.use(express.json());
+// 2. Raw body parser for audio transcription direct binary stream uploads
+app.use('/api/ai/transcribe', (req, res, next) => {
+  const cType = (req.headers['content-type'] || '').toLowerCase();
+  if (cType.startsWith('audio/') || cType.includes('octet-stream')) {
+    return express.raw({ type: () => true, limit: `${MAX_AUDIO_MB}mb` })(req, res, next);
+  }
+  return next();
+});
+
+// 3. Standard JSON parser for API routes (allows voice note base64 payloads up to MAX_AUDIO_MB)
+app.use(express.json({ limit: `${MAX_AUDIO_MB + 5}mb` }));
+app.use(express.urlencoded({ extended: true, limit: `${MAX_AUDIO_MB + 5}mb` }));
 
 // --------------------------------------------------------------------
 // SECURE HARDWARE INTEGRATION GATEWAY (CONTROLLER)
@@ -647,6 +659,463 @@ app.get('/api/hardware/test-suite', (req, res) => {
       { name: 'Max Irrigation Duration Limit (120s)', status: 'ACTIVE' }
     ]
   });
+});
+
+// --------------------------------------------------------------------
+// EDENS AI INTELLIGENCE & MULTILINGUAL VOICE PIPELINE
+// --------------------------------------------------------------------
+
+/**
+ * Returns an authenticated GoogleGenAI client using server-side GEMINI_API_KEY.
+ * NEVER exposes the API key to frontend bundles or client logs.
+ */
+function getGeminiClient(): GoogleGenAI | null {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    return null;
+  }
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build-edens'
+      }
+    }
+  });
+}
+
+const NIGERIAN_LANG_NAMES: Record<string, { name: string; native: string; region: string }> = {
+  ha: { name: 'Hausa', native: 'Harshen Hausa', region: 'Northern Nigeria / Arewa' },
+  ig: { name: 'Igbo', native: 'Asụsụ Igbo', region: 'Southeastern Nigeria / Ala Igbo' },
+  yo: { name: 'Yoruba', native: 'Èdè Yorùbá', region: 'Southwestern Nigeria / Ilẹ̀ Yorùbá' },
+  pcm: { name: 'Nigerian Pidgin', native: 'Naija Pidgin', region: 'Pan-Nigerian / All Regions' },
+  ff: { name: 'Fulfulde', native: 'Fulfulde / Pulaar', region: 'Northern & Middle Belt Nigeria' },
+  tiv: { name: 'Tiv', native: 'Zwa Tiv', region: 'Benue State (Food Basket of the Nation)' },
+  efi: { name: 'Efik / Ibibio', native: 'Usem Efik', region: 'South-South (Cross River & Akwa Ibom)' },
+  en: { name: 'English (Nigeria)', native: 'Nigerian English', region: 'Nationwide' }
+};
+
+/**
+ * GET /api/ai/status
+ * Informs the frontend whether Gemini is configured on Render without leaking secrets.
+ */
+app.get('/api/ai/status', (req, res) => {
+  const isConfigured = Boolean(getGeminiClient());
+  res.json({
+    status: isConfigured ? 'READY' : 'UNCONFIGURED',
+    configured: isConfigured,
+    provider: 'Google Gemini AI',
+    maxAudioUploadMb: MAX_AUDIO_MB,
+    supportedAudioFormats: ['audio/webm', 'audio/wav', 'audio/mp3', 'audio/m4a', 'audio/mp4', 'audio/ogg', 'audio/aac'],
+    languages: Object.entries(NIGERIAN_LANG_NAMES).map(([id, info]) => ({ id, ...info })),
+    instructions: 'On Render, configure GEMINI_API_KEY in Dashboard > Environment Variables.'
+  });
+});
+
+/**
+ * POST /api/ai/transcribe
+ * Transcribes audio recordings & uploaded voice notes using Gemini models (gemini-3.5-transcribe / gemini-3.8-flash).
+ * Supports JSON payloads with base64 audio and raw binary stream uploads.
+ */
+app.post('/api/ai/transcribe', async (req, res) => {
+  const ai = getGeminiClient();
+  if (!ai) {
+    return res.status(503).json({
+      error: 'AI_SERVICE_UNCONFIGURED',
+      message: 'GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY in your Render dashboard under Environment Variables.'
+    });
+  }
+
+  let base64Audio = '';
+  let mimeType = 'audio/webm';
+  let languageId = 'pcm';
+
+  if (Buffer.isBuffer(req.body)) {
+    // Raw binary upload
+    if (req.body.length === 0) {
+      return res.status(400).json({ error: 'EMPTY_AUDIO', message: 'No audio data received in request.' });
+    }
+    if (req.body.length > MAX_AUDIO_MB * 1024 * 1024) {
+      return res.status(413).json({
+        error: 'AUDIO_TOO_LARGE',
+        message: `Audio file (${(req.body.length / (1024 * 1024)).toFixed(1)}MB) exceeds limit of ${MAX_AUDIO_MB}MB.`
+      });
+    }
+    base64Audio = req.body.toString('base64');
+    mimeType = (req.headers['content-type'] || 'audio/webm').split(';')[0].trim().toLowerCase();
+    languageId = (req.query.languageId as string) || 'pcm';
+  } else if (req.body && typeof req.body === 'object') {
+    // JSON upload
+    const rawData = req.body.audio;
+    if (!rawData || typeof rawData !== 'string' || !rawData.trim()) {
+      return res.status(400).json({ error: 'EMPTY_AUDIO', message: 'No audio data provided in request body.' });
+    }
+    // Clean base64 and extract mime if present as data url
+    if (rawData.startsWith('data:')) {
+      const match = rawData.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        mimeType = match[1].toLowerCase();
+        base64Audio = match[2];
+      } else {
+        base64Audio = rawData.split(',')[1] || rawData;
+      }
+    } else {
+      base64Audio = rawData.trim();
+    }
+
+    if (req.body.mimeType && typeof req.body.mimeType === 'string') {
+      mimeType = req.body.mimeType.split(';')[0].trim().toLowerCase();
+    }
+    if (req.body.languageId && typeof req.body.languageId === 'string') {
+      languageId = req.body.languageId.trim().toLowerCase();
+    }
+
+    // Estimate size in bytes
+    const estimatedBytes = (base64Audio.length * 3) / 4;
+    if (estimatedBytes > MAX_AUDIO_MB * 1024 * 1024) {
+      return res.status(413).json({
+        error: 'AUDIO_TOO_LARGE',
+        message: `Audio payload exceeds maximum upload limit of ${MAX_AUDIO_MB}MB.`
+      });
+    }
+  } else {
+    return res.status(400).json({ error: 'INVALID_PAYLOAD', message: 'Invalid request body format. Expected JSON or audio binary.' });
+  }
+
+  // Validate MIME type
+  const allowedMimePrefixes = [
+    'audio/webm', 'audio/wav', 'audio/x-wav', 'audio/wave',
+    'audio/mp3', 'audio/mpeg', 'audio/mp4', 'audio/m4a', 'audio/x-m4a',
+    'audio/ogg', 'audio/aac', 'audio/x-aac', 'audio/flac', 'video/mp4', 'video/webm'
+  ];
+  const isAllowed = allowedMimePrefixes.some(p => mimeType.startsWith(p));
+  if (!isAllowed) {
+    return res.status(400).json({
+      error: 'UNSUPPORTED_AUDIO_FORMAT',
+      message: `Audio format "${mimeType}" is not supported. Please use WebM, WAV, MP3, M4A, MP4, AAC, or OGG.`
+    });
+  }
+
+  const langInfo = NIGERIAN_LANG_NAMES[languageId] || NIGERIAN_LANG_NAMES['pcm'];
+
+  const instructionText = `You are an elite speech-to-text AI transcriber and linguist for Nigerian indigenous languages and local dialects.
+The farmer is speaking into the microphone in: ${langInfo.name} (${langInfo.native}) [${langInfo.region}] or English/Nigerian Pidgin.
+Listen carefully to the audio and transcribe the exact words spoken into clear, authentic text.
+- If they speak Hausa, transcribe in authentic Hausa (Harshen Hausa).
+- If they speak Yoruba, transcribe in authentic Yoruba (Èdè Yorùbá) with proper diacritics where appropriate.
+- If they speak Igbo, transcribe in authentic Igbo (Asụsụ Igbo).
+- If they speak Nigerian Pidgin, transcribe in authentic Naija Pidgin.
+- If they speak Fulfulde, Tiv, Efik, or Nigerian English, transcribe accurately.
+Return ONLY the exact transcribed words as plain text. Do not provide translation, explanations, quotation marks, or meta text.`;
+
+  try {
+    const audioPart = {
+      inlineData: {
+        mimeType: mimeType.split(';')[0],
+        data: base64Audio
+      }
+    };
+
+    let transcribedText = '';
+
+    // First attempt: gemini-3.5-transcribe
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.5-transcribe',
+        contents: {
+          parts: [
+            audioPart,
+            { text: instructionText }
+          ]
+        }
+      });
+      transcribedText = response.text?.trim() || '';
+    } catch (transcribeErr: any) {
+      console.warn('gemini-3.5-transcribe attempt note, falling back to gemini-3.8-flash:', transcribeErr.message);
+    }
+
+    // Fallback attempt: gemini-3.8-flash (multimodal audio)
+    if (!transcribedText) {
+      const fallbackResponse = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: {
+          parts: [
+            audioPart,
+            { text: instructionText }
+          ]
+        }
+      });
+      transcribedText = fallbackResponse.text?.trim() || '';
+    }
+
+    return res.json({
+      success: true,
+      transcript: transcribedText,
+      languageId,
+      languageName: langInfo.name
+    });
+  } catch (err: any) {
+    console.error('Speech transcription error on server:', err.message);
+    return res.status(502).json({
+      error: 'TRANSCRIPTION_FAILED',
+      message: `Speech transcription failed: ${err.message || 'Error processing audio.'}`
+    });
+  }
+});
+
+/**
+ * POST /api/ai/chat
+ * Multi-turn agronomist chat reasoning in native Nigerian languages.
+ */
+app.post('/api/ai/chat', async (req, res) => {
+  const ai = getGeminiClient();
+  if (!ai) {
+    return res.status(503).json({
+      error: 'AI_SERVICE_UNCONFIGURED',
+      message: 'GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY in your Render dashboard under Environment Variables.'
+    });
+  }
+
+  const { message, languageId = 'pcm', history = [], contextData } = req.body || {};
+  if (!message || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ error: 'EMPTY_MESSAGE', message: 'Chat message cannot be empty.' });
+  }
+
+  const langInfo = NIGERIAN_LANG_NAMES[languageId] || NIGERIAN_LANG_NAMES['pcm'];
+
+  const systemInstruction = `You are EDENS AI, an expert autonomous agricultural assistant and botanist for smart greenhouse farming in Nigeria and West Africa, powered by RA.
+You have native, fluent fluency in all Nigerian languages: Hausa, Igbo, Yoruba, Nigerian Pidgin, Fulfulde, Tiv, Efik, and English.
+
+The farmer wants to communicate with you in: ${langInfo.name} (${langInfo.native}) [Region: ${langInfo.region}].
+ALWAYS reply directly, warmly, and thoroughly in ${langInfo.name}.
+If the user speaks in Nigerian Pidgin, respond in cheerful, knowledgeable Nigerian Pidgin.
+If the user speaks in Hausa, respond in respectful, accurate Harshen Hausa.
+If the user speaks in Yoruba, respond in respectful, rich Èdè Yorùbá.
+If the user speaks in Igbo, respond in clear, supportive Asụsụ Igbo.
+Provide practical advice with local Nigerian agricultural realities in mind: organic pest remedies (e.g. Dongoyaro/Neem extract, wood ash, garlic spray), soil care, watering schedules, greenhouse ventilation, solar power considerations, and market-ready crop health.
+
+${contextData ? `Current Greenhouse telemetry context:
+- Monitored Crop: ${contextData.cropType || 'Vegetables'}
+- Temp: ${contextData.temperature ?? 24}°C
+- Humidity: ${contextData.humidity ?? 65}%
+- Soil Moisture: ${contextData.soilMoisture ?? 50}%` : ''}`;
+
+  // Multi-turn turn sanitization for Gemini
+  const validHistory: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
+  let expectedRole: 'user' | 'model' = 'user';
+
+  if (Array.isArray(history)) {
+    for (const item of history) {
+      if (!item || !item.content || !String(item.content).trim()) continue;
+      const itemRole: 'user' | 'model' = item.role === 'assistant' ? 'model' : 'user';
+      if (validHistory.length === 0 && itemRole !== 'user') continue;
+      if (itemRole === expectedRole) {
+        validHistory.push({
+          role: itemRole,
+          parts: [{ text: String(item.content) }]
+        });
+        expectedRole = expectedRole === 'user' ? 'model' : 'user';
+      }
+    }
+  }
+
+  if (validHistory.length > 0 && validHistory[validHistory.length - 1].role === 'user') {
+    validHistory.pop();
+  }
+
+  const slicedHistory = validHistory.slice(-6);
+  const userTurn = {
+    role: 'user' as const,
+    parts: [{ text: `[Speaking in ${langInfo.name}]: ${message.trim()}` }]
+  };
+  const contents = [...slicedHistory, userTurn];
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents,
+      config: {
+        systemInstruction,
+        temperature: 0.7,
+        maxOutputTokens: 800
+      }
+    });
+
+    const replyText = response.text?.trim();
+    if (!replyText) {
+      throw new Error('Gemini model did not return any text.');
+    }
+
+    return res.json({
+      success: true,
+      reply: replyText,
+      languageId,
+      languageName: langInfo.name
+    });
+  } catch (err: any) {
+    console.error('Gemini chat error on server:', err.message);
+    return res.status(502).json({
+      error: 'AI_REASONING_FAILED',
+      message: `EDENS AI consultation failed: ${err.message}`
+    });
+  }
+});
+
+/**
+ * POST /api/ai/diagnose
+ * Computer vision plant disease & botanical diagnosis in Nigerian languages.
+ */
+app.post('/api/ai/diagnose', async (req, res) => {
+  const ai = getGeminiClient();
+  if (!ai) {
+    return res.status(503).json({
+      error: 'AI_SERVICE_UNCONFIGURED',
+      message: 'GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY in your Render dashboard under Environment Variables.'
+    });
+  }
+
+  const { image, languageId = 'ha' } = req.body || {};
+  if (!image || typeof image !== 'string' || !image.trim()) {
+    return res.status(400).json({ error: 'EMPTY_IMAGE', message: 'No image provided for diagnosis.' });
+  }
+
+  let cleanBase64 = image.trim();
+  let mimeType = 'image/jpeg';
+  if (cleanBase64.startsWith('data:')) {
+    const match = cleanBase64.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      mimeType = match[1].toLowerCase();
+      cleanBase64 = match[2];
+    } else {
+      cleanBase64 = cleanBase64.split(',')[1] || cleanBase64;
+    }
+  }
+
+  const langInfo = NIGERIAN_LANG_NAMES[languageId] || NIGERIAN_LANG_NAMES['ha'];
+
+  const promptText = `You are EDENS AI, an elite plant health expert and agronomist for Nigerian and tropical greenhouse farming, powered by RA.
+Analyze this plant leaf/crop image carefully.
+
+CRITICAL REQUIREMENT:
+The user selected the language: "${langInfo.name} (${langInfo.native}) - ${langInfo.region}".
+Communicate the diagnosis, visible symptoms, likely cause, and recommendations fluently and naturally in ${langInfo.name} (${langInfo.native}), suitable for farmers in Nigeria.
+If Nigerian Pidgin is selected, use authentic, friendly Naija Pidgin.
+If Hausa is selected, use authentic Harshen Hausa.
+If Yoruba is selected, use authentic Èdè Yorùbá.
+If Igbo is selected, use authentic Asụsụ Igbo.
+For other Nigerian native tongues (Fulfulde, Tiv, Efik), communicate accurately in that tongue.
+
+In the JSON response:
+- 'species': Scientific or common English name with local Nigerian name (e.g. "Tomato (Tumatir / Tòmátì)").
+- 'speciesLocal': The name solely in ${langInfo.name}.
+- 'healthStatus': One of: "Healthy", "Stressed", "Diseased".
+- 'healthStatusLocal': Translated status in ${langInfo.name}.
+- 'symptoms': Detailed visible symptoms written in ${langInfo.name}.
+- 'cause': Root cause explanation written in ${langInfo.name}.
+- 'recommendation': Actionable, practical steps in ${langInfo.name} (include organic/local Nigerian remedies like neem leaf/dongoyaro water, wood ash, proper spacing, drip watering where appropriate).
+- 'audioSummary': A short, clear 1-2 sentence spoken summary written in ${langInfo.name} for audio read-aloud.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: mimeType.split(';')[0],
+              data: cleanBase64
+            }
+          },
+          { text: promptText }
+        ]
+      },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            species: { type: Type.STRING },
+            speciesLocal: { type: Type.STRING },
+            healthStatus: { type: Type.STRING },
+            healthStatusLocal: { type: Type.STRING },
+            symptoms: { type: Type.STRING },
+            cause: { type: Type.STRING },
+            recommendation: { type: Type.STRING },
+            audioSummary: { type: Type.STRING }
+          },
+          required: ['species', 'healthStatus', 'symptoms', 'cause', 'recommendation']
+        }
+      }
+    });
+
+    const parsed = JSON.parse(response.text?.trim() || '{}');
+    parsed.language = langInfo.name;
+    return res.json({ success: true, result: parsed });
+  } catch (err: any) {
+    console.error('Plant diagnosis error on server:', err.message);
+    return res.status(502).json({
+      error: 'DIAGNOSIS_FAILED',
+      message: `Plant diagnosis failed: ${err.message}`
+    });
+  }
+});
+
+/**
+ * POST /api/ai/speech
+ * High-quality Text-To-Speech generation via Gemini 3.8 Flash Lite TTS.
+ */
+app.post('/api/ai/speech', async (req, res) => {
+  const ai = getGeminiClient();
+  if (!ai) {
+    return res.status(503).json({
+      error: 'AI_SERVICE_UNCONFIGURED',
+      message: 'GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY in your Render dashboard under Environment Variables.'
+    });
+  }
+
+  const { text, voiceName = 'Kore' } = req.body || {};
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    return res.status(400).json({ error: 'EMPTY_TEXT', message: 'No text provided for speech generation.' });
+  }
+
+  const cleanText = text
+    .replace(/[*#_`>~]/g, '')
+    .replace(/\[.*?\]/g, '')
+    .trim()
+    .slice(0, 900);
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash-lite-tts',
+      contents: cleanText,
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: voiceName || 'Kore' }
+          }
+        }
+      }
+    });
+
+    const pcmBase64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!pcmBase64) {
+      throw new Error('No audio data returned from Gemini TTS.');
+    }
+
+    return res.json({
+      success: true,
+      pcmBase64,
+      sampleRate: 24000,
+      mimeType: 'audio/pcm'
+    });
+  } catch (err: any) {
+    console.error('Speech generation error on server:', err.message);
+    return res.status(502).json({
+      error: 'TTS_FAILED',
+      message: `Speech synthesis failed: ${err.message}`
+    });
+  }
 });
 
 // --------------------------------------------------------------------
