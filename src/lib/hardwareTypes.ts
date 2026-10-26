@@ -3,7 +3,7 @@
  * Main Controller (ESP32) and ESP32-CAM interfaces
  */
 
-export type DataSource = 'REAL_HARDWARE' | 'SIMULATED' | 'CACHED' | 'DISCONNECTED';
+export type DataSource = 'REAL_HARDWARE' | 'SIMULATED' | 'CACHED' | 'STALE' | 'DISCONNECTED';
 
 export type ConnectionMode = 'direct' | 'proxy' | 'simulation';
 
@@ -131,7 +131,7 @@ export interface CameraUploadResponse {
 
 export interface LatestUploadedImage {
   exists: boolean;
-  status: 'ONLINE' | 'IDLE' | 'WAITING_FOR_UPLOAD' | 'OFFLINE';
+  status: 'ONLINE' | 'IDLE' | 'CACHED' | 'STALE' | 'WAITING_FOR_UPLOAD' | 'OFFLINE';
   id?: string;
   timestamp?: string;
   ageSeconds?: number;

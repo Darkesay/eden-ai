@@ -15,6 +15,7 @@ import assert from 'node:assert';
 import http from 'node:http';
 import express from 'express';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const TEST_PORT = 3199;
@@ -41,7 +42,7 @@ function createValidTestJpeg(): Buffer {
 // Build Express test server replicating server.ts logic
 function buildTestApp() {
   const app = express();
-  const UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'camera_test');
+  const UPLOAD_DIR = path.join(os.tmpdir(), `edens_camera_test_${process.pid}`);
   const HISTORY_DIR = path.join(UPLOAD_DIR, 'history');
   fs.mkdirSync(HISTORY_DIR, { recursive: true });
 

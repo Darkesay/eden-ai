@@ -82,10 +82,12 @@ export function useVisionAgent() {
         }
 
         const sourceLabel = snapshotResult.isUploaded 
-          ? 'REAL ESP32-CAM UPLOAD'
+          ? (snapshotResult.dataSource === 'REAL_HARDWARE'
+              ? 'REAL ESP32-CAM UPLOAD'
+              : `ESP32-CAM UPLOAD (${snapshotResult.dataSource})`)
           : snapshotResult.dataSource === 'SIMULATED' 
             ? 'SIMULATION' 
-            : 'REAL HARDWARE';
+            : snapshotResult.dataSource;
 
         store.setRow('activityLog', Date.now().toString() + 'va', {
           timestamp: now,

@@ -51,7 +51,7 @@ export function useAlertAgent() {
 
         checkAlert(
           'hw_stale_telemetry',
-          config.mode !== 'simulation' && dataSource === 'CACHED' && freshnessSec > 20,
+          config.mode !== 'simulation' && (dataSource === 'CACHED' || dataSource === 'STALE') && freshnessSec > 20,
           `Sensor readings are stale (${freshnessSec}s since last packet). Reconnecting to ESP32...`,
           'warning'
         );

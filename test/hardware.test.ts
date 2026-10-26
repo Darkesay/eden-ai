@@ -47,26 +47,46 @@ function evaluateDataSource(
   mode: 'simulation' | 'direct' | 'proxy',
   lastReadTimestamp: number | null,
   now: number = Date.now()
-): 'REAL_HARDWARE' | 'SIMULATED' | 'CACHED' | 'DISCONNECTED' {
+): 'REAL_HARDWARE' | 'SIMULATED' | 'CACHED' | 'STALE' | 'DISCONNECTED' {
   if (mode === 'simulation') return 'SIMULATED';
   if (!lastReadTimestamp) return 'DISCONNECTED';
   const ageMs = now - lastReadTimestamp;
-  if (ageMs > 25000) return 'DISCONNECTED';
+  if (ageMs > 120000) return 'DISCONNECTED';
+  if (ageMs > 25000) return 'STALE';
   if (ageMs > 8000) return 'CACHED';
   return 'REAL_HARDWARE';
 }
 
 function normalizeStatusPayload(raw: any, latencyMs: number) {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('Invalid telemetry response: payload is not a JSON object.');
+  }
+  if (raw.connected === false || raw.dataSource === 'DISCONNECTED') {
+    throw new Error(raw.message || 'Controller telemetry reported DISCONNECTED state.');
+  }
+
+  const rawTemp = raw.telemetry?.temperature ?? raw.temperature;
+  const rawHum = raw.telemetry?.humidity ?? raw.humidity;
+  const rawSoil = raw.telemetry?.soilMoisture ?? raw.soilMoisture;
+
+  if (
+    rawTemp === undefined || rawTemp === null || !Number.isFinite(Number(rawTemp)) ||
+    rawHum === undefined || rawHum === null || !Number.isFinite(Number(rawHum)) ||
+    rawSoil === undefined || rawSoil === null || !Number.isFinite(Number(rawSoil))
+  ) {
+    throw new Error('Malformed telemetry payload: numeric temperature, humidity, and soilMoisture readings are required.');
+  }
+
   const telemetry: Telemetry = {
-    temperature: Number(raw.telemetry?.temperature ?? raw.temperature ?? 24.0),
-    humidity: Number(raw.telemetry?.humidity ?? raw.humidity ?? 60.0),
-    soilMoisture: Number(raw.telemetry?.soilMoisture ?? raw.soilMoisture ?? 50.0),
-    sunlight: Number(raw.telemetry?.sunlight ?? raw.sunlight ?? 600),
-    growLight: Number(raw.telemetry?.growLight ?? raw.growLight ?? 300),
+    temperature: Number(rawTemp),
+    humidity: Number(rawHum),
+    soilMoisture: Number(rawSoil),
+    sunlight: Number(raw.telemetry?.sunlight ?? raw.sunlight ?? 0),
+    growLight: Number(raw.telemetry?.growLight ?? raw.growLight ?? 0),
     rain: Boolean(raw.telemetry?.rain ?? raw.rain ?? false),
     rainGaugeLevel: Number(raw.telemetry?.rainGaugeLevel ?? raw.rainGauge ?? 0),
-    waterLevel: Number(raw.telemetry?.waterLevel ?? raw.waterLevel ?? 70),
-    batteryVoltage: Number(raw.telemetry?.batteryVoltage ?? raw.battery ?? 12.0)
+    waterLevel: Number(raw.telemetry?.waterLevel ?? raw.waterLevel ?? 0),
+    batteryVoltage: Number(raw.telemetry?.batteryVoltage ?? raw.battery ?? 0)
   };
 
   const interlocks = raw.interlocks || calculateInterlocks(
@@ -75,12 +95,33 @@ function normalizeStatusPayload(raw: any, latencyMs: number) {
     telemetry.temperature
   );
 
+  const hasValidUpstreamTimestamp =
+    typeof raw.timestamp === 'string' && !Number.isNaN(new Date(raw.timestamp).getTime());
+  const resolvedTimestamp = hasValidUpstreamTimestamp
+    ? new Date(raw.timestamp).toISOString()
+    : new Date().toISOString();
+  const ageMs = Math.max(0, Date.now() - new Date(resolvedTimestamp).getTime());
+
+  if (ageMs > 180000) {
+    throw new Error(`Telemetry reading expired (${Math.round(ageMs / 1000)}s old); marked DISCONNECTED.`);
+  }
+
+  let resolvedDataSource: 'REAL_HARDWARE' | 'SIMULATED' | 'CACHED' | 'STALE' = 'REAL_HARDWARE';
+  if (raw.dataSource === 'SIMULATED') {
+    resolvedDataSource = 'SIMULATED';
+  } else if (raw.dataSource === 'STALE' || ageMs > 25000) {
+    resolvedDataSource = 'STALE';
+  } else if (raw.dataSource === 'CACHED' || ageMs > 15000) {
+    resolvedDataSource = 'CACHED';
+  }
+
   return {
-    connected: true,
+    connected: resolvedDataSource === 'REAL_HARDWARE' || resolvedDataSource === 'CACHED',
     firmwareVersion: String(raw.firmwareVersion ?? raw.firmware ?? 'EDENS-ESP32-v2.x'),
     telemetry,
     interlocks,
-    dataSource: 'REAL_HARDWARE',
+    timestamp: resolvedTimestamp,
+    dataSource: resolvedDataSource,
     latencyMs
   };
 }
@@ -167,9 +208,9 @@ async function runAllTests() {
     assert.strictEqual(status, 'DISCONNECTED');
   });
 
-  // 3. Stale Sensor Readings
-  test('3. Transitions to CACHED when telemetry is older than 8s, and DISCONNECTED after 25s', () => {
-    const now = 100000;
+  // 3. Stale & Cached Sensor Readings
+  test('3. Distinguishes REAL_HARDWARE (<=8s), CACHED (8-25s), STALE (25-120s), and DISCONNECTED (>120s)', () => {
+    const now = 200000;
     
     // 5 seconds old: fresh REAL_HARDWARE
     const freshStatus = evaluateDataSource('direct', now - 5000, now);
@@ -179,20 +220,43 @@ async function runAllTests() {
     const cachedStatus = evaluateDataSource('direct', now - 12000, now);
     assert.strictEqual(cachedStatus, 'CACHED');
 
-    // 30 seconds old: DISCONNECTED
-    const disconnectedStatus = evaluateDataSource('direct', now - 30000, now);
+    // 45 seconds old: STALE
+    const staleStatus = evaluateDataSource('direct', now - 45000, now);
+    assert.strictEqual(staleStatus, 'STALE');
+
+    // 150 seconds old: DISCONNECTED
+    const disconnectedStatus = evaluateDataSource('direct', now - 150000, now);
     assert.strictEqual(disconnectedStatus, 'DISCONNECTED');
   });
 
-  // 4. Invalid Responses Fallback
-  test('4. Normalizes malformed/empty payload without crashing application', () => {
+  // 4. Invalid Responses Rejection (Never Fabricate Live Sensor Data)
+  test('4. Rejects malformed/empty payload lacking core numeric sensors instead of fabricating REAL_HARDWARE values', () => {
     const malformedPayload = { garbage: 1234 };
-    const parsed = normalizeStatusPayload(malformedPayload, 15);
-    assert.strictEqual(parsed.connected, true);
-    assert.strictEqual(typeof parsed.telemetry.temperature, 'number');
-    assert.strictEqual(typeof parsed.telemetry.humidity, 'number');
-    assert.strictEqual(typeof parsed.telemetry.soilMoisture, 'number');
-    assert.strictEqual(parsed.firmwareVersion, 'EDENS-ESP32-v2.x');
+    assert.throws(
+      () => normalizeStatusPayload(malformedPayload, 15),
+      /numeric temperature, humidity, and soilMoisture readings are required/
+    );
+  });
+
+  // 4b. Upstream Freshness Preservation
+  test('4b. Preserves CACHED and STALE upstream telemetry states and rejects expired (>180s) readings', () => {
+    const stalePayload = {
+      temperature: 26.4,
+      humidity: 68.1,
+      soilMoisture: 54.0,
+      timestamp: new Date(Date.now() - 45000).toISOString()
+    };
+    const parsedStale = normalizeStatusPayload(stalePayload, 12);
+    assert.strictEqual(parsedStale.dataSource, 'STALE');
+    assert.strictEqual(parsedStale.connected, false);
+
+    const expiredPayload = {
+      temperature: 26.4,
+      humidity: 68.1,
+      soilMoisture: 54.0,
+      timestamp: new Date(Date.now() - 200000).toISOString()
+    };
+    assert.throws(() => normalizeStatusPayload(expiredPayload, 12), /expired/);
   });
 
   // 5. Firmware Safety Interlock: Rain vs Roof

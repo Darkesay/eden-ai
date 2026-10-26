@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import mqtt, { MqttClient } from 'mqtt';
 import { store } from './store';
+import { hardwareService } from './hardwareService';
 
 type MqttStatus = 'connected' | 'error' | 'demo' | 'connecting';
 
@@ -66,19 +67,34 @@ export function MqttProvider({ children }: { children: React.ReactNode }) {
         }
       });
 
+      const configuredBroker = (import.meta.env.VITE_MQTT_BROKER_URL || '').trim();
+      const isPrivateBroker = Boolean(configuredBroker && !configuredBroker.includes('broker.hivemq.com'));
+
       newClient.on('message', (topic, message) => {
+        // Never allow public demo MQTT broker traffic to overwrite telemetry in direct/proxy hardware modes
+        // or spoof REAL_HARDWARE when running in simulation mode.
+        const hwMode = hardwareService.getConfig().mode;
+        if (!isPrivateBroker && hwMode !== 'simulation') {
+          return;
+        }
+
         const payloadStr = message.toString().trim();
         if (!payloadStr) return;
 
         const lower = payloadStr.toLowerCase();
 
-        // Handle LWT and plain-text device heartbeat messages (e.g. "offline", "online")
-        if (lower.includes('offline') || lower.includes('disconnected')) {
-          store.setValue('hardware_dataSource', 'DISCONNECTED');
-          return;
-        }
-        if (lower.includes('online') || lower.includes('connected')) {
-          store.setValue('hardware_dataSource', 'REAL_HARDWARE');
+        // Only accept plain-text LWT status transitions from an explicitly configured private broker
+        if (isPrivateBroker && hwMode !== 'simulation') {
+          if (lower.includes('offline') || lower.includes('disconnected')) {
+            store.setValue('hardware_dataSource', 'DISCONNECTED');
+            return;
+          }
+          if (lower.includes('online') || lower.includes('connected')) {
+            store.setValue('hardware_dataSource', 'REAL_HARDWARE');
+            store.setValue('hardware_lastSeen', new Date().toISOString());
+            return;
+          }
+        } else if (lower.includes('offline') || lower.includes('disconnected') || lower.includes('online') || lower.includes('connected')) {
           return;
         }
 
@@ -98,6 +114,7 @@ export function MqttProvider({ children }: { children: React.ReactNode }) {
         if (typeof data !== 'object' || data === null) return;
 
         if (topic === 'greenhouse/sensors') {
+          if (!isPrivateBroker) return;
           if (data.temperature !== undefined) store.setValue('temperature', data.temperature);
           if (data.humidity !== undefined) store.setValue('humidity', data.humidity);
           if (data.soilMoisture !== undefined) store.setValue('soilMoisture', data.soilMoisture);
@@ -108,15 +125,21 @@ export function MqttProvider({ children }: { children: React.ReactNode }) {
           if (data.waterLevel !== undefined) store.setValue('waterLevel', data.waterLevel);
           if (data.batteryVoltage !== undefined) store.setValue('batteryVoltage', data.batteryVoltage);
 
+          const now = new Date().toISOString();
+          if (hwMode !== 'simulation') {
+            store.setValue('hardware_dataSource', 'REAL_HARDWARE');
+            store.setValue('hardware_lastSeen', now);
+          }
+
           // Update last seen for all registered devices to indicate connection activity
           const devicesTable = store.getTable('registeredDevices') || {};
-          const now = new Date().toISOString();
           Object.keys(devicesTable).forEach(id => {
             store.setCell('registeredDevices', id, 'lastSeen', now);
           });
         }
 
         if (topic === 'greenhouse/status') {
+          if (!isPrivateBroker) return;
           if (data.pumpActive !== undefined) store.setValue('pumpActive', data.pumpActive);
           if (data.fanActive !== undefined) store.setValue('fanActive', data.fanActive);
           if (data.lightActive !== undefined) store.setValue('lightActive', data.lightActive);
@@ -234,6 +257,10 @@ export function MqttProvider({ children }: { children: React.ReactNode }) {
       }
 
       const updateDemoState = () => {
+        // Never mutate telemetry with synthetic values when user has configured direct or proxy hardware mode
+        if (hardwareService.getConfig().mode !== 'simulation') {
+          return;
+        }
         const t = Number(store.getValue('temperature') || 24.5);
         const h = Number(store.getValue('humidity') || 62);
         const rg = Number(store.getValue('rainGaugeLevel') || 25);

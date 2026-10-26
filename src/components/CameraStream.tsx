@@ -23,6 +23,7 @@ export function CameraStream({ onCapture, className, showControls = true }: Came
   const [snapshotSuccess, setSnapshotSuccess] = useState(false);
   const [uploadSuccessMessage, setUploadSuccessMessage] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [testCameraKey, setTestCameraKey] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
 
@@ -76,10 +77,10 @@ export function CameraStream({ onCapture, className, showControls = true }: Came
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Prompt user for key or let them test authentication - never hardcode secrets in client
-    const token = prompt('Enter your CAMERA_UPLOAD_KEY to authorize this upload test:') || '';
-    if (!token.trim()) {
-      setUploadError('Upload aborted: CAMERA_UPLOAD_KEY is required to authenticate.');
+    // Require ephemeral X-Camera-Key from password input - never hardcode secrets or use window.prompt
+    const token = testCameraKey.trim();
+    if (!token) {
+      setUploadError('Enter X-Camera-Key in the password box before testing JPEG upload.');
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
@@ -164,9 +165,19 @@ export function CameraStream({ onCapture, className, showControls = true }: Came
           <div className="flex items-center gap-2">
             <DataSourceBadge variant="badge" />
             {latestUploaded && latestUploaded.exists && (
-              <span className="text-[10px] font-mono px-2.5 py-1 rounded-xl bg-emerald-950/80 backdrop-blur-md border border-emerald-500/40 text-emerald-300 font-bold flex items-center gap-1 shadow-sm">
-                <FileCheck size={11} className="text-emerald-400" />
-                ESP32-CAM Upload · {Math.round((latestUploaded.sizeBytes || 0) / 1024)} KB
+              <span className={cn(
+                "text-[10px] font-mono px-2.5 py-1 rounded-xl backdrop-blur-md border font-bold flex items-center gap-1 shadow-sm",
+                latestUploaded.dataSource === 'STALE'
+                  ? "bg-orange-950/85 border-orange-500/40 text-orange-300"
+                  : latestUploaded.dataSource === 'CACHED'
+                  ? "bg-amber-950/85 border-amber-500/40 text-amber-300"
+                  : "bg-emerald-950/80 border-emerald-500/40 text-emerald-300"
+              )}>
+                <FileCheck size={11} className={
+                  latestUploaded.dataSource === 'STALE' ? "text-orange-400" :
+                  latestUploaded.dataSource === 'CACHED' ? "text-amber-400" : "text-emerald-400"
+                } />
+                ESP32-CAM ({latestUploaded.dataSource}) · {Math.max(1, Math.round((latestUploaded.sizeBytes || 0) / 1024))} KB
               </span>
             )}
           </div>
@@ -220,7 +231,16 @@ export function CameraStream({ onCapture, className, showControls = true }: Came
               {isCapturing ? 'Analyzing Foliage...' : 'Capture Snapshot & Analyze'}
             </Button>
 
-            {/* Test Upload Button */}
+            {/* Test Upload Input & Button */}
+            <input
+              type="password"
+              autoComplete="off"
+              value={testCameraKey}
+              onChange={(e) => setTestCameraKey(e.target.value)}
+              placeholder="X-Camera-Key"
+              className="h-10 w-32 px-2.5 rounded-xl bg-black/5 dark:bg-white/5 border border-emerald-500/30 text-xs font-mono focus:outline-none focus:border-emerald-500"
+              title="Ephemeral X-Camera-Key header for testing POST /api/camera/upload (not saved)"
+            />
             <input
               type="file"
               ref={fileInputRef}

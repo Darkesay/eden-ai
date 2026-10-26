@@ -33,6 +33,7 @@ export default function DeviceManagement() {
   const [instructionsModalOpen, setInstructionsModalOpen] = useState(false);
   const [registeredDevice, setRegisteredDevice] = useState<any>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
   const generateToken = () => {
     if (window.crypto && window.crypto.getRandomValues) {
@@ -75,8 +76,12 @@ export default function DeviceManagement() {
   };
 
   const removeDevice = (id: string) => {
-    if (confirm('Are you sure you want to completely remove this device?')) {
+    if (confirmRemoveId === id) {
       store.delRow('registeredDevices', id);
+      setConfirmRemoveId(null);
+    } else {
+      setConfirmRemoveId(id);
+      setTimeout(() => setConfirmRemoveId((prev) => (prev === id ? null : prev)), 4000);
     }
   };
 
@@ -339,7 +344,7 @@ void loop() {
 
                 <div className="pt-4 border-t border-[#D1E8D1] dark:border-[#1A2A1A] mt-auto flex gap-2">
                   <Button onClick={() => removeDevice(id)} variant="ghost" className="w-full text-red-500 hover:bg-red-500/10 hover:text-red-600">
-                     Decommission Node
+                     {confirmRemoveId === id ? 'Click Again to Confirm Removal' : 'Decommission Node'}
                   </Button>
                 </div>
               </CardContent>

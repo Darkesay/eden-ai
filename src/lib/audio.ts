@@ -18,6 +18,16 @@ export function pcmToWavBlob(
   numChannels: number = 1,
   bitsPerSample: number = 16
 ): Blob {
+  // Gemini 3.8 TTS unary generateContent returns a complete RIFF WAV file directly;
+  // avoid prepending a duplicate 44-byte WAV header if RIFF...WAVE is already present.
+  if (
+    pcmBytes.length > 44 &&
+    pcmBytes[0] === 0x52 && pcmBytes[1] === 0x49 && pcmBytes[2] === 0x46 && pcmBytes[3] === 0x46 &&
+    pcmBytes[8] === 0x57 && pcmBytes[9] === 0x41 && pcmBytes[10] === 0x56 && pcmBytes[11] === 0x45
+  ) {
+    return new Blob([pcmBytes], { type: 'audio/wav' });
+  }
+
   const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
   const blockAlign = numChannels * (bitsPerSample / 8);
   const buffer = new ArrayBuffer(44 + pcmBytes.length);

@@ -1,16 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { store } from '../lib/store';
 import { hardwareService } from '../lib/hardwareService';
-import { GoogleGenAI, Type } from '@google/genai';
-
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || (typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_GEMINI_API_KEY || '') : ''),
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
-  }
-});
+import { evaluateAgentDecision } from '../lib/gemini';
 
 export function useClimateAgent() {
   const isRunning = useRef(false);
@@ -19,20 +10,21 @@ export function useClimateAgent() {
     const runAgent = async () => {
       const isEnabled = store.getValue('agent_ClimateAgent_enabled') ?? false;
       if (!isEnabled || isRunning.current) return;
+      if (store.getValue('autonomousPaused') === true) return;
 
       isRunning.current = true;
       try {
+        const config = hardwareService.getConfig();
         const dataSource = hardwareService.getDataSource();
         const freshnessSec = hardwareService.getSensorFreshnessSeconds();
 
-        // Safety Rule: Report when information is unavailable or stale.
-        // Never send automated actuator commands on stale or disconnected telemetry.
-        if (dataSource === 'DISCONNECTED' || freshnessSec > 35) {
+        // Safety Rule: Never evaluate or dispatch actuator commands on disconnected or stale telemetry.
+        if (dataSource === 'DISCONNECTED' || dataSource === 'STALE' || freshnessSec > 35) {
           store.setValue('agent_ClimateAgent_lastRun', new Date().toISOString());
           store.setRow('activityLog', Date.now().toString() + 'ca', {
             timestamp: new Date().toISOString(),
             type: 'agent',
-            message: `🤖 Climate Agent: Telemetry unavailable or stale (${freshnessSec}s old). Actuator commands suspended for hardware safety.`
+            message: `🤖 Climate Agent: Telemetry ${dataSource.toLowerCase()} (${freshnessSec}s old). Actuator commands suspended for hardware safety.`
           });
           return;
         }
@@ -42,63 +34,41 @@ export function useClimateAgent() {
         const activeCrop = (store.getValue('cropType') as string) || 'Tomato';
         const thermalLocked = store.getValue('hardware_thermalLocked') === true || temp > 32;
 
-        const prompt = `You are EDENS AI Climate Agent, optimizing greenhouse ventilation and temperature for ${activeCrop}.
-Current Telemetry (${dataSource}):
-- Temperature: ${temp}°C
-- Humidity: ${humidity}%
-- Thermal Interlock: ${thermalLocked ? 'ACTIVE (Heater locked OFF)' : 'CLEAR'}
-Optimal ranges for ${activeCrop}: Temp 20-28°C, Humidity 50-75%.
-
-Safety Rules:
-1. Never turn heater ON if temperature is above 26°C or if thermal interlock is active.
-2. Turn fan ON if temp > 28°C or humidity > 75%.
-3. Explain your exact reasoning with safety margins.
-Return JSON: { "fan": "ON"|"OFF", "heater": "ON"|"OFF", "reason": "string" }`;
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                fan: { type: Type.STRING },
-                heater: { type: Type.STRING },
-                reason: { type: Type.STRING }
-              },
-              required: ["fan", "heater", "reason"]
-            }
-          }
+        const result = await evaluateAgentDecision<{ fan: string; heater: string; reason: string }>('climate', {
+          temperature: temp,
+          humidity,
+          activeCrop,
+          dataSource,
+          thermalLocked
         });
 
-        if (response.text) {
-          const result = JSON.parse(response.text.trim());
-          
-          // Safety override check: Never allow AI to violate thermal safety
+        if (result) {
           let targetHeater = result.heater;
           if (thermalLocked && targetHeater === 'ON') {
             targetHeater = 'OFF';
             result.reason += ' (Heater forced OFF by hardware thermal interlock)';
           }
 
-          // Dispatch through hardwareService to enforce safety rules
-          if (result.fan) {
-            await hardwareService.setOverride('fan', result.fan === 'ON' ? 'on' : 'off');
-          }
-          if (targetHeater) {
-            await hardwareService.setOverride('heater', targetHeater === 'ON' ? 'on' : 'off');
+          // Only dispatch to physical hardware if user explicitly enabled auto-approve for ClimateAgent
+          const canAutoDispatch = config.mode === 'simulation' || store.getValue('auto_approve_agent_ClimateAgent') === true;
+          if (canAutoDispatch) {
+            if (result.fan) {
+              await hardwareService.setOverride('fan', result.fan === 'ON' ? 'on' : 'off');
+            }
+            if (targetHeater) {
+              await hardwareService.setOverride('heater', targetHeater === 'ON' ? 'on' : 'off');
+            }
           }
 
           store.setValue('agent_ClimateAgent_lastRun', new Date().toISOString());
           store.setRow('activityLog', Date.now().toString() + 'ca', {
             timestamp: new Date().toISOString(),
             type: 'agent',
-            message: `🤖 Climate Agent (${dataSource}): Fan ${result.fan}, Heater ${targetHeater} — ${result.reason}`
+            message: `🤖 Climate Agent (${dataSource}${canAutoDispatch ? '' : ' · Advisory Only'}): Fan ${result.fan}, Heater ${targetHeater} — ${result.reason}`
           });
         }
       } catch (err: any) {
-        console.error("ClimateAgent execution failed:", err);
+        console.warn('ClimateAgent evaluation skipped:', err.message);
       } finally {
         isRunning.current = false;
       }

@@ -9,8 +9,18 @@ import type { HarvestPredictionResult } from '../lib/gemini';
 export function HarvestWidget() {
   const predictionJson = useStoreValue('harvestPrediction', '');
   const cropType = String(useStoreValue('cropType', 'Tomato'));
-  
-  if (!predictionJson) return null;
+  const [recordedNotice, setRecordedNotice] = React.useState(false);
+
+  if (!predictionJson) {
+    if (recordedNotice) {
+      return (
+        <div className="p-4 rounded-2xl border border-[#10B981]/40 bg-[#10B981]/10 text-[#10B981] text-xs font-bold flex items-center gap-2">
+          <CheckCircle2 size={15} /> Harvest recorded in history and cycle reset.
+        </div>
+      );
+    }
+    return null;
+  }
   
   let prediction: HarvestPredictionResult;
   try {
@@ -146,8 +156,9 @@ export function HarvestWidget() {
                   });
                   // Reset planting date for next crop
                   store.setValue('plantingDate', new Date().toISOString().split('T')[0]);
+                  setRecordedNotice(true);
+                  setTimeout(() => setRecordedNotice(false), 5000);
                   store.delValue('harvestPrediction');
-                  alert('Harvest recorded successfully!');
                 }}
                 className="bg-transparent border border-[#10B981] text-[#10B981] hover:bg-[#10B981]/10 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
               >

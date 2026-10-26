@@ -18,14 +18,10 @@ const MAX_UPLOAD_MB = parseInt(process.env.CAMERA_MAX_UPLOAD_MB || '10', 10);
 const MAX_AUDIO_MB = parseInt(process.env.AUDIO_MAX_UPLOAD_MB || '15', 10);
 
 // Camera Upload Storage Directories (supports Render Persistent Disks via CAMERA_STORAGE_PATH)
+// Created lazily on actual upload so empty runtime folders are not generated on startup.
 const STORAGE_BASE = process.env.CAMERA_STORAGE_PATH || process.env.UPLOADS_DIR || path.join(process.cwd(), 'uploads');
 const UPLOAD_DIR = path.join(STORAGE_BASE, 'camera');
 const HISTORY_DIR = path.join(UPLOAD_DIR, 'history');
-try {
-  fs.mkdirSync(HISTORY_DIR, { recursive: true });
-} catch (e) {
-  console.warn('Could not initialize upload directories:', e);
-}
 
 // In-Memory Cache of Latest Uploaded Camera Frame
 export interface UploadedCameraFrame {
@@ -104,19 +100,41 @@ function getControllerBaseUrl(overrideHost?: string, overridePort?: number) {
   return host.replace(/\/$/, '');
 }
 
-function getCameraBaseUrl(overrideHost?: string, overridePort?: number) {
+function getCameraBaseUrl(overrideHost?: string, overridePort?: number, defaultPort: number = 80) {
   let host = (overrideHost || process.env.HARDWARE_CAMERA_HOST || '').trim();
   if (!host) return null;
   if (!host.startsWith('http://') && !host.startsWith('https://')) {
     host = `http://${host}`;
   }
-  const port = overridePort || parseInt(process.env.HARDWARE_CAMERA_PORT || '81', 10);
+  const envHttpPort = process.env.HARDWARE_CAMERA_HTTP_PORT
+    ? parseInt(process.env.HARDWARE_CAMERA_HTTP_PORT, 10)
+    : undefined;
+  const port = overridePort || envHttpPort || defaultPort;
   if (port && port !== 80) {
     const u = new URL(host);
     u.port = port.toString();
     return u.origin;
   }
   return host.replace(/\/$/, '');
+}
+
+function classifyCameraFrameState(timestampIso: string): {
+  ageSeconds: number;
+  status: 'ONLINE' | 'CACHED' | 'STALE';
+  dataSource: 'REAL_HARDWARE' | 'CACHED' | 'STALE';
+  isStale: boolean;
+} {
+  const parsedMs = new Date(timestampIso).getTime();
+  const ageSeconds = Number.isFinite(parsedMs)
+    ? Math.max(0, Math.round((Date.now() - parsedMs) / 1000))
+    : 999999;
+  if (ageSeconds <= 120) {
+    return { ageSeconds, status: 'ONLINE', dataSource: 'REAL_HARDWARE', isStale: false };
+  }
+  if (ageSeconds <= 600) {
+    return { ageSeconds, status: 'CACHED', dataSource: 'CACHED', isStale: false };
+  }
+  return { ageSeconds, status: 'STALE', dataSource: 'STALE', isStale: true };
 }
 
 // --------------------------------------------------------------------
@@ -161,7 +179,7 @@ function isCameraAuthorized(req: express.Request): { authorized: boolean; status
       authorized: false,
       status: 401,
       error: 'UNAUTHORIZED_CAMERA',
-      message: 'Authentication failed. ESP32-CAM must provide valid credential via X-Camera-Key header or token query parameter.'
+      message: 'Authentication failed. ESP32-CAM or local relay must provide valid credential via X-Camera-Key header.'
     };
   }
 
@@ -226,8 +244,7 @@ app.post('/api/camera/upload', (req, res) => {
     return res.status(auth.status).json({
       error: auth.error,
       message: auth.message,
-      requiredHeader: 'X-Camera-Key',
-      alternativeQueryParam: 'token'
+      requiredHeader: 'X-Camera-Key'
     });
   }
 
@@ -274,6 +291,7 @@ app.post('/api/camera/upload', (req, res) => {
 
   // 5. Persist to Disk Storage
   try {
+    fs.mkdirSync(HISTORY_DIR, { recursive: true });
     const latestFilePath = path.join(UPLOAD_DIR, 'latest.jpg');
     fs.writeFileSync(latestFilePath, jpegBuffer);
 
@@ -329,12 +347,11 @@ app.post('/api/camera/upload', (req, res) => {
 app.get('/api/camera/upload', (req, res) => {
   res.status(405).json({
     error: 'METHOD_NOT_ALLOWED',
-    message: 'The /api/camera/upload endpoint expects HTTP POST containing raw JPEG binary body.',
+    message: 'The /api/camera/upload endpoint expects HTTP POST containing raw JPEG binary body authenticated via X-Camera-Key header.',
     expectedMethod: 'POST',
     contentType: 'image/jpeg',
-    authHeader: 'X-Camera-Key: <your_camera_key>',
-    queryTokenOption: '?token=<your_camera_key>',
-    testCurl: 'curl -X POST http://<server-ip>:3000/api/camera/upload -H "Content-Type: image/jpeg" -H "X-Camera-Key: <key>" --data-binary @photo.jpg'
+    authHeader: 'X-Camera-Key: <CAMERA_UPLOAD_KEY>',
+    testCurl: 'curl -X POST https://edens-ai.onrender.com/api/camera/upload -H "Content-Type: image/jpeg" -H "X-Camera-Key: $CAMERA_UPLOAD_KEY" --data-binary @photo.jpg'
   });
 });
 
@@ -350,11 +367,13 @@ app.get('/api/camera/latest.jpg', (req, res) => {
     });
   }
 
+  const frameState = classifyCameraFrameState(latestUploadedFrame.timestamp);
   res.setHeader('Content-Type', 'image/jpeg');
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('X-Frame-ID', latestUploadedFrame.id);
   res.setHeader('X-Frame-Timestamp', latestUploadedFrame.timestamp);
-  res.setHeader('X-Data-Source', 'REAL_HARDWARE');
+  res.setHeader('X-Frame-Age-Seconds', String(frameState.ageSeconds));
+  res.setHeader('X-Data-Source', frameState.dataSource);
   return res.send(latestUploadedFrame.buffer);
 });
 
@@ -374,20 +393,21 @@ app.get('/api/camera/latest', (req, res) => {
     });
   }
 
-  const ageSeconds = Math.round((Date.now() - new Date(latestUploadedFrame.timestamp).getTime()) / 1000);
+  const frameState = classifyCameraFrameState(latestUploadedFrame.timestamp);
   return res.status(200).json({
     exists: true,
-    status: 'ONLINE',
+    status: frameState.status,
     id: latestUploadedFrame.id,
     timestamp: latestUploadedFrame.timestamp,
-    ageSeconds,
+    ageSeconds: frameState.ageSeconds,
+    isStale: frameState.isStale,
     sizeBytes: latestUploadedFrame.sizeBytes,
     mimeType: latestUploadedFrame.mimeType,
     url: latestUploadedFrame.url,
     base64: latestUploadedFrame.base64DataUri,
     analyzed: latestUploadedFrame.analyzed,
     analysis: latestUploadedFrame.analysis,
-    dataSource: 'REAL_HARDWARE',
+    dataSource: frameState.dataSource,
     totalUploadsCount: totalCameraUploadsCount
   });
 });
@@ -398,6 +418,7 @@ app.get('/api/camera/latest', (req, res) => {
  */
 app.get('/api/camera/upload-info', (req, res) => {
   const hasKey = Boolean(process.env.CAMERA_UPLOAD_KEY || process.env.HARDWARE_API_KEY);
+  const frameState = latestUploadedFrame ? classifyCameraFrameState(latestUploadedFrame.timestamp) : null;
   res.json({
     endpoint: '/api/camera/upload',
     method: 'POST',
@@ -409,6 +430,7 @@ app.get('/api/camera/upload-info', (req, res) => {
     latestUploadTimestamp: latestUploadedFrame?.timestamp || null,
     latestImageId: latestUploadedFrame?.id || null,
     latestSizeBytes: latestUploadedFrame?.sizeBytes || 0,
+    latestDataSource: frameState ? frameState.dataSource : 'DISCONNECTED',
     totalUploadsReceived: totalCameraUploadsCount,
     hasUploadedImage: Boolean(latestUploadedFrame)
   });
@@ -428,16 +450,185 @@ app.post('/api/camera/mark-analyzed', (req, res) => {
 
 /**
  * DELETE /api/camera/latest
- * Diagnostics & testing: clears uploaded frame.
+ * Diagnostics & testing: clears uploaded frame from memory and disk.
+ * Protected by camera authentication when CAMERA_UPLOAD_KEY / HARDWARE_API_KEY is configured.
  */
 app.delete('/api/camera/latest', (req, res) => {
+  if (getCameraUploadSecret()) {
+    const auth = isCameraAuthorized(req);
+    if (!auth.authorized) {
+      return res.status(auth.status).json({
+        error: auth.error,
+        message: auth.message,
+        requiredHeader: 'X-Camera-Key'
+      });
+    }
+  }
   latestUploadedFrame = null;
+  try {
+    const latestFilePath = path.join(UPLOAD_DIR, 'latest.jpg');
+    const metaFilePath = path.join(UPLOAD_DIR, 'metadata.json');
+    if (fs.existsSync(latestFilePath)) fs.unlinkSync(latestFilePath);
+    if (fs.existsSync(metaFilePath)) fs.unlinkSync(metaFilePath);
+  } catch (_) {}
   return res.json({ success: true, message: 'Latest camera frame cache cleared.' });
 });
 
 // --------------------------------------------------------------------
-// CONTROLLER & CAMERA PROXY ROUTES
+// MAIN ESP32 TELEMETRY PUSH INTAKE & CONTROLLER PROXY ROUTES
 // --------------------------------------------------------------------
+
+interface PushedControllerTelemetry {
+  timestamp: string;
+  receivedAtMs: number;
+  payload: Record<string, any>;
+}
+
+let latestPushedTelemetry: PushedControllerTelemetry | null = null;
+let totalTelemetryUploadsCount = 0;
+
+function classifyControllerTelemetryState(receivedAtMs: number): {
+  ageSeconds: number;
+  dataSource: 'REAL_HARDWARE' | 'CACHED' | 'STALE' | 'DISCONNECTED';
+  isStale: boolean;
+} {
+  const ageSeconds = Math.max(0, Math.round((Date.now() - receivedAtMs) / 1000));
+  if (ageSeconds <= 15) {
+    return { ageSeconds, dataSource: 'REAL_HARDWARE', isStale: false };
+  }
+  if (ageSeconds <= 60) {
+    return { ageSeconds, dataSource: 'CACHED', isStale: false };
+  }
+  if (ageSeconds <= 180) {
+    return { ageSeconds, dataSource: 'STALE', isStale: true };
+  }
+  return { ageSeconds, dataSource: 'DISCONNECTED', isStale: true };
+}
+
+function hasValidCoreTelemetryFields(raw: any): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const src = raw.telemetry && typeof raw.telemetry === 'object' ? raw.telemetry : raw;
+  const candidates = [src.temperature, src.humidity, src.soilMoisture];
+  return candidates.some((v) => v !== undefined && v !== null && v !== '' && Number.isFinite(Number(v)));
+}
+
+function isHardwareAuthorized(req: express.Request): { authorized: boolean; status: number; error: string; message: string } {
+  const configuredKey = (process.env.HARDWARE_API_KEY || '').trim();
+  if (!configuredKey) {
+    return {
+      authorized: false,
+      status: 503,
+      error: 'SERVER_MISCONFIGURED',
+      message: 'HARDWARE_API_KEY is not configured on the server. Telemetry push uploads are rejected for security.'
+    };
+  }
+  const headerKey = (req.headers['x-hardware-key'] || req.headers['x-api-key']) as string | undefined;
+  const authHeader = req.headers['authorization'];
+  const bearerKey = authHeader ? (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) : undefined;
+  const provided = (headerKey || bearerKey || '').trim();
+  if (!provided) {
+    return {
+      authorized: false,
+      status: 401,
+      error: 'UNAUTHORIZED_CONTROLLER',
+      message: 'Authentication failed. Provide valid credential via X-Hardware-Key or X-API-Key header.'
+    };
+  }
+  if (provided !== configuredKey) {
+    return {
+      authorized: false,
+      status: 401,
+      error: 'UNAUTHORIZED_CONTROLLER',
+      message: 'Invalid controller authentication credential provided.'
+    };
+  }
+  return { authorized: true, status: 200, error: '', message: '' };
+}
+
+/**
+ * POST /api/telemetry/upload
+ * Authenticated push intake allowing the Main ESP32 controller or a local LAN relay
+ * to forward physical /status telemetry to cloud deployments without exposing private LAN ports.
+ */
+app.post('/api/telemetry/upload', (req, res) => {
+  const auth = isHardwareAuthorized(req);
+  if (!auth.authorized) {
+    return res.status(auth.status).json({
+      error: auth.error,
+      message: auth.message,
+      requiredHeader: 'X-Hardware-Key'
+    });
+  }
+
+  if (!hasValidCoreTelemetryFields(req.body)) {
+    return res.status(400).json({
+      error: 'INVALID_TELEMETRY_PAYLOAD',
+      message: 'Telemetry JSON must contain at least one numeric environmental reading (temperature, humidity, or soilMoisture).'
+    });
+  }
+
+  if (req.body?.dataSource === 'SIMULATED') {
+    return res.status(400).json({
+      error: 'SIMULATED_DATA_REJECTED',
+      message: 'Simulated payloads cannot be uploaded to the physical hardware telemetry intake.'
+    });
+  }
+
+  const timestamp = new Date().toISOString();
+  totalTelemetryUploadsCount++;
+  latestPushedTelemetry = {
+    timestamp,
+    receivedAtMs: Date.now(),
+    payload: req.body
+  };
+
+  return res.status(200).json({
+    success: true,
+    message: 'Physical ESP32 telemetry accepted.',
+    timestamp,
+    dataSource: 'REAL_HARDWARE',
+    totalUploadsReceived: totalTelemetryUploadsCount
+  });
+});
+
+/**
+ * GET /api/telemetry/latest
+ * Returns latest pushed Main ESP32 telemetry with accurate freshness classification.
+ */
+app.get('/api/telemetry/latest', (req, res) => {
+  if (!latestPushedTelemetry) {
+    return res.status(200).json({
+      exists: false,
+      dataSource: 'DISCONNECTED',
+      isStale: true,
+      totalUploadsCount: totalTelemetryUploadsCount,
+      message: 'No physical controller telemetry uploaded yet.'
+    });
+  }
+
+  const state = classifyControllerTelemetryState(latestPushedTelemetry.receivedAtMs);
+  if (state.dataSource === 'DISCONNECTED') {
+    return res.status(200).json({
+      exists: false,
+      dataSource: 'DISCONNECTED',
+      isStale: true,
+      lastTimestamp: latestPushedTelemetry.timestamp,
+      ageSeconds: state.ageSeconds,
+      totalUploadsCount: totalTelemetryUploadsCount,
+      message: `Last controller reading expired (${state.ageSeconds}s ago).`
+    });
+  }
+
+  return res.status(200).json({
+    exists: true,
+    timestamp: latestPushedTelemetry.timestamp,
+    ageSeconds: state.ageSeconds,
+    isStale: state.isStale,
+    dataSource: state.dataSource,
+    totalUploadsCount: totalTelemetryUploadsCount,
+    payload: latestPushedTelemetry.payload
+  });
+});
 
 // Unified Gateway Proxy: /api/hardware
 app.all('/api/hardware', async (req, res) => {
@@ -447,9 +638,23 @@ app.all('/api/hardware', async (req, res) => {
   
   const baseUrl = getControllerBaseUrl(overrideHost, overridePort);
   if (!baseUrl) {
+    // Read-only /status fallback to pushed physical telemetry if recently uploaded via LAN relay
+    if (req.method === 'GET' && endpoint === '/status' && latestPushedTelemetry) {
+      const state = classifyControllerTelemetryState(latestPushedTelemetry.receivedAtMs);
+      if (state.dataSource !== 'DISCONNECTED') {
+        return res.status(200).json({
+          ...latestPushedTelemetry.payload,
+          connected: state.dataSource === 'REAL_HARDWARE',
+          timestamp: latestPushedTelemetry.timestamp,
+          ageSeconds: state.ageSeconds,
+          isStale: state.isStale,
+          dataSource: state.dataSource
+        });
+      }
+    }
     return res.status(503).json({
       error: 'HARDWARE_GATEWAY_NOT_CONFIGURED',
-      message: 'Controller host is not configured on server. Provide HARDWARE_CONTROLLER_HOST in environment or specify host parameter.'
+      message: 'Controller host is not configured on server and no active pushed telemetry exists. Provide HARDWARE_CONTROLLER_HOST or push via POST /api/telemetry/upload.'
     });
   }
 
@@ -539,17 +744,19 @@ app.all('/api/hardware', async (req, res) => {
 
 // Camera Snapshot Pull Proxy: /api/camera/capture (Pull Model)
 app.get('/api/camera/capture', async (req, res) => {
-  // If an uploaded frame is present and fresh, serve that first!
+  // If an uploaded frame is present, serve it with accurate freshness classification
   if (latestUploadedFrame && latestUploadedFrame.buffer) {
+    const frameState = classifyCameraFrameState(latestUploadedFrame.timestamp);
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('X-Data-Source', 'REAL_HARDWARE');
+    res.setHeader('X-Data-Source', frameState.dataSource);
+    res.setHeader('X-Frame-Age-Seconds', String(frameState.ageSeconds));
     return res.send(latestUploadedFrame.buffer);
   }
 
   const overrideHost = req.query.host as string | undefined;
   const overridePort = req.query.port ? parseInt(req.query.port as string, 10) : undefined;
-  const cameraBase = getCameraBaseUrl(overrideHost, overridePort);
+  const cameraBase = getCameraBaseUrl(overrideHost, overridePort, 80);
 
   if (!cameraBase) {
     return res.status(503).json({
@@ -558,23 +765,28 @@ app.get('/api/camera/capture', async (req, res) => {
     });
   }
 
-  const capturePath = (req.query.path as string) || '/capture';
-  const targetUrl = `${cameraBase}${capturePath.startsWith('/') ? capturePath : '/' + capturePath}`;
+  const requestedPath = (req.query.path as string) || '/photo';
+  const candidatePaths = requestedPath === '/photo' ? ['/photo', '/capture'] : [requestedPath];
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    let response: Response | null = null;
+    for (const candidate of candidatePaths) {
+      const targetUrl = `${cameraBase}${candidate.startsWith('/') ? candidate : '/' + candidate}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      response = await fetch(targetUrl, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (response.ok) break;
+    }
 
-    const response = await fetch(targetUrl, { signal: controller.signal });
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      return res.status(response.status).json({ error: `Camera returned HTTP ${response.status}` });
+    if (!response || !response.ok) {
+      return res.status(response?.status || 502).json({ error: `Camera returned HTTP ${response?.status || 502}` });
     }
 
     const buffer = await response.arrayBuffer();
     res.setHeader('Content-Type', response.headers.get('content-type') || 'image/jpeg');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('X-Data-Source', 'REAL_HARDWARE');
     return res.send(Buffer.from(buffer));
   } catch (err: any) {
     return res.status(502).json({
@@ -586,16 +798,18 @@ app.get('/api/camera/capture', async (req, res) => {
 
 // Camera Status Proxy: /api/camera/status
 app.get('/api/camera/status', async (req, res) => {
-  // If an uploaded image exists, report push status
+  // If an uploaded image exists, report push status with accurate freshness state
   if (latestUploadedFrame) {
-    const ageSeconds = Math.round((Date.now() - new Date(latestUploadedFrame.timestamp).getTime()) / 1000);
+    const frameState = classifyCameraFrameState(latestUploadedFrame.timestamp);
     return res.json({
-      connected: ageSeconds < 120,
+      connected: frameState.status === 'ONLINE',
       mode: 'PUSH_UPLOAD',
       sensorModel: 'ESP32-CAM (Push Intake)',
-      status: ageSeconds < 120 ? 'ONLINE' : 'IDLE',
+      status: frameState.status,
+      dataSource: frameState.dataSource,
+      isStale: frameState.isStale,
       lastUploadTimestamp: latestUploadedFrame.timestamp,
-      ageSeconds,
+      ageSeconds: frameState.ageSeconds,
       sizeBytes: latestUploadedFrame.sizeBytes,
       totalUploadsReceived: totalCameraUploadsCount
     });
@@ -678,10 +892,74 @@ function getGeminiClient(): GoogleGenAI | null {
     apiKey,
     httpOptions: {
       headers: {
-        'User-Agent': 'aistudio-build-edens'
+        'User-Agent': 'aistudio-build'
       }
     }
   });
+}
+
+const GEMINI_TEXT_VISION_MODELS = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'] as const;
+
+function isTransientDemandError(err: any): boolean {
+  const msg = String(err?.message || err || '');
+  return (
+    msg.includes('503') ||
+    msg.includes('UNAVAILABLE') ||
+    msg.includes('high demand') ||
+    msg.includes('429') ||
+    msg.includes('RESOURCE_EXHAUSTED')
+  );
+}
+
+async function generateWithModelFallback(
+  ai: GoogleGenAI,
+  requestParams: Omit<Parameters<GoogleGenAI['models']['generateContent']>[0], 'model'>,
+  models: readonly string[] = GEMINI_TEXT_VISION_MODELS
+): Promise<{ response: any; modelUsed: string }> {
+  let lastErr: any = null;
+  for (let i = 0; i < models.length; i++) {
+    const modelName = models[i];
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        ...requestParams
+      });
+      return { response, modelUsed: modelName };
+    } catch (err: any) {
+      lastErr = err;
+      if (i < models.length - 1 && isTransientDemandError(err)) {
+        await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr || new Error('Gemini model generation failed.');
+}
+
+function validateRasterImageBytes(buf: Buffer): { valid: boolean; detectedMime?: string; error?: string } {
+  if (!buf || buf.length < 32) {
+    return { valid: false, error: 'Decoded image payload is empty or smaller than 32 bytes.' };
+  }
+  // JPEG: FF D8
+  if (buf[0] === 0xff && buf[1] === 0xd8) {
+    return { valid: true, detectedMime: 'image/jpeg' };
+  }
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return { valid: true, detectedMime: 'image/png' };
+  }
+  // WebP: RIFF....WEBP
+  if (
+    buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+    buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
+  ) {
+    return { valid: true, detectedMime: 'image/webp' };
+  }
+  return {
+    valid: false,
+    error: 'Payload does not contain valid JPEG, PNG, or WebP magic bytes.'
+  };
 }
 
 const NIGERIAN_LANG_NAMES: Record<string, { name: string; native: string; region: string }> = {
@@ -705,6 +983,13 @@ app.get('/api/ai/status', (req, res) => {
     status: isConfigured ? 'READY' : 'UNCONFIGURED',
     configured: isConfigured,
     provider: 'Google Gemini AI',
+    models: {
+      chat: 'gemini-3.8-flash',
+      vision: 'gemini-3.8-flash',
+      transcription: 'gemini-3.5-transcribe',
+      speech: 'gemini-3.8-flash-lite-tts',
+      fallbackChain: ['gemini-flash-latest', 'gemini-3.1-flash-lite']
+    },
     maxAudioUploadMb: MAX_AUDIO_MB,
     supportedAudioFormats: ['audio/webm', 'audio/wav', 'audio/mp3', 'audio/m4a', 'audio/mp4', 'audio/ogg', 'audio/aac'],
     languages: Object.entries(NIGERIAN_LANG_NAMES).map(([id, info]) => ({ id, ...info })),
@@ -834,10 +1119,9 @@ Return ONLY the exact transcribed words as plain text. Do not provide translatio
       console.warn('gemini-3.5-transcribe attempt note, falling back to gemini-3.8-flash:', transcribeErr.message);
     }
 
-    // Fallback attempt: gemini-3.8-flash (multimodal audio)
+    // Fallback attempt: multimodal Gemini Flash chain
     if (!transcribedText) {
-      const fallbackResponse = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+      const { response: fallbackResponse } = await generateWithModelFallback(ai, {
         contents: {
           parts: [
             audioPart,
@@ -883,6 +1167,42 @@ app.post('/api/ai/chat', async (req, res) => {
 
   const langInfo = NIGERIAN_LANG_NAMES[languageId] || NIGERIAN_LANG_NAMES['pcm'];
 
+  const sourceState = String(contextData?.dataSource || 'DISCONNECTED').toUpperCase();
+  const telemetryContextBlock = (() => {
+    if (!contextData || sourceState === 'DISCONNECTED') {
+      return `GREENHOUSE TELEMETRY CONTEXT:
+- Connection State: DISCONNECTED (No live signal from physical Main ESP32 controller)
+- Monitored Crop: ${contextData?.cropType || 'Greenhouse Crops'}
+- IMPORTANT: Do NOT claim live physical sensor readings exist right now. State honestly that the physical ESP32 controller is currently disconnected while still giving helpful agricultural advice.`;
+    }
+    if (sourceState === 'SIMULATED') {
+      return `GREENHOUSE TELEMETRY CONTEXT:
+- Data Source: SIMULATED (Synthetic simulation values for testing — NOT live physical sensor hardware)
+- Monitored Crop: ${contextData.cropType || 'Greenhouse Crops'}
+- Simulated Temperature: ${contextData.temperature ?? 24}°C
+- Simulated Relative Humidity: ${contextData.humidity ?? 65}%
+- Simulated Soil Moisture: ${contextData.soilMoisture ?? 50}%
+- IMPORTANT: Never label these simulated readings as live physical greenhouse sensor data.`;
+    }
+    if (sourceState === 'CACHED' || sourceState === 'STALE' || contextData.isStale) {
+      return `GREENHOUSE TELEMETRY CONTEXT:
+- Data Source: ${sourceState} (Historical/expired controller reading — NOT live real-time data; last seen: ${contextData.lastSeen || 'earlier'})
+- Monitored Crop: ${contextData.cropType || 'Greenhouse Crops'}
+- Last Recorded Temperature: ${contextData.temperature ?? 'N/A'}°C
+- Last Recorded Relative Humidity: ${contextData.humidity ?? 'N/A'}%
+- Last Recorded Soil Moisture: ${contextData.soilMoisture ?? 'N/A'}%
+- IMPORTANT: Clearly note that these readings are ${sourceState.toLowerCase()} rather than live real-time measurements.`;
+    }
+    return `LIVE GREENHOUSE TELEMETRY CONTEXT:
+- Data Source: REAL_HARDWARE (Verified fresh reading from physical Main ESP32 controller)
+- Monitored Crop: ${contextData.cropType || 'Greenhouse Crops'}
+- Temperature: ${contextData.temperature}°C
+- Relative Humidity: ${contextData.humidity}%
+- Soil Moisture: ${contextData.soilMoisture}%
+${contextData.actuators ? `- Active Actuators: ${JSON.stringify(contextData.actuators)}` : ''}
+${contextData.interlocks ? `- Safety Interlocks: ${JSON.stringify(contextData.interlocks)}` : ''}`;
+  })();
+
   const systemInstruction = `You are EDENS AI, the dedicated autonomous agricultural intelligence engine and expert agronomist for the EDENS smart greenhouse system, powered by RA.
 You have fluent mastery of Nigerian languages: Hausa, Igbo, Yoruba, Nigerian Pidgin, Fulfulde, Tiv, Efik, and English.
 
@@ -895,24 +1215,15 @@ The farmer wants to communicate with you in: ${langInfo.name} (${langInfo.native
 - If the user speaks in Igbo, respond in clear, supportive Asụsụ Igbo.
 - Provide practical advice with local Nigerian agricultural realities: organic pest remedies (Dongoyaro/Neem extract, wood ash, garlic spray), soil care, watering schedules, greenhouse ventilation, solar power, and harvest readiness.
 
-HARDWARE & ARCHITECTURE INTEGRATION AWARENESS:
-- You are directly integrated into the EDENS AI physical greenhouse hardware platform:
-  * Main ESP32 Controller: monitors environmental sensors (temperature, relative humidity, soil moisture, sunlight, rain sensor, reservoir water level, battery voltage) and controls actuators (exhaust fan, irrigation pump, roof vents, thermal heater, peltier cooling, grow lights).
-  * ESP32-CAM: captures high-resolution botanical frames pushed to the server endpoint (POST /api/camera/upload).
-  * Firmware Safety Interlocks: Rain vs Roof Lock (prevents rain entering vents), Dry-Run Pump Lock (reservoir < 10%), Thermal Heater Lock (> 32°C).
-- If the farmer explicitly asks whether you have direct hardware integration, confirm that you are the central AI brain of the EDENS AI smart greenhouse system, explain the hardware integration status, and reference the current telemetry source (${contextData?.dataSource || 'LIVE_TELEMETRY'}) and readings. Never claim you are a detached chatbot without physical sensors.
+HARDWARE & TELEMETRY HONESTY RULES:
+- You are part of the EDENS AI greenhouse platform (Main ESP32 environmental controller, ESP32-CAM push intake at POST /api/camera/upload, and firmware safety interlocks: Rain vs Roof Lock, Dry-Run Pump Lock <10% water, Thermal Heater Lock >32°C).
+- Current telemetry source state is: ${sourceState}.
+- NEVER label SIMULATED, CACHED, STALE, or DISCONNECTED readings as live physical sensor data. Report the exact connection/data-source state honestly if asked about hardware status or sensor readings.
 
 CONVERSATION & CONTINUATION HANDLING:
 - If the farmer's prompt is a brief continuation request such as "go on", "continue", "tell me more", "explain further", or "what next", DO NOT restart with a generic greeting or welcome message. Look at the previous turns in the conversation history and continue providing detailed, actionable agricultural advice on the topic previously being discussed.
 
-${contextData ? `LIVE GREENHOUSE TELEMETRY CONTEXT:
-- Data Source: ${contextData.dataSource || 'TELEMETRY'} ${contextData.isStale ? '(Cached/Stale data)' : '(Fresh reading)'}
-- Monitored Crop: ${contextData.cropType || 'Greenhouse Crops'}
-- Temperature: ${contextData.temperature ?? 24}°C
-- Relative Humidity: ${contextData.humidity ?? 65}%
-- Soil Moisture: ${contextData.soilMoisture ?? 50}%
-${contextData.actuators ? `- Active Actuators: ${JSON.stringify(contextData.actuators)}` : ''}
-${contextData.interlocks ? `- Safety Interlocks: ${JSON.stringify(contextData.interlocks)}` : ''}` : ''}`;
+${telemetryContextBlock}`;
 
   // Multi-turn turn sanitization for Gemini
   const validHistory: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
@@ -951,8 +1262,7 @@ ${contextData.interlocks ? `- Safety Interlocks: ${JSON.stringify(contextData.in
   const contents = [...slicedHistory, userTurn];
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const { response, modelUsed } = await generateWithModelFallback(ai, {
       contents,
       config: {
         systemInstruction,
@@ -971,7 +1281,8 @@ ${contextData.interlocks ? `- Safety Interlocks: ${JSON.stringify(contextData.in
       reply: replyText,
       languageId,
       languageName: langInfo.name,
-      dataSource: contextData?.dataSource || 'REAL_HARDWARE'
+      modelUsed,
+      dataSource: sourceState
     });
   } catch (err: any) {
     console.error('Gemini chat error on server:', err.message);
@@ -985,6 +1296,7 @@ ${contextData.interlocks ? `- Safety Interlocks: ${JSON.stringify(contextData.in
 /**
  * POST /api/ai/diagnose
  * Computer vision plant disease & botanical diagnosis in Nigerian languages.
+ * Verifies genuine raster image bytes (JPEG/PNG/WebP) before invoking Gemini vision.
  */
 app.post('/api/ai/diagnose', async (req, res) => {
   const ai = getGeminiClient();
@@ -995,33 +1307,60 @@ app.post('/api/ai/diagnose', async (req, res) => {
     });
   }
 
-  const { image, languageId = 'ha' } = req.body || {};
-  if (!image || typeof image !== 'string' || !image.trim()) {
-    return res.status(400).json({ error: 'EMPTY_IMAGE', message: 'No image provided for diagnosis.' });
-  }
+  const { image, useLatestCameraFrame = false, languageId = 'ha' } = req.body || {};
 
-  let cleanBase64 = image.trim();
+  let cleanBase64 = '';
   let mimeType = 'image/jpeg';
-  if (cleanBase64.startsWith('data:')) {
-    const match = cleanBase64.match(/^data:([^;]+);base64,(.+)$/);
-    if (match) {
-      mimeType = match[1].toLowerCase();
-      cleanBase64 = match[2];
-    } else {
-      cleanBase64 = cleanBase64.split(',')[1] || cleanBase64;
+  let imgBuffer: Buffer;
+
+  if (useLatestCameraFrame || image === '/api/camera/latest.jpg') {
+    if (!latestUploadedFrame || !latestUploadedFrame.buffer || latestUploadedFrame.buffer.length === 0) {
+      return res.status(404).json({
+        error: 'NO_CAMERA_FRAME',
+        message: 'No ESP32-CAM photograph has been uploaded to /api/camera/upload yet.'
+      });
     }
+    imgBuffer = latestUploadedFrame.buffer;
+    mimeType = latestUploadedFrame.mimeType || 'image/jpeg';
+    cleanBase64 = imgBuffer.toString('base64');
+  } else {
+    if (!image || typeof image !== 'string' || !image.trim()) {
+      return res.status(400).json({ error: 'EMPTY_IMAGE', message: 'No image provided for diagnosis.' });
+    }
+
+    cleanBase64 = image.trim();
+    if (cleanBase64.startsWith('data:')) {
+      const match = cleanBase64.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        mimeType = match[1].toLowerCase();
+        cleanBase64 = match[2];
+      } else {
+        cleanBase64 = cleanBase64.split(',')[1] || cleanBase64;
+      }
+    }
+
+    const baseMimeCheck = mimeType.split(';')[0].toLowerCase();
+    const allowedImageMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedImageMimes.includes(baseMimeCheck)) {
+      return res.status(400).json({
+        error: 'INVALID_IMAGE_FORMAT',
+        message: `Image format "${baseMimeCheck}" is not supported for computer vision diagnosis. Please provide a JPEG, PNG, or WebP photo.`
+      });
+    }
+
+    imgBuffer = Buffer.from(cleanBase64, 'base64');
   }
 
-  // Validate image MIME type: Gemini only supports raster images (jpeg, png, webp)
-  const baseMime = mimeType.split(';')[0].toLowerCase();
-  const allowedImageMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-  if (!allowedImageMimes.includes(baseMime)) {
+  // Strictly verify genuine raster image magic bytes before passing to Gemini
+  const byteCheck = validateRasterImageBytes(imgBuffer);
+  if (!byteCheck.valid) {
     return res.status(400).json({
-      error: 'INVALID_IMAGE_FORMAT',
-      message: `Image format "${baseMime}" is not supported for computer vision diagnosis. Please provide a JPEG, PNG, or WebP photo.`
+      error: 'INVALID_IMAGE_BYTES',
+      message: byteCheck.error || 'Provided image does not contain valid raster image bytes.'
     });
   }
 
+  const baseMime = byteCheck.detectedMime || (mimeType.split(';')[0].toLowerCase() === 'image/jpg' ? 'image/jpeg' : mimeType.split(';')[0].toLowerCase());
   const langInfo = NIGERIAN_LANG_NAMES[languageId] || NIGERIAN_LANG_NAMES['ha'];
 
   const promptText = `You are EDENS AI, an elite plant health expert and agronomist for Nigerian and tropical greenhouse farming, powered by RA.
@@ -1047,13 +1386,12 @@ In the JSON response:
 - 'audioSummary': A short, clear 1-2 sentence spoken summary written in ${langInfo.name} for audio read-aloud.`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const { response, modelUsed } = await generateWithModelFallback(ai, {
       contents: {
         parts: [
           {
             inlineData: {
-              mimeType: mimeType.split(';')[0],
+              mimeType: baseMime,
               data: cleanBase64
             }
           },
@@ -1079,14 +1417,214 @@ In the JSON response:
       }
     });
 
-    const parsed = JSON.parse(response.text?.trim() || '{}');
+    const rawText = response.text?.trim();
+    if (!rawText) {
+      throw new Error('Gemini vision model returned an empty response.');
+    }
+
+    const parsed = JSON.parse(rawText);
     parsed.language = langInfo.name;
-    return res.json({ success: true, result: parsed });
+    return res.json({
+      success: true,
+      result: parsed,
+      imageBytesVerified: imgBuffer.length,
+      mimeType: baseMime,
+      modelUsed
+    });
   } catch (err: any) {
     console.error('Plant diagnosis error on server:', err.message);
     return res.status(502).json({
       error: 'DIAGNOSIS_FAILED',
       message: `Plant diagnosis failed: ${err.message}`
+    });
+  }
+});
+
+/**
+ * POST /api/ai/predict-harvest
+ * Server-side harvest date & growth factor calculation via Gemini.
+ */
+app.post('/api/ai/predict-harvest', async (req, res) => {
+  const ai = getGeminiClient();
+  if (!ai) {
+    return res.status(503).json({
+      error: 'AI_SERVICE_UNCONFIGURED',
+      message: 'GEMINI_API_KEY is not configured on the server.'
+    });
+  }
+
+  const {
+    cropType = 'Tomato',
+    plantingDate = new Date().toISOString().split('T')[0],
+    standardDays = 70,
+    avgTemp = 24.5,
+    avgHumidity = 62,
+    lightHours = 14,
+    soilMoisture = 50
+  } = req.body || {};
+
+  const prompt = `You are an expert agronomist and greenhouse scientist in EDENS AI (powered by RA). Based on the following growing conditions, calculate the estimated harvest date for ${cropType} planted on ${plantingDate}.
+Standard growing period: ${standardDays} days.
+Current conditions: Average temp: ${avgTemp}°C, Humidity stability: ${avgHumidity}%, Light hours/day: ${lightHours}h, Soil moisture stability: ${soilMoisture}%.
+Ideal conditions: Temp 22-26°C, Humidity 60-70%, Light 14-16h/day, Moisture stable at 40-60%.
+Calculate how much faster (or slower) the crop will mature compared to standard outdoor growing. Return JSON.`;
+
+  try {
+    const { response, modelUsed } = await generateWithModelFallback(ai, {
+      contents: { parts: [{ text: prompt }] },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            estimatedDaysTotal: { type: Type.INTEGER },
+            daysSaved: { type: Type.INTEGER },
+            daysRemaining: { type: Type.INTEGER },
+            estimatedHarvestDate: { type: Type.STRING },
+            confidence: { type: Type.INTEGER },
+            factors: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  impact: { type: Type.INTEGER },
+                  explanation: { type: Type.STRING }
+                },
+                required: ['name', 'impact', 'explanation']
+              }
+            }
+          },
+          required: ['estimatedDaysTotal', 'daysSaved', 'daysRemaining', 'estimatedHarvestDate', 'confidence', 'factors']
+        }
+      }
+    });
+
+    if (!response.text) {
+      throw new Error('No text returned from Gemini harvest model.');
+    }
+
+    return res.json({
+      success: true,
+      result: JSON.parse(response.text.trim()),
+      modelUsed
+    });
+  } catch (err: any) {
+    console.error('Harvest prediction error on server:', err.message);
+    return res.status(502).json({
+      error: 'HARVEST_PREDICTION_FAILED',
+      message: `Harvest prediction failed: ${err.message}`
+    });
+  }
+});
+
+/**
+ * POST /api/ai/agent-decision
+ * Server-side structured decision evaluation for ClimateAgent and IrrigationAgent.
+ * Keeps all @google/genai calls strictly on the server.
+ */
+app.post('/api/ai/agent-decision', async (req, res) => {
+  const ai = getGeminiClient();
+  if (!ai) {
+    return res.status(503).json({
+      error: 'AI_SERVICE_UNCONFIGURED',
+      message: 'GEMINI_API_KEY is not configured on the server.'
+    });
+  }
+
+  const { agentType, telemetry } = req.body || {};
+  if (agentType !== 'climate' && agentType !== 'irrigation') {
+    return res.status(400).json({ error: 'INVALID_AGENT_TYPE', message: 'agentType must be "climate" or "irrigation".' });
+  }
+
+  try {
+    if (agentType === 'climate') {
+      const temp = Number(telemetry?.temperature ?? 24);
+      const humidity = Number(telemetry?.humidity ?? 60);
+      const activeCrop = String(telemetry?.activeCrop || 'Tomato');
+      const dataSource = String(telemetry?.dataSource || 'SIMULATED');
+      const thermalLocked = Boolean(telemetry?.thermalLocked || temp > 32);
+
+      const prompt = `You are EDENS AI Climate Agent, optimizing greenhouse ventilation and temperature for ${activeCrop}.
+Current Telemetry (${dataSource}):
+- Temperature: ${temp}°C
+- Humidity: ${humidity}%
+- Thermal Interlock: ${thermalLocked ? 'ACTIVE (Heater locked OFF)' : 'CLEAR'}
+Optimal ranges for ${activeCrop}: Temp 20-28°C, Humidity 50-75%.
+
+Safety Rules:
+1. Never turn heater ON if temperature is above 26°C or if thermal interlock is active.
+2. Turn fan ON if temp > 28°C or humidity > 75%.
+3. Explain your exact reasoning with safety margins.
+Return JSON: { "fan": "ON"|"OFF", "heater": "ON"|"OFF", "reason": "string" }`;
+
+      const { response, modelUsed } = await generateWithModelFallback(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              fan: { type: Type.STRING },
+              heater: { type: Type.STRING },
+              reason: { type: Type.STRING }
+            },
+            required: ['fan', 'heater', 'reason']
+          }
+        }
+      });
+
+      const parsed = JSON.parse(response.text?.trim() || '{}');
+      return res.json({ success: true, result: parsed, modelUsed });
+    }
+
+    const soilMoisture = Number(telemetry?.soilMoisture ?? 50);
+    const rain = Boolean(telemetry?.rain);
+    const temp = Number(telemetry?.temperature ?? 24);
+    const waterLevel = Number(telemetry?.waterLevel ?? 70);
+    const activeCrop = String(telemetry?.activeCrop || 'Tomato');
+    const dataSource = String(telemetry?.dataSource || 'SIMULATED');
+    const waterLowLocked = waterLevel < 10;
+
+    const prompt = `You are EDENS AI Irrigation Agent, managing precision drip irrigation for ${activeCrop}.
+Current Telemetry (${dataSource}):
+- Soil Moisture: ${soilMoisture}%
+- Ambient Temperature: ${temp}°C
+- Rain Detected: ${rain}
+- Reservoir Water Level: ${waterLevel}%
+- Reservoir Interlock: ${waterLowLocked ? 'LOCKED (Low Water)' : 'CLEAR'}
+Optimal soil moisture for ${activeCrop}: 45-65%.
+
+Safety Rules:
+1. ONLY recommend pump "ON" if soil moisture is strictly below 40% and reservoir > 15%.
+2. Duration MUST NOT exceed 120 seconds to prevent over-irrigation.
+3. If soil moisture is adequate, pump MUST be "OFF".
+4. State your agronomic reason clearly.
+Return JSON: { "pump": "ON"|"OFF", "duration": number, "reason": "string" }`;
+
+    const { response, modelUsed } = await generateWithModelFallback(ai, {
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            pump: { type: Type.STRING },
+            duration: { type: Type.NUMBER },
+            reason: { type: Type.STRING }
+          },
+          required: ['pump', 'duration', 'reason']
+        }
+      }
+    });
+
+    const parsed = JSON.parse(response.text?.trim() || '{}');
+    return res.json({ success: true, result: parsed, modelUsed });
+  } catch (err: any) {
+    console.error('Agent decision error on server:', err.message);
+    return res.status(502).json({
+      error: 'AGENT_DECISION_FAILED',
+      message: `Agent decision evaluation failed: ${err.message}`
     });
   }
 });
@@ -1134,11 +1672,14 @@ app.post('/api/ai/speech', async (req, res) => {
       throw new Error('No audio data returned from Gemini TTS.');
     }
 
+    const headBuf = Buffer.from(pcmBase64.slice(0, 16), 'base64');
+    const isRiffWav = headBuf.length >= 4 && headBuf.toString('ascii', 0, 4) === 'RIFF';
+
     return res.json({
       success: true,
       pcmBase64,
       sampleRate: 24000,
-      mimeType: 'audio/pcm'
+      mimeType: isRiffWav ? 'audio/wav' : 'audio/pcm'
     });
   } catch (err: any) {
     console.error('Speech generation error on server:', err.message);

@@ -92,15 +92,22 @@ export default function AiLab() {
   const cropType = useStoreValue('cropType', 'Tomato (Tumatir / Tòmátì)');
   const hardwareDataSource = useStoreValue<string>('hardware_dataSource', 'SIMULATED');
   const hardwareLastSeen = useStoreValue('hardware_lastSeen', '');
-  const isTelemetryStale = hardwareLastSeen ? (Date.now() - new Date(hardwareLastSeen).getTime()) > 8000 : true;
+  const isTelemetryStale =
+    hardwareDataSource !== 'REAL_HARDWARE' ||
+    (hardwareLastSeen ? (Date.now() - new Date(hardwareLastSeen).getTime()) > 15000 : true);
 
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<PlantAnalysisResult | null>(null);
+  const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const historyTable = useStoreTable('ai_history');
 
   const [latestUploadedFrame, setLatestUploadedFrame] = useState<{
     exists: boolean;
+    status?: string;
+    dataSource?: string;
+    ageSeconds?: number;
+    isStale?: boolean;
     id?: string;
     timestamp?: string;
     url?: string;
@@ -113,7 +120,7 @@ export default function AiLab() {
   const fetchLatestFrame = async () => {
     try {
       const frame = await hardwareService.getLatestUploadedCameraImage();
-      if (frame && frame.exists) {
+      if (frame) {
         setLatestUploadedFrame(frame);
       }
     } catch (_) {}
@@ -242,7 +249,7 @@ export default function AiLab() {
     }
 
     if (!imageToAnalyze) {
-      alert(
+      setDiagnosisError(
         activeLanguage.id === 'ha'
           ? 'Babu hoton shuka da aka samu. Da fatan za a loda hoton ganye ko a tura hoto daga ESP32-CAM zuwa /api/camera/upload.'
           : activeLanguage.id === 'pcm'
@@ -254,6 +261,7 @@ export default function AiLab() {
 
     setAnalyzing(true);
     setResult(null);
+    setDiagnosisError(null);
     stopAllAudio();
     setCurrentPlayingId(null);
 
@@ -283,7 +291,7 @@ export default function AiLab() {
       }
     } catch (e: any) {
       console.error(e);
-      alert('EDENS AI diagnostic service note: ' + (e as Error).message);
+      setDiagnosisError('EDENS AI plant diagnosis failed: ' + (e as Error).message);
     } finally {
       setAnalyzing(false);
     }
@@ -294,12 +302,12 @@ export default function AiLab() {
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
-      alert('Please select a valid image file (JPEG, PNG, or WebP).');
+      setDiagnosisError('Invalid image format. Please select a JPEG, PNG, or WebP photograph.');
       return;
     }
 
     if (file.size > 10 * 1024 * 1024) {
-      alert('Plant photo exceeds 10MB limit. Please upload an image under 10MB.');
+      setDiagnosisError('Plant photo exceeds 10MB limit. Please upload an image under 10MB.');
       return;
     }
 
@@ -310,6 +318,7 @@ export default function AiLab() {
 
       setAnalyzing(true);
       setResult(null);
+      setDiagnosisError(null);
       stopAllAudio();
       setCurrentPlayingId(null);
 
@@ -338,7 +347,7 @@ export default function AiLab() {
         }
       } catch (err: any) {
         console.error("Leaf photo diagnosis error:", err);
-        alert(`Plant diagnosis failed: ${err.message}`);
+        setDiagnosisError(`Plant diagnosis failed: ${err.message}`);
       } finally {
         setAnalyzing(false);
       }
@@ -729,22 +738,18 @@ export default function AiLab() {
     } catch (error: any) {
       console.error("Agronomist chat error", error);
       setVoiceState('error');
-      const isKeyError = error?.message?.toLowerCase().includes('api key') || error?.message?.toLowerCase().includes('api_key') || error?.message?.includes('unconfigured') || error?.message?.includes('Render');
+      const errDetail = error?.message || 'Unable to reach Gemini AI service.';
+      const isKeyError =
+        errDetail.toLowerCase().includes('api key') ||
+        errDetail.toLowerCase().includes('api_key') ||
+        errDetail.toLowerCase().includes('unconfigured');
       setChatMessages(prev => [
         ...prev,
         {
           role: 'assistant',
           content: isKeyError
-            ? 'Hello farmer! EDENS AI is active. To enable live cloud AI on Render, please ensure GEMINI_API_KEY is added to your Render Dashboard > Environment Variables.'
-            : (selectedLangId === 'ha' 
-                ? 'Sannu manomi! Ina nan don taimaka maka da shuke-shuken greenhouse. Da fatan za a sake aiko da tambayarka.'
-                : selectedLangId === 'yo'
-                ? 'Ẹ ǹlẹ́ o àgbẹ̀! Mo wà níbí láti ràn ọ́ lọ́wọ́ pẹ̀lú irúgbìn rẹ. Jọ̀wọ́ tún fi ìbéèrè rẹ ránṣẹ́.'
-                : selectedLangId === 'ig'
-                ? 'Nnọọ onye ọrụ ugbo! Anọ m ebe a inyere gị aka na ihe ọkụkụ gị. Biko zite ajụjụ gị ọzọ.'
-                : selectedLangId === 'pcm'
-                ? 'How far farmer! I dey here to help you manage your greenhouse crops. Abeg ask me your question again!'
-                : 'Hello farmer! I am here to help manage your greenhouse crops. Please ask your question again or ask about watering, temperature, or pest control.'),
+            ? `⚠️ [AI Service Unconfigured — Not a Live Gemini Answer]: ${errDetail}`
+            : `⚠️ [AI Service Error — Not a Live Gemini Answer]: ${errDetail}`,
           timestamp: new Date().toISOString(),
           languageId: selectedLangId
         }
@@ -892,13 +897,26 @@ export default function AiLab() {
                ) : latestUploadedFrame?.exists && latestUploadedFrame?.url ? (
                  <div className="relative w-full h-full">
                    <img ref={imgRef} src={latestUploadedFrame.url} alt="ESP32-CAM Uploaded Frame" className="w-full h-full object-cover" />
-                   <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/85 backdrop-blur-md px-3 py-1.5 rounded-full border border-emerald-500/50 text-[10px] font-mono text-emerald-400 font-bold">
-                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                     REAL_HARDWARE ESP32-CAM · {Math.round((latestUploadedFrame.sizeBytes || 0) / 1024)} KB
+                   <div className={cn(
+                     "absolute top-3 left-3 flex items-center gap-2 bg-black/85 backdrop-blur-md px-3 py-1.5 rounded-full border text-[10px] font-mono font-bold",
+                     latestUploadedFrame.dataSource === 'STALE'
+                       ? "border-orange-500/50 text-orange-400"
+                       : latestUploadedFrame.dataSource === 'CACHED'
+                       ? "border-amber-500/50 text-amber-400"
+                       : "border-emerald-500/50 text-emerald-400"
+                   )}>
+                     <span className={cn(
+                       "w-2 h-2 rounded-full",
+                       latestUploadedFrame.dataSource === 'STALE' ? "bg-orange-500" :
+                       latestUploadedFrame.dataSource === 'CACHED' ? "bg-amber-500 animate-pulse" :
+                       "bg-emerald-500 animate-ping"
+                     )} />
+                     {latestUploadedFrame.dataSource || 'REAL_HARDWARE'} ESP32-CAM · {Math.max(1, Math.round((latestUploadedFrame.sizeBytes || 0) / 1024))} KB
                    </div>
                    {latestUploadedFrame.timestamp && (
                      <div className="absolute bottom-3 left-3 bg-black/80 backdrop-blur-md px-2.5 py-1 rounded-lg text-[9px] font-mono text-gray-300">
                        Captured: {format(new Date(latestUploadedFrame.timestamp), 'yyyy-MM-dd HH:mm:ss')}
+                       {latestUploadedFrame.ageSeconds !== undefined ? ` (${latestUploadedFrame.ageSeconds}s ago)` : ''}
                      </div>
                    )}
                  </div>
@@ -1022,6 +1040,23 @@ export default function AiLab() {
                       {activeLanguage.welcomeGreeting.slice(0, 45)}...
                     </div>
                  </div>
+              ) : diagnosisError ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-6">
+                  <div className="p-5 rounded-2xl bg-red-500/10 border border-red-500/30 max-w-md space-y-2">
+                    <div className="flex items-center justify-center gap-2 text-red-500 font-bold text-xs uppercase tracking-wider">
+                      <AlertTriangle size={16} />
+                      <span>Image Diagnosis Error</span>
+                    </div>
+                    <p className="text-xs leading-relaxed text-foreground/90">{diagnosisError}</p>
+                    <button
+                      type="button"
+                      onClick={() => setDiagnosisError(null)}
+                      className="mt-2 px-3 py-1 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-400 text-[11px] font-bold cursor-pointer"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
               ) : !result ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-8">
                     <Leaf size={48} className="opacity-15 mb-4 text-[#10B981]" />
@@ -1213,15 +1248,22 @@ export default function AiLab() {
                 "w-2 h-2 rounded-full shrink-0",
                 hardwareDataSource === 'REAL_HARDWARE' ? "bg-emerald-500" :
                 hardwareDataSource === 'CACHED' ? "bg-amber-500 animate-pulse" :
-                hardwareDataSource === 'SIMULATED' ? "bg-blue-500" : "bg-red-500"
+                hardwareDataSource === 'STALE' ? "bg-orange-500" :
+                hardwareDataSource === 'SIMULATED' ? "bg-purple-400" : "bg-red-500"
               )} />
               <span className="font-bold text-[10px] uppercase tracking-wider text-foreground">
                 {hardwareDataSource}
                 {isTelemetryStale && hardwareDataSource === 'REAL_HARDWARE' ? ' (STALE)' : ''}
               </span>
-              <span className="opacity-70 text-[10px] hidden sm:inline">
-                {Number(tempVal).toFixed(1)}°C · {Number(humVal).toFixed(0)}% Hum · {Number(soilVal).toFixed(0)}% Soil
-              </span>
+              {hardwareDataSource === 'DISCONNECTED' ? (
+                <span className="opacity-70 text-[10px] hidden sm:inline text-red-400">
+                  No live sensor signal
+                </span>
+              ) : (
+                <span className="opacity-70 text-[10px] hidden sm:inline">
+                  {Number(tempVal).toFixed(1)}°C · {Number(humVal).toFixed(0)}% Hum · {Number(soilVal).toFixed(0)}% Soil
+                </span>
+              )}
             </div>
           </div>
         </CardHeader>

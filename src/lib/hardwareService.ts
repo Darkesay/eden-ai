@@ -170,6 +170,7 @@ class HardwareService {
   constructor() {
     this.config = this.loadConfig();
     this.currentDataSource = this.config.mode === 'simulation' ? 'SIMULATED' : 'DISCONNECTED';
+    store.setValue('hardware_dataSource', this.currentDataSource);
   }
 
   public subscribe(listener: () => void): () => void {
@@ -190,15 +191,10 @@ class HardwareService {
   public updateConfig(newConfig: Partial<HardwareConfig>) {
     this.config = { ...this.config, ...newConfig };
     this.saveConfig();
-    
-    if (this.config.mode === 'simulation') {
-      this.currentDataSource = 'SIMULATED';
-    } else if (this.lastSuccessfulRead && Date.now() - this.lastReadTimestamp < 30000) {
-      this.currentDataSource = 'REAL_HARDWARE';
-    } else {
-      this.currentDataSource = 'DISCONNECTED';
-    }
-    
+
+    this.currentDataSource = this.getDataSource();
+    store.setValue('hardware_dataSource', this.currentDataSource);
+
     this.notify();
     this.restartPolling();
   }
@@ -218,7 +214,7 @@ class HardwareService {
       cameraHost: '',
       cameraPort: 81,
       cameraStreamPath: '/stream',
-      cameraCapturePath: '/capture',
+      cameraCapturePath: '/photo',
       cameraStatusPath: '/status',
       mode: 'simulation', // Simulation by default until configured
       pollIntervalMs: 3000,
@@ -239,12 +235,15 @@ class HardwareService {
     if (this.config.mode === 'simulation') {
       return 'SIMULATED';
     }
-    if (!this.lastSuccessfulRead) {
+    if (!this.lastSuccessfulRead || !this.lastReadTimestamp) {
       return 'DISCONNECTED';
     }
     const ageMs = Date.now() - this.lastReadTimestamp;
-    if (ageMs > 25000) {
+    if (ageMs > 120000) {
       return 'DISCONNECTED';
+    }
+    if (ageMs > 25000) {
+      return 'STALE';
     }
     if (ageMs > 8000) {
       return 'CACHED';
@@ -308,6 +307,13 @@ class HardwareService {
     }
 
     const url = new URL(baseUrl, window.location.origin);
+
+    if (this.config.mode === 'proxy' && this.config.controllerHost.trim()) {
+      url.searchParams.set('host', this.config.controllerHost.trim());
+      if (this.config.controllerPort) {
+        url.searchParams.set('port', String(this.config.controllerPort));
+      }
+    }
 
     // Append parameters
     Object.entries(params).forEach(([k, v]) => {
@@ -389,7 +395,10 @@ class HardwareService {
     }
 
     // Real Hardware Connection Mode
-    if (!this.config.controllerHost) {
+    if (this.config.mode === 'direct' && !this.config.controllerHost.trim()) {
+      this.currentDataSource = 'DISCONNECTED';
+      store.setValue('hardware_dataSource', 'DISCONNECTED');
+      this.notify();
       const err = new Error('Main ESP32 controller host/IP address has not been configured.');
       this.logDiagnostic('/status', 'WARNING', err.message, 0);
       throw err;
@@ -417,11 +426,11 @@ class HardwareService {
       const parsed: Esp32StatusResponse = this.normalizeStatusPayload(raw, latencyMs);
 
       this.lastSuccessfulRead = parsed;
-      this.lastReadTimestamp = Date.now();
+      this.lastReadTimestamp = new Date(parsed.timestamp).getTime() || Date.now();
       this.consecutiveErrors = 0;
-      this.currentDataSource = 'REAL_HARDWARE';
+      this.currentDataSource = parsed.dataSource;
 
-      this.logDiagnostic('/status', 'SUCCESS', 'Telemetry fetched successfully from physical ESP32', latencyMs, res.status);
+      this.logDiagnostic('/status', 'SUCCESS', `Telemetry fetched (${parsed.dataSource})`, latencyMs, res.status);
       this.syncToStore(parsed);
       return parsed;
 
@@ -431,21 +440,31 @@ class HardwareService {
       this.consecutiveErrors++;
 
       const isTimeout = err.name === 'AbortError';
+      const targetDesc = this.config.controllerHost.trim() || this.config.proxyGatewayUrl;
       const msg = isTimeout 
-        ? `Connection timed out after ${this.config.timeoutMs}ms reaching ${this.config.controllerHost}` 
+        ? `Connection timed out after ${this.config.timeoutMs}ms reaching ${targetDesc}` 
         : (err.message || 'Network error reaching ESP32');
 
       this.logDiagnostic('/status', isTimeout ? 'TIMEOUT' : 'ERROR', msg, latencyMs, undefined, { error: String(err) });
 
-      // If we have recent cached data, return it marked as CACHED
-      if (this.lastSuccessfulRead && Date.now() - this.lastReadTimestamp < 30000) {
-        const cached = { ...this.lastSuccessfulRead, dataSource: 'CACHED' as DataSource };
-        this.currentDataSource = 'CACHED';
-        this.notify();
-        return cached;
+      if (this.lastSuccessfulRead && this.lastReadTimestamp) {
+        const ageMs = Date.now() - this.lastReadTimestamp;
+        if (ageMs <= 25000) {
+          this.currentDataSource = 'CACHED';
+          store.setValue('hardware_dataSource', 'CACHED');
+          this.notify();
+          return { ...this.lastSuccessfulRead, dataSource: 'CACHED' };
+        }
+        if (ageMs <= 120000) {
+          this.currentDataSource = 'STALE';
+          store.setValue('hardware_dataSource', 'STALE');
+          this.notify();
+          return { ...this.lastSuccessfulRead, dataSource: 'STALE' };
+        }
       }
 
       this.currentDataSource = 'DISCONNECTED';
+      store.setValue('hardware_dataSource', 'DISCONNECTED');
       this.notify();
       throw new Error(`Failed to communicate with main ESP32 controller: ${msg}`);
     }
@@ -461,7 +480,7 @@ class HardwareService {
       return DEFAULT_CROPS;
     }
 
-    if (!this.config.controllerHost) {
+    if (this.config.mode === 'direct' && !this.config.controllerHost.trim()) {
       return DEFAULT_CROPS;
     }
 
@@ -696,20 +715,43 @@ class HardwareService {
     if (!host.startsWith('http://') && !host.startsWith('https://')) {
       host = `http://${host}`;
     }
+    const baseOrigin = new URL(host).origin;
     const endpoint = this.config.cameraStatusPath || '/status';
-    const statusUrl = `${host}:${this.config.cameraPort || 81}${endpoint}`;
+    const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const capturePath = this.config.cameraCapturePath || '/photo';
+    const normalizedCapture = capturePath.startsWith('/') ? capturePath : `/${capturePath}`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    // Standard ESP32-CAM serves /status and /photo on port 80 while /stream runs on port 81
+    const candidateOrigins = this.config.cameraPort && this.config.cameraPort !== 80 && this.config.cameraPort !== 81
+      ? [`${baseOrigin}:${this.config.cameraPort}`, baseOrigin]
+      : [baseOrigin, `${baseOrigin}:${this.config.cameraPort || 81}`];
 
     try {
-      const res = await fetch(statusUrl, { signal: controller.signal });
-      clearTimeout(timeoutId);
+      let data: any = null;
+      let activeOrigin = baseOrigin;
+      let lastErr: any = null;
+
+      for (const originCandidate of candidateOrigins) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+        try {
+          const res = await fetch(`${originCandidate}${normalizedEndpoint}`, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          data = await res.json();
+          activeOrigin = originCandidate;
+          break;
+        } catch (e) {
+          clearTimeout(timeoutId);
+          lastErr = e;
+        }
+      }
+
+      if (!data) {
+        throw lastErr || new Error('Camera status unreachable');
+      }
+
       const latencyMs = Math.round(performance.now() - startTime);
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-
       return {
         connected: true,
         sensorModel: data.model || 'OV2640',
@@ -718,12 +760,11 @@ class HardwareService {
         wifiRssi: data.rssi || -60,
         uptimeSeconds: data.uptime || 3600,
         streamUrl: this.getCameraStreamUrl(),
-        captureUrl: `${host}:${this.config.cameraPort || 81}${this.config.cameraCapturePath || '/capture'}`,
+        captureUrl: `${activeOrigin}${normalizedCapture}`,
         dataSource: 'REAL_HARDWARE',
         latencyMs
       };
     } catch (err: any) {
-      clearTimeout(timeoutId);
       return {
         connected: false,
         sensorModel: 'ESP32-CAM',
@@ -840,7 +881,7 @@ class HardwareService {
       if (latestUpload.exists && latestUpload.base64) {
         return {
           base64Image: latestUpload.base64,
-          dataSource: 'REAL_HARDWARE',
+          dataSource: latestUpload.dataSource || 'REAL_HARDWARE',
           isUploaded: true,
           imageId: latestUpload.id,
           timestamp: latestUpload.timestamp
@@ -854,23 +895,51 @@ class HardwareService {
       return { base64Image: simBase64, dataSource: 'SIMULATED' };
     }
 
-    // 3. If cameraHost is configured, try direct HTTP pull
+    // 3. If cameraHost is configured, try direct HTTP pull (/photo on port 80 first, with /capture fallback)
     if (this.config.cameraHost) {
       let host = this.config.cameraHost.trim().replace(/\/$/, '');
       if (!host.startsWith('http://') && !host.startsWith('https://')) {
         host = `http://${host}`;
       }
-      const captureUrl = `${host}:${this.config.cameraPort || 81}${this.config.cameraCapturePath || '/capture'}`;
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const baseOrigin = new URL(host).origin;
+      const configuredPath = this.config.cameraCapturePath || '/photo';
+      const normalizedPath = configuredPath.startsWith('/') ? configuredPath : `/${configuredPath}`;
+      const candidatePaths = normalizedPath === '/photo'
+        ? ['/photo', '/capture']
+        : normalizedPath === '/capture'
+          ? ['/capture', '/photo']
+          : [normalizedPath];
+      const candidateOrigins = this.config.cameraPort && this.config.cameraPort !== 80 && this.config.cameraPort !== 81
+        ? [`${baseOrigin}:${this.config.cameraPort}`, baseOrigin]
+        : [baseOrigin, `${baseOrigin}:${this.config.cameraPort || 81}`];
 
       try {
-        const res = await fetch(captureUrl, { signal: controller.signal });
-        clearTimeout(timeoutId);
+        let blob: Blob | null = null;
+        let lastErr: any = null;
 
-        if (!res.ok) throw new Error(`Camera returned HTTP ${res.status}`);
-        const blob = await res.blob();
+        outer: for (const originCandidate of candidateOrigins) {
+          for (const pathCandidate of candidatePaths) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            try {
+              const res = await fetch(`${originCandidate}${pathCandidate}`, { signal: controller.signal });
+              clearTimeout(timeoutId);
+              if (!res.ok) {
+                lastErr = new Error(`Camera returned HTTP ${res.status}`);
+                continue;
+              }
+              blob = await res.blob();
+              break outer;
+            } catch (e) {
+              clearTimeout(timeoutId);
+              lastErr = e;
+            }
+          }
+        }
+
+        if (!blob) {
+          throw lastErr || new Error('Camera snapshot unreachable');
+        }
 
         return new Promise((resolve, reject) => {
           const reader = new FileReader();
@@ -882,8 +951,7 @@ class HardwareService {
           reader.readAsDataURL(blob);
         });
       } catch (err: any) {
-        clearTimeout(timeoutId);
-        this.logDiagnostic('/capture', 'WARNING', `Camera pull capture failed: ${err.message}.`, 0);
+        this.logDiagnostic('/photo', 'WARNING', `Camera pull capture failed: ${err.message}.`, 0);
         throw new Error(`ESP32-CAM pull capture failed (${err.message}) and no uploaded frame is present.`);
       }
     }
@@ -954,8 +1022,8 @@ class HardwareService {
   // INTERNAL HELPERS
   // -------------------------------------------------------------
   private verifyCommandAuthorization() {
-    // In direct/proxy mode, check if authorization rules are respected
-    if (!this.config.controllerHost) {
+    // In direct mode, require controller host; in proxy mode, server-side HARDWARE_CONTROLLER_HOST may be used
+    if (this.config.mode === 'direct' && !this.config.controllerHost.trim()) {
       throw new Error('Controller IP/Host is not configured. Cannot dispatch command.');
     }
   }
@@ -1059,16 +1127,48 @@ class HardwareService {
   }
 
   private normalizeStatusPayload(raw: any, latencyMs: number): Esp32StatusResponse {
+    if (!raw || typeof raw !== 'object') {
+      throw new Error('Invalid telemetry response: payload is not a JSON object.');
+    }
+
+    if (raw.connected === false || raw.dataSource === 'DISCONNECTED') {
+      throw new Error(raw.message || 'Controller telemetry reported DISCONNECTED state.');
+    }
+
+    const rawTemp = raw.telemetry?.temperature ?? raw.temperature;
+    const rawHum = raw.telemetry?.humidity ?? raw.humidity;
+    const rawSoil = raw.telemetry?.soilMoisture ?? raw.soilMoisture;
+
+    if (
+      rawTemp === undefined || rawTemp === null || !Number.isFinite(Number(rawTemp)) ||
+      rawHum === undefined || rawHum === null || !Number.isFinite(Number(rawHum)) ||
+      rawSoil === undefined || rawSoil === null || !Number.isFinite(Number(rawSoil))
+    ) {
+      throw new Error(
+        'Malformed telemetry payload: numeric temperature, humidity, and soilMoisture readings are required.'
+      );
+    }
+
     const telemetry: EnvironmentalTelemetry = {
-      temperature: Number(raw.telemetry?.temperature ?? raw.temperature ?? 24.0),
-      humidity: Number(raw.telemetry?.humidity ?? raw.humidity ?? 60.0),
-      soilMoisture: Number(raw.telemetry?.soilMoisture ?? raw.soilMoisture ?? 50.0),
-      sunlight: Number(raw.telemetry?.sunlight ?? raw.sunlight ?? 600),
-      growLight: Number(raw.telemetry?.growLight ?? raw.growLight ?? 300),
+      temperature: Number(rawTemp),
+      humidity: Number(rawHum),
+      soilMoisture: Number(rawSoil),
+      sunlight: Number.isFinite(Number(raw.telemetry?.sunlight ?? raw.sunlight))
+        ? Number(raw.telemetry?.sunlight ?? raw.sunlight)
+        : 0,
+      growLight: Number.isFinite(Number(raw.telemetry?.growLight ?? raw.growLight))
+        ? Number(raw.telemetry?.growLight ?? raw.growLight)
+        : 0,
       rain: Boolean(raw.telemetry?.rain ?? raw.rain ?? false),
-      rainGaugeLevel: Number(raw.telemetry?.rainGaugeLevel ?? raw.rainGauge ?? 0),
-      waterLevel: Number(raw.telemetry?.waterLevel ?? raw.waterLevel ?? 70),
-      batteryVoltage: Number(raw.telemetry?.batteryVoltage ?? raw.battery ?? 12.0)
+      rainGaugeLevel: Number.isFinite(Number(raw.telemetry?.rainGaugeLevel ?? raw.rainGauge))
+        ? Number(raw.telemetry?.rainGaugeLevel ?? raw.rainGauge)
+        : 0,
+      waterLevel: Number.isFinite(Number(raw.telemetry?.waterLevel ?? raw.waterLevel))
+        ? Number(raw.telemetry?.waterLevel ?? raw.waterLevel)
+        : 0,
+      batteryVoltage: Number.isFinite(Number(raw.telemetry?.batteryVoltage ?? raw.battery))
+        ? Number(raw.telemetry?.batteryVoltage ?? raw.battery)
+        : 0
     };
 
     const actuators: ActuatorStates = {
@@ -1088,8 +1188,28 @@ class HardwareService {
       telemetry.temperature
     );
 
+    const hasValidUpstreamTimestamp =
+      typeof raw.timestamp === 'string' && !Number.isNaN(new Date(raw.timestamp).getTime());
+    const resolvedTimestamp = hasValidUpstreamTimestamp
+      ? new Date(raw.timestamp).toISOString()
+      : new Date().toISOString();
+    const ageMs = Math.max(0, Date.now() - new Date(resolvedTimestamp).getTime());
+
+    if (ageMs > 180000) {
+      throw new Error(`Telemetry reading expired (${Math.round(ageMs / 1000)}s old); marked DISCONNECTED.`);
+    }
+
+    let resolvedDataSource: DataSource = 'REAL_HARDWARE';
+    if (raw.dataSource === 'SIMULATED') {
+      resolvedDataSource = 'SIMULATED';
+    } else if (raw.dataSource === 'STALE' || ageMs > 25000) {
+      resolvedDataSource = 'STALE';
+    } else if (raw.dataSource === 'CACHED' || ageMs > 15000) {
+      resolvedDataSource = 'CACHED';
+    }
+
     return {
-      connected: true,
+      connected: resolvedDataSource === 'REAL_HARDWARE' || resolvedDataSource === 'CACHED',
       uptimeSeconds: Number(raw.uptimeSeconds ?? raw.uptime ?? 0),
       firmwareVersion: String(raw.firmwareVersion ?? raw.firmware ?? 'EDENS-ESP32-v2.x'),
       wifiRssi: Number(raw.wifiRssi ?? raw.rssi ?? -60),
@@ -1101,8 +1221,8 @@ class HardwareService {
       activeCropName: String(raw.activeCropName ?? 'Active Crop'),
       autonomousPaused: Boolean(raw.autonomousPaused ?? false),
       pauseRemainingSeconds: Number(raw.pauseRemainingSeconds ?? 0),
-      timestamp: new Date().toISOString(),
-      dataSource: 'REAL_HARDWARE',
+      timestamp: resolvedTimestamp,
+      dataSource: resolvedDataSource,
       latencyMs
     };
   }

@@ -1,25 +1,8 @@
-import { GoogleGenAI, Type } from "@google/genai";
-
-export function getGeminiApiKey(): string {
-  const envKey = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) ||
-                 (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) ||
-                 '';
-  if (envKey && envKey !== 'MY_GEMINI_API_KEY') return envKey;
-  return '';
-}
-
-export function getAi(): GoogleGenAI {
-  return new GoogleGenAI({
-    apiKey: getGeminiApiKey(),
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
-    }
-  });
-}
-
-const ai = getAi();
+/**
+ * EDENS AI Frontend Intelligence Client
+ * Routes all Gemini AI operations strictly through server-side /api/ai/* endpoints.
+ * Never imports @google/genai or exposes GEMINI_API_KEY in client bundles.
+ */
 
 export interface PlantAnalysisResult {
   species: string;
@@ -177,163 +160,6 @@ export const NIGERIAN_LANGUAGES: NigerianLanguage[] = [
   }
 ];
 
-export async function predictHarvest(
-  cropType: string,
-  plantingDate: string,
-  standardDays: number,
-  avgTemp: number,
-  avgHumidity: number,
-  lightHours: number,
-  soilMoisture: number
-): Promise<HarvestPredictionResult> {
-  const textPart = {
-    text: `You are an expert agronomist and greenhouse scientist in EDENS AI (powered by RA). Based on the following real-time growing conditions, calculate the estimated harvest date for ${cropType} planted on ${plantingDate}. 
-Standard growing period: ${standardDays} days. 
-Current conditions: Average temp: ${avgTemp}°C, Humidity stability: ${avgHumidity}%, Light hours/day: ${lightHours}h, Soil moisture stability: ${soilMoisture}%. 
-Ideal conditions: Temp 22-26°C, Humidity 60-70%, Light 14-16h/day, Moisture stable at 40-60%. 
-Calculate how much faster (or slower) the crop will mature compared to standard outdoor growing. Return JSON.`,
-  };
-
-  const response = await ai.models.generateContent({
-    model: "gemini-3.8-flash",
-    contents: { parts: [textPart] },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          estimatedDaysTotal: { type: Type.INTEGER, description: "Total estimated growing days" },
-          daysSaved: { type: Type.INTEGER, description: "Days saved compared to standard" },
-          daysRemaining: { type: Type.INTEGER, description: "Calculated days remaining from today" },
-          estimatedHarvestDate: { type: Type.STRING, description: "YYYY-MM-DD string" },
-          confidence: { type: Type.INTEGER, description: "Confidence score 0-100" },
-          factors: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                name: { type: Type.STRING },
-                impact: { type: Type.INTEGER, description: "Number of days impacted (+ or -)" },
-                explanation: { type: Type.STRING }
-              },
-              required: ["name", "impact", "explanation"]
-            }
-          }
-        },
-        required: ["estimatedDaysTotal", "daysSaved", "daysRemaining", "estimatedHarvestDate", "confidence", "factors"],
-      },
-    },
-  });
-
-  if (!response.text) {
-    throw new Error("No text returned from Gemini");
-  }
-
-  return JSON.parse(response.text.trim()) as HarvestPredictionResult;
-}
-
-export async function analyzePlantImage(
-  base64Image: string,
-  languageId: string = 'pcm'
-): Promise<PlantAnalysisResult> {
-  const isBrowser = typeof window !== 'undefined' && typeof window.fetch === 'function';
-  if (isBrowser) {
-    const res = await fetch('/api/ai/diagnose', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: base64Image, languageId })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.result) return data.result;
-      throw new Error("Diagnosis response missing result data");
-    } else {
-      const errJson = await res.json().catch(() => ({}));
-      if (res.status === 503) {
-        throw new Error(errJson.message || 'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard.');
-      }
-      throw new Error(errJson.message || `Plant diagnosis failed with HTTP ${res.status}`);
-    }
-  }
-
-  const selectedLang = NIGERIAN_LANGUAGES.find(l => l.id === languageId) || NIGERIAN_LANGUAGES[0];
-
-  let mimeType = 'image/jpeg';
-  let cleanData = base64Image.trim();
-
-  if (cleanData.startsWith('data:')) {
-    const match = cleanData.match(/^data:([^;]+);base64,(.+)$/);
-    if (match) {
-      const detected = match[1].toLowerCase();
-      mimeType = (detected === 'image/png' || detected === 'image/webp') ? detected : 'image/jpeg';
-      cleanData = match[2];
-    }
-  } else {
-    cleanData = cleanData.replace(/^data:image\/\w+;base64,/, "");
-  }
-
-  const imagePart = {
-    inlineData: {
-      mimeType,
-      data: cleanData,
-    },
-  };
-
-  const promptText = `You are EDENS AI, an elite plant health expert and agronomist for Nigerian and tropical greenhouse farming, powered by RA.
-Analyze this plant leaf/crop image carefully.
-
-CRITICAL REQUIREMENT:
-The user selected the language: "${selectedLang.name} (${selectedLang.nativeName}) - ${selectedLang.region}".
-Communicate the diagnosis, visible symptoms, likely cause, and recommendations fluently and naturally in ${selectedLang.name} (${selectedLang.nativeName}), suitable for farmers in Nigeria.
-If Nigerian Pidgin is selected, use authentic, friendly Naija Pidgin (e.g., 'Your tomato plant get small yellow leaf stress, no panic, give am water and reduce heat').
-If Hausa is selected, use authentic Harshen Hausa with accurate farming terms (e.g., 'Shukar tumatir tana fama da ƙwayoyin cuta na ganye...').
-If Yoruba is selected, use authentic Èdè Yorùbá (e.g., 'Àwọn ewé tòmátì yìí ń fi àmì àrùn hàn nítorí ọ̀rinrin tó pọ̀jù...').
-If Igbo is selected, use authentic Asụsụ Igbo (e.g., 'Akwụkwọ nri tomato gị na-ata ahụhụ site na nsogbu ọrịa fungal...').
-For other Nigerian native tongues (Fulfulde, Tiv, Efik), communicate accurately in that tongue.
-
-In the JSON response:
-- 'species': Scientific or common English name with local Nigerian name (e.g., "Tomato (Tumatir / Tòmátì)").
-- 'speciesLocal': The name solely in ${selectedLang.name}.
-- 'healthStatus': One of: "Healthy", "Stressed", "Diseased".
-- 'healthStatusLocal': Translated status in ${selectedLang.name} (e.g., Hausa: "Lafiyayye" or "Mai Ciwo"; Igbo: "Ahụ dị mma" or "Na-arịa ọrịa"; Yoruba: "Ni Ilera" or "Ní Àrùn"; Pidgin: "Dey Healthy Well-Well" or "Dey Suffer Sickness").
-- 'symptoms': Detailed visible symptoms written in ${selectedLang.name}.
-- 'cause': Root cause explanation written in ${selectedLang.name}.
-- 'recommendation': Actionable, practical steps in ${selectedLang.name} (include organic/local Nigerian remedies like neem leaf/dongoyaro water, wood ash, proper spacing, drip watering where appropriate).
-- 'audioSummary': A short, clear 1-2 sentence spoken summary written in ${selectedLang.name} for audio read-aloud.`;
-
-  const textPart = { text: promptText };
-
-  const response = await ai.models.generateContent({
-    model: "gemini-3.8-flash",
-    contents: { parts: [imagePart, textPart] },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          species: { type: Type.STRING, description: "Common name with local name" },
-          speciesLocal: { type: Type.STRING, description: `Plant name in ${selectedLang.name}` },
-          healthStatus: { type: Type.STRING, description: "Healthy, Stressed, or Diseased" },
-          healthStatusLocal: { type: Type.STRING, description: `Health status in ${selectedLang.name}` },
-          symptoms: { type: Type.STRING, description: `Visible symptoms in ${selectedLang.name}` },
-          cause: { type: Type.STRING, description: `Likely cause in ${selectedLang.name}` },
-          recommendation: { type: Type.STRING, description: `Recommended actions in ${selectedLang.name}` },
-          audioSummary: { type: Type.STRING, description: `Spoken summary in ${selectedLang.name}` },
-        },
-        required: ["species", "healthStatus", "symptoms", "cause", "recommendation"],
-      },
-    },
-  });
-
-  if (!response.text) {
-    throw new Error("No text returned from Gemini");
-  }
-
-  const parsed = JSON.parse(response.text.trim()) as PlantAnalysisResult;
-  parsed.language = selectedLang.name;
-  return parsed;
-}
-
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -345,247 +171,192 @@ export interface ChatMessage {
   voiceName?: string;
 }
 
+export async function predictHarvest(
+  cropType: string,
+  plantingDate: string,
+  standardDays: number,
+  avgTemp: number,
+  avgHumidity: number,
+  lightHours: number,
+  soilMoisture: number
+): Promise<HarvestPredictionResult> {
+  const res = await fetch('/api/ai/predict-harvest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      cropType,
+      plantingDate,
+      standardDays,
+      avgTemp,
+      avgHumidity,
+      lightHours,
+      soilMoisture
+    })
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.result) {
+    throw new Error(data?.message || `Harvest prediction failed with HTTP ${res.status}`);
+  }
+  return data.result as HarvestPredictionResult;
+}
+
+export async function analyzePlantImage(
+  base64Image: string,
+  languageId: string = 'pcm'
+): Promise<PlantAnalysisResult> {
+  const res = await fetch('/api/ai/diagnose', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: base64Image, languageId })
+  });
+
+  if (res.ok) {
+    const data = await res.json();
+    if (data.result) return data.result as PlantAnalysisResult;
+    throw new Error('Diagnosis response missing result data');
+  }
+
+  const errJson = await res.json().catch(() => ({}));
+  if (res.status === 503) {
+    throw new Error(
+      errJson.message ||
+        'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard.'
+    );
+  }
+  throw new Error(errJson.message || `Plant diagnosis failed with HTTP ${res.status}`);
+}
+
 export async function transcribeSpeechAudio(
   base64Audio: string,
   mimeType: string = 'audio/webm',
   languageId: string = 'ha'
 ): Promise<string> {
-  const isBrowser = typeof window !== 'undefined' && typeof window.fetch === 'function';
-
-  if (isBrowser) {
-    const res = await fetch('/api/ai/transcribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        audio: base64Audio,
-        mimeType,
-        languageId
-      })
-    });
-
-    if (!res.ok) {
-      let errorMsg = `Server returned HTTP ${res.status}`;
-      try {
-        const errJson = await res.json();
-        errorMsg = errJson.message || errJson.error || errorMsg;
-      } catch (_) {}
-      throw new Error(errorMsg);
-    }
-
-    const data = await res.json();
-    return data.transcript || '';
-  }
-
-  // Node.js direct SDK execution (for backend tests or server side)
-  const selectedLang = NIGERIAN_LANGUAGES.find(l => l.id === languageId) || NIGERIAN_LANGUAGES[0];
-
-  const audioPart = {
-    inlineData: {
-      mimeType: mimeType || 'audio/webm',
-      data: base64Audio.replace(/^data:audio\/\w+;base64,/, ''),
-    },
-  };
-
-  const instructionText = `You are an elite speech-to-text AI transcriber and linguist for Nigerian indigenous languages and local dialects.
-The farmer is speaking into the microphone in: ${selectedLang.name} (${selectedLang.nativeName}) or English/Nigerian Pidgin.
-Listen carefully to the audio and transcribe the exact words spoken into clear, authentic text.
-- If they speak Hausa, transcribe in Hausa (Harshen Hausa).
-- If they speak Yoruba, transcribe in Yoruba (Èdè Yorùbá) with proper diacritics where appropriate.
-- If they speak Igbo, transcribe in Igbo (Asụsụ Igbo).
-- If they speak Nigerian Pidgin, transcribe in authentic Naija Pidgin.
-- If they speak Fulfulde, Tiv, Efik, or Nigerian English, transcribe accurately.
-Return ONLY the exact transcribed words as plain text. Do not provide translation, analysis, quotation marks, or meta text.`;
-
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-transcribe",
-      contents: {
-        parts: [
-          audioPart,
-          { text: instructionText }
-        ],
-      },
-    });
-
-    const text = response.text?.trim();
-    if (text) return text;
-  } catch (err) {
-    console.warn("gemini-3.5-transcribe failed or unavailable, falling back to gemini-3.8-flash:", err);
-  }
-
-  // Fallback to gemini-3.8-flash which natively accepts audio inlineData
-  const fallbackResponse = await ai.models.generateContent({
-    model: "gemini-3.8-flash",
-    contents: {
-      parts: [
-        audioPart,
-        { text: instructionText }
-      ],
-    },
+  const res = await fetch('/api/ai/transcribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      audio: base64Audio,
+      mimeType,
+      languageId
+    })
   });
 
-  return fallbackResponse.text?.trim() || "";
+  if (!res.ok) {
+    let errorMsg = `Server returned HTTP ${res.status}`;
+    try {
+      const errJson = await res.json();
+      errorMsg = errJson.message || errJson.error || errorMsg;
+    } catch (_) {}
+    throw new Error(errorMsg);
+  }
+
+  const data = await res.json();
+  return data.transcript || '';
 }
 
 export async function generateSpeechAudio(
   text: string,
   voiceName: string = 'Kore',
-  styleDescription: string = 'Warm, respectful, articulate African agronomist expert'
+  _styleDescription: string = 'Warm, respectful, articulate African agronomist expert'
 ): Promise<string> {
-  const isBrowser = typeof window !== 'undefined' && typeof window.fetch === 'function';
-
-  if (isBrowser) {
-    try {
-      const res = await fetch('/api/ai/speech', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voiceName })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.pcmBase64) return data.pcmBase64;
-      }
-    } catch (e: any) {
-      console.warn("Backend speech API warning, falling back to direct/browser TTS:", e.message);
-    }
-  }
-
-  const cleanText = text
-    .replace(/[*#_`>~]/g, '')
-    .replace(/\[.*?\]/g, '')
-    .trim()
-    .slice(0, 900); // optimal length for crisp TTS delivery
-
-  if (!cleanText) {
-    throw new Error("No text provided for speech generation");
-  }
-
-  const response = await ai.models.generateContent({
-    model: "gemini-3.8-flash-lite-tts",
-    contents: cleanText,
-    config: {
-      responseModalities: ["AUDIO"],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName: voiceName || "Kore" },
-        },
-      },
-    },
+  const res = await fetch('/api/ai/speech', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voiceName })
   });
 
-  const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-  if (!base64Audio) {
-    throw new Error("No audio returned from Gemini TTS");
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.pcmBase64) {
+    throw new Error(data?.message || `Speech synthesis failed with HTTP ${res.status}`);
   }
-  return base64Audio;
+  return data.pcmBase64 as string;
+}
+
+export async function evaluateAgentDecision<T = any>(
+  agentType: 'climate' | 'irrigation',
+  telemetry: Record<string, any>
+): Promise<T> {
+  const res = await fetch('/api/ai/agent-decision', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agentType, telemetry })
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.result) {
+    throw new Error(data?.message || `Agent decision failed with HTTP ${res.status}`);
+  }
+  return data.result as T;
 }
 
 /**
- * Local Agronomist Knowledge Base fallback for when offline, during network
- * interruptions, or when Gemini API key is not yet provisioned in production.
+ * Local Agronomist Knowledge Base fallback ONLY when the backend /api/ai/chat route
+ * is unreachable or encounters an upstream error; always explicitly labelled.
  */
 function getLocalAgronomistFallback(
   message: string,
   languageId: string,
-  cropType?: string,
-  errDetails?: string
+  cropType?: string
 ): string {
   const m = message.toLowerCase().trim();
   const crop = cropType || 'greenhouse crops';
-  const hasKeyIssue = Boolean(errDetails && (
-    errDetails.toLowerCase().includes('api key') ||
-    errDetails.toLowerCase().includes('api_key') ||
-    errDetails.toLowerCase().includes('unauthenticated') ||
-    errDetails.toLowerCase().includes('forbidden')
-  ));
 
-  let reply = '';
-
-  // 1. Greetings
   if (m === 'hi' || m === 'hello' || m === 'hey' || m.startsWith('hi ') || m.startsWith('hello ') || m === 'sannu' || m === 'ekaro' || m === 'ndewo' || m.includes('how far')) {
     if (languageId === 'ha') {
-      reply = `Sannu manomi! Ni ne masanin shuke-shuken EDENS AI, tare da haɗin gwiwar RA. Yaya ${crop} ɗinka ke ciki a yau? Zan iya taimaka maka da yanayin zafin greenhouse, ruwa, da maganin cututtuka.`;
-    } else if (languageId === 'yo') {
-      reply = `Ẹ ǹlẹ́ o àgbẹ̀! Èmi ni onímọ̀ EDENS AI, pẹ̀lú agbára RA. Báwo ni àwọn irúgbìn ${crop} rẹ ṣe ń ṣe lónìí? Mo wà níbí láti ràn ọ́ lọ́wọ́ pẹ̀lú omi, ooru, àti àtọ́jú ilẹ̀.`;
-    } else if (languageId === 'ig') {
-      reply = `Nnọọ ezigbo onye ọrụ ugbo! Abụ m ọkachamara EDENS AI, site na nkwado RA. Kedu ka ${crop} gị si na-eme taa? Enwere m ike inyere gị aka na nlekọta mmiri, okpomọkụ, na ọgwụgwọ ọrịa osisi.`;
-    } else if (languageId === 'pcm') {
-      reply = `How far my master farmer! Welcome to EDENS AI, powered by RA. I dey monitor your ${crop} well-well. Wetin you wan ask me about watering, pest control, or greenhouse heat today?`;
-    } else {
-      reply = `Hello farmer! Welcome to EDENS AI, powered by RA. Your greenhouse monitoring is active. How are your ${crop} performing today? You can ask me about watering schedules, pest defense, climate tuning, or visual diagnosis.`;
+      return `Sannu manomi! Ni ne masanin shuke-shuken EDENS AI, tare da haɗin gwiwar RA. Zan iya taimaka maka da yanayin zafin greenhouse, ruwa, da maganin cututtuka.`;
     }
-  }
-  // 2. Yellowing leaves / chlorosis
-  else if (m.includes('yellow') || m.includes('leaf') || m.includes('leaves') || m.includes('chlorosis') || m.includes('rawa') || m.includes('gbẹ')) {
+    if (languageId === 'yo') {
+      return `Ẹ ǹlẹ́ o àgbẹ̀! Èmi ni onímọ̀ EDENS AI, pẹ̀lú agbára RA. Mo wà níbí láti ràn ọ́ lọ́wọ́ pẹ̀lú omi, ooru, àti àtọ́jú ilẹ̀.`;
+    }
+    if (languageId === 'ig') {
+      return `Nnọọ ezigbo onye ọrụ ugbo! Abụ m ọkachamara EDENS AI, site na nkwado RA. Enwere m ike inyere gị aka na nlekọta mmiri, okpomọkụ, na ọgwụgwọ ọrịa osisi.`;
+    }
     if (languageId === 'pcm') {
-      reply = `Yellow leaf fit happen because of three main reasons for greenhouse: 1) Too much water wey dey choke the roots, 2) Nitrogen hunger, or 3) Early fungal blight. Make you check your soil moisture first — aim for 50-60%. If soil dey too wet, reduce pumping for 24 hours. If moisture dey normal, add compost tea or organic nitrogen booster.`;
-    } else if (languageId === 'ha') {
-      reply = `Ganyen da ke zama rawaya yakan faru ne saboda yawan ruwa da ke shake jijiyoyin shuka, ko rashin sinadarin Nitrogen, ko cutar fungal. Fara duba ma'aunin ruwan ƙasa (ya kasance tsakanin 50-60%). Idan ƙasa ta yi laushi da yawa, dakatar da ban-ruwa na ɗan lokaci.`;
-    } else {
-      reply = `Yellowing foliage (chlorosis) in greenhouse ${crop} is most commonly caused by root zone waterlogging or nitrogen deficiency. 1) Verify soil moisture is within 50–65%. 2) Ensure container drainage is unobstructed. 3) Apply a balanced organic fertilizer or foliar spray to rapidly restore chlorophyll vigor.`;
+      return `How far my master farmer! Welcome to EDENS AI, powered by RA. Wetin you wan ask me about watering, pest control, or greenhouse heat today?`;
     }
+    return `Hello farmer! Welcome to EDENS AI, powered by RA. You can ask me about watering schedules, pest defense, climate tuning, or visual diagnosis.`;
   }
-  // 3. Pest / insect control
-  else if (m.includes('pest') || m.includes('insect') || m.includes('aphid') || m.includes('whitefly') || m.includes('mite') || m.includes('worm') || m.includes('kwari') || m.includes('kòkòrò')) {
+
+  if (m.includes('yellow') || m.includes('leaf') || m.includes('leaves') || m.includes('chlorosis') || m.includes('rawa') || m.includes('gbẹ')) {
     if (languageId === 'pcm') {
-      reply = `For organic pest control without chemical: 1) Boil fresh Dongoyaro (Neem) leaves, leave the water make e cool, mix am with small black soap or liquid detergent, spray under the leaves in the cool evening. 2) Put yellow sticky traps around the greenhouse for whiteflies. 3) Dust small wood ash for the stem base.`;
-    } else if (languageId === 'ha') {
-      reply = `Hanyar magance kwari ba tare da sinadarai masu guba ba: 1) Tafasa ganyen Dogon Yaro (Neem), a bar shi ya huce, a gauraya da ɗan sabulu marar zafi, a fesa a ƙarƙashin ganye da yamma. 2) A kafa tarkon kwari mai launin rawaya.`;
-    } else {
-      reply = `For safe, non-toxic greenhouse pest management: 1) Prepare Neem leaf (Dongoyaro) cold-pressed aqueous extract with 0.1% potassium soap as a surfactant; spray the undersides of leaves during early morning or sunset. 2) Install yellow and blue chromatic sticky traps for whiteflies and thrips. 3) Dust horticultural wood ash around container bases to deter crawling larvae.`;
+      return `Yellow leaf fit happen because of three main reasons for greenhouse: 1) Too much water wey dey choke the roots, 2) Nitrogen hunger, or 3) Early fungal blight. Make you check your soil moisture first — aim for 50-60%.`;
     }
-  }
-  // 4. Watering & irrigation
-  else if (m.includes('water') || m.includes('irrigation') || m.includes('moisture') || m.includes('dry') || m.includes('ruwa') || m.includes('omi') || m.includes('mmiri')) {
-    if (languageId === 'pcm') {
-      reply = `Watering rule for greenhouse: Early morning (6:30am – 8:30am) na the best time so the root go take water before afternoon heat. Keep soil moisture between 50% and 65%. Never spray water directly on the leaves when sun dey hot to prevent fungus and leaf burn.`;
-    } else {
-      reply = `Optimal irrigation for greenhouse ${crop}: Irrigate during early morning hours (06:30 – 08:30) to establish hydraulic turgor before peak transpiration. Target soil moisture between 50% and 65%. Avoid overhead spraying; use drip lines at the root collar to eliminate leaf surface humidity that breeds bacterial spot.`;
-    }
-  }
-  // 5. Temperature and climate
-  else if (m.includes('temp') || m.includes('heat') || m.includes('hot') || m.includes('cold') || m.includes('ventil') || m.includes('fan') || m.includes('zafi') || m.includes('ooru')) {
-    if (languageId === 'pcm') {
-      reply = `For greenhouse, keep temperature between 22°C and 28°C. Once e pass 30°C, flowers fit drop and tomato no go set fruit. Make you open the roof vents, turn on circulation fan, and use 50% shade net if sun too harsh.`;
-    } else {
-      reply = `Greenhouse thermal management: Maintain ambient canopy temperature between 22°C and 28°C for optimal pollination and fruit set. When temperatures exceed 30°C, trigger automated roof vents and circulation fans to evacuate the hot ceiling layer and prevent flower blossom abortion.`;
-    }
-  }
-  // 6. Conversational continuation (go on, continue, next steps)
-  else if (m === 'go on' || m === 'continue' || m === 'next' || m === 'more' || m.startsWith('go on') || m.startsWith('continue')) {
-    if (languageId === 'pcm') {
-      reply = `To continue on your ${crop}: Next key step na to verify your automated watering schedule (6:30am - 8:30am), check that the sub-canopy get good air flow, and look for any early yellowing under the leaves. Wetin specifically you wan make we examine next?`;
-    } else if (languageId === 'ha') {
-      reply = `Ci gaba da bayani kan ${crop}: Mataki na gaba shi ne duba yanayin shigar iska a greenhouse, tabbatar da cewa ma'aunin zafi bai haura 28°C ba, da kuma duba ƙasan ganye don tabbatar da babu kwari. Wane bangare kake so mu yi karin bayani a kansa?`;
-    } else if (languageId === 'yo') {
-      reply = `Láti tẹ̀síwájú lórí ${crop}: Àwọn ìgbésẹ̀ tó kàn ni láti ṣàyẹ̀wò ètò omi lílọ (6:30am - 8:30am), rí i dájú pé afẹ́fẹ́ ń wọlé dáadáa, kí o sì yẹ abẹ́ ewé wò fún àrùn. Apá wo ni o fẹ́ kí a sọ̀rọ̀ lé lórí síi?`;
-    } else if (languageId === 'ig') {
-      reply = `Iji gaa n'ihu na ${crop}: Nzọụkwụ ndị ọzọ dị mkpa gụnyere ịhụ na mmiri na-agba n'oge kwesịrị ekwesị, ịhụ na ikuku na-eku nke ọma na greenhouse, na inyocha akwụkwọ maka nje. Kedu akụkụ ị ga-achọ ka anyị kwurịtakwuo?`;
-    } else {
-      reply = `Continuing with ${crop} management: Next critical measures include: 1) Verifying automated drip cycle delivers 50–65% soil moisture, 2) Ensuring greenhouse vents open when temperatures exceed 28°C, and 3) Inspecting crown foliage for early blight. Which specific parameter would you like to drill into?`;
-    }
-  }
-  // 7. General Agricultural Guidance
-  else {
     if (languageId === 'ha') {
-      reply = `Masanin EDENS AI na kula da yanayin ${crop} ɗinka. Don samun kyakkyawan amfani, kula da daidaita ruwa, zafin daki, da kuma bincika ganyaye akai-akai don gano alamun cuta ko kwari da wuri.`;
-    } else if (languageId === 'yo') {
-      reply = `Onímọ̀ EDENS AI ń tọ́jú àwọn ohun ọ̀gbìn ${crop} rẹ. Láti rí ìkórè tó dára, rí i dájú pé omi àti ooru wà ní ìwọ̀ntúnwọ̀nsì, kí o sì máa ṣàyẹ̀wò àwọn ewé déédéé.`;
-    } else if (languageId === 'ig') {
-      reply = `Ọkachamara EDENS AI na-elekọta ${crop} gị. Maka ezigbo owuwe ihe ubi, debe oke mmiri na okpomọkụ n'ụzọ ziri ezi, na-enyochakwa akwụkwọ nri mgbe niile maka ọrịa ma ọ bụ ahụhụ.`;
-    } else if (languageId === 'pcm') {
-      reply = `EDENS AI agronomist dey here for your ${crop}! Make you keep your greenhouse between 22°C-28°C and soil moisture around 55%. Ask me any question about pests, fertilizer, or harvest!`;
-    } else {
-      reply = `As your EDENS AI agronomist, I recommend keeping your greenhouse ${crop} canopy within 22°C–28°C and soil moisture between 50% and 65%. Feel free to ask about specific symptoms, organic fertilizers, watering schedules, or pest control.`;
+      return `Ganyen da ke zama rawaya yakan faru ne saboda yawan ruwa da ke shake jijiyoyin shuka, ko rashin sinadarin Nitrogen, ko cutar fungal. Fara duba ma'aunin ruwan ƙasa (50-60%).`;
     }
+    return `Yellowing foliage (chlorosis) in greenhouse ${crop} is commonly caused by root-zone waterlogging or nitrogen deficiency. Verify soil moisture is within 50–65% and ensure drainage is clear.`;
   }
 
-  // If running on Render without GEMINI_API_KEY injected, append a helpful note
-  if (hasKeyIssue) {
-    reply += `\n\n*(Tip: To enable live Gemini AI reasoning on Render, add \`GEMINI_API_KEY\` in your Render Dashboard → Environment Variables).*`;
+  if (m.includes('pest') || m.includes('insect') || m.includes('aphid') || m.includes('whitefly') || m.includes('mite') || m.includes('worm') || m.includes('kwari') || m.includes('kòkòrò')) {
+    if (languageId === 'pcm') {
+      return `For organic pest control without chemical: 1) Boil fresh Dongoyaro (Neem) leaves, cool the extract, mix small mild soap, and spray under the leaves in the evening. 2) Use yellow sticky traps for whiteflies.`;
+    }
+    if (languageId === 'ha') {
+      return `Hanyar magance kwari ba tare da sinadarai masu guba ba: Tafasa ganyen Dogon Yaro (Neem), a bar shi ya huce, a fesa a ƙarƙashin ganye da yamma, sannan a kafa tarkon kwari mai launin rawaya.`;
+    }
+    return `For non-toxic greenhouse pest management: 1) Apply cooled Neem leaf (Dongoyaro) extract with 0.1% potassium soap under leaves at dusk. 2) Install yellow sticky traps for whiteflies.`;
   }
 
-  return reply;
+  if (m.includes('water') || m.includes('irrigation') || m.includes('moisture') || m.includes('dry') || m.includes('ruwa') || m.includes('omi') || m.includes('mmiri')) {
+    if (languageId === 'pcm') {
+      return `Watering rule for greenhouse: Early morning (6:30am – 8:30am) na the best time. Keep soil moisture between 50% and 65% and avoid wetting leaves in hot sun.`;
+    }
+    return `Optimal irrigation for greenhouse ${crop}: Irrigate between 06:30 and 08:30, targeting 50%–65% soil moisture at the root zone.`;
+  }
+
+  if (m.includes('temp') || m.includes('heat') || m.includes('hot') || m.includes('cold') || m.includes('ventil') || m.includes('fan') || m.includes('zafi') || m.includes('ooru')) {
+    if (languageId === 'pcm') {
+      return `For greenhouse, keep temperature between 22°C and 28°C. Once e pass 30°C, open roof vents and run circulation fans so flowers no go drop.`;
+    }
+    return `Greenhouse thermal guidance: Maintain canopy temperature between 22°C and 28°C; ventilate above 30°C to prevent blossom drop.`;
+  }
+
+  if (m === 'go on' || m === 'continue' || m === 'next' || m === 'more' || m.startsWith('go on') || m.startsWith('continue')) {
+    return `Continuing offline advisory for ${crop}: 1) Verify morning drip watering maintains 50–65% soil moisture, 2) Ensure ventilation keeps canopy below 28°C, and 3) Inspect lower leaves for early pest or fungal spots.`;
+  }
+
+  return `Offline agronomic guidance for ${crop}: Maintain canopy temperature within 22°C–28°C and soil moisture between 50% and 65%. Retry shortly once live Gemini AI connectivity resumes.`;
 }
 
 export async function consultAgronomist(
@@ -602,122 +373,43 @@ export async function consultAgronomist(
     lastSeen?: string;
   }
 ): Promise<string> {
-  const isBrowser = typeof window !== 'undefined' && typeof window.fetch === 'function';
-
-  if (isBrowser) {
-    try {
-      const res = await fetch('/api/ai/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message,
-          languageId,
-          history,
-          contextData
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.reply) return data.reply;
-      } else {
-        const errJson = await res.json().catch(() => ({}));
-        if (res.status === 503) {
-          throw new Error(errJson.message || 'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard environment variables.');
-        }
-        if (errJson.message) {
-          throw new Error(errJson.message);
-        }
-      }
-    } catch (fetchErr: any) {
-      if (fetchErr.message && (fetchErr.message.includes('GEMINI_API_KEY') || fetchErr.message.includes('Render') || fetchErr.message.includes('unconfigured'))) {
-        throw fetchErr;
-      }
-      console.warn("Backend chat endpoint unreachable, using explicit offline knowledge base:", fetchErr.message);
-      const fallbackText = getLocalAgronomistFallback(message, languageId, contextData?.cropType, fetchErr.message);
-      // Explicitly label the fallback so it is NEVER silently presented as a live Gemini response
-      return `[Offline Knowledge Base Advisory — Live Gemini AI Unreachable: ${fetchErr.message || 'Network error'}]\n\n${fallbackText}`;
-    }
-  }
-
-  // Node.js direct SDK execution
-  const selectedLang = NIGERIAN_LANGUAGES.find(l => l.id === languageId) || NIGERIAN_LANGUAGES[0];
-
-  const systemInstruction = `You are EDENS AI, an expert autonomous agricultural assistant and botanist for smart greenhouse farming in Nigeria and West Africa, powered by RA.
-You have native, fluent fluency in all Nigerian languages: Hausa, Igbo, Yoruba, Nigerian Pidgin, Fulfulde, Tiv, Efik, and English.
-
-The farmer wants to communicate with you in: ${selectedLang.name} (${selectedLang.nativeName}) [Region: ${selectedLang.region}].
-ALWAYS reply directly, warmly, and thoroughly in ${selectedLang.name}.
-If the user speaks in Nigerian Pidgin, respond in cheerful, knowledgeable Nigerian Pidgin.
-If the user speaks in Hausa, respond in respectful, accurate Harshen Hausa.
-If the user speaks in Yoruba, respond in respectful, rich Èdè Yorùbá.
-If the user speaks in Igbo, respond in clear, supportive Asụsụ Igbo.
-Provide practical advice with local Nigerian agricultural realities in mind: organic pest remedies (e.g. Dongoyaro/Neem extract, wood ash, garlic spray), soil care, watering schedules, greenhouse ventilation, solar power considerations, and market-ready crop health.
-
-${contextData ? `Current Greenhouse telemetry context:
-- Monitored Crop: ${contextData.cropType || 'Vegetables'}
-- Temp: ${contextData.temperature ?? 24}°C
-- Humidity: ${contextData.humidity ?? 65}%
-- Soil Moisture: ${contextData.soilMoisture ?? 50}%` : ''}`;
-
-  // Build conversational contents adhering strictly to Gemini's multi-turn requirements:
-  // 1. The first turn MUST have role 'user' (Gemini rejects conversations starting with 'model')
-  // 2. Turns must alternate strictly between 'user' and 'model'
-  const validHistory: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
-  let expectedRole: 'user' | 'model' = 'user';
-
-  for (const item of history) {
-    if (!item.content || !item.content.trim()) continue;
-    const itemRole: 'user' | 'model' = item.role === 'assistant' ? 'model' : 'user';
-
-    // Gemini requires the first turn in contents to be 'user'
-    if (validHistory.length === 0 && itemRole !== 'user') {
-      continue;
-    }
-
-    if (itemRole === expectedRole) {
-      validHistory.push({
-        role: itemRole,
-        parts: [{ text: item.content }]
-      });
-      expectedRole = expectedRole === 'user' ? 'model' : 'user';
-    }
-  }
-
-  // If the last history turn is 'user', remove it so appending userTurn will not cause two consecutive user turns
-  if (validHistory.length > 0 && validHistory[validHistory.length - 1].role === 'user') {
-    validHistory.pop();
-  }
-
-  const slicedHistory = validHistory.slice(-6);
-
-  const userTurn = {
-    role: 'user' as const,
-    parts: [{ text: `[Speaking in ${selectedLang.name}]: ${message}` }]
-  };
-
-  const contents = [...slicedHistory, userTurn];
-
   try {
-    const client = getAi();
-    const response = await client.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents,
-      config: {
-        systemInstruction,
-        temperature: 0.7,
-        maxOutputTokens: 800,
-      }
+    const res = await fetch('/api/ai/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        languageId,
+        history,
+        contextData
+      })
     });
 
-    if (response.text?.trim()) {
-      return response.text.trim();
+    if (res.ok) {
+      const data = await res.json();
+      if (data.reply) return data.reply;
+      throw new Error('Empty reply from AI consultation endpoint.');
     }
-  } catch (err: any) {
-    console.warn("Gemini consultAgronomist warning:", err.message);
-    return getLocalAgronomistFallback(message, languageId, contextData?.cropType, err.message);
+
+    const errJson = await res.json().catch(() => ({}));
+    if (res.status === 503) {
+      throw new Error(
+        errJson.message ||
+          'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard environment variables.'
+      );
+    }
+    throw new Error(errJson.message || `AI consultation failed with HTTP ${res.status}`);
+  } catch (fetchErr: any) {
+    if (
+      fetchErr.message &&
+      (fetchErr.message.includes('GEMINI_API_KEY') ||
+        fetchErr.message.includes('Render') ||
+        fetchErr.message.includes('unconfigured'))
+    ) {
+      throw fetchErr;
+    }
+    console.warn('Backend chat endpoint error, returning explicitly labelled offline advisory:', fetchErr.message);
+    const fallbackText = getLocalAgronomistFallback(message, languageId, contextData?.cropType);
+    return `[Offline Knowledge Base Advisory — Live Gemini AI Unavailable: ${fetchErr.message || 'Network error'}]\n\n${fallbackText}`;
   }
-
-  return getLocalAgronomistFallback(message, languageId, contextData?.cropType);
 }
-

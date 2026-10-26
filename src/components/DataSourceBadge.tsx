@@ -67,7 +67,26 @@ export function DataSourceBadge({
           <div className="flex items-center gap-2">
             <RefreshCw size={15} className="animate-spin" />
             <span className="font-bold uppercase tracking-wider">CACHED HARDWARE TELEMETRY</span>
-            <span className="opacity-80 text-[11px]">— ESP32 connection paused or delayed. Reconnecting...</span>
+            <span className="opacity-80 text-[11px]">— Recent reading buffered while polling retries...</span>
+          </div>
+          <div className="flex items-center gap-1 text-[11px] font-mono font-bold">
+            <Clock size={12} />
+            <span>Last seen: {freshnessSec}s ago</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (dataSource === 'STALE') {
+      return (
+        <div className={cn(
+          "px-4 py-2.5 rounded-2xl bg-orange-500/10 border border-orange-500/30 flex flex-wrap items-center justify-between gap-2 text-xs text-orange-500",
+          className
+        )}>
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={15} />
+            <span className="font-bold uppercase tracking-wider">STALE HARDWARE TELEMETRY</span>
+            <span className="opacity-80 text-[11px]">— Readings are outdated ({freshnessSec}s old). Do not treat as live.</span>
           </div>
           <div className="flex items-center gap-1 text-[11px] font-mono font-bold">
             <Clock size={12} />
@@ -130,6 +149,7 @@ export function DataSourceBadge({
       dataSource === 'REAL_HARDWARE' && "bg-[#10B981]/15 text-[#10B981] border-[#10B981]/40",
       dataSource === 'SIMULATED' && "bg-purple-500/15 text-purple-400 border-purple-500/40",
       dataSource === 'CACHED' && "bg-amber-500/15 text-amber-500 border-amber-500/40",
+      dataSource === 'STALE' && "bg-orange-500/15 text-orange-500 border-orange-500/40",
       dataSource === 'DISCONNECTED' && "bg-red-500/15 text-red-500 border-red-500/40",
       className
     )}>
@@ -138,6 +158,7 @@ export function DataSourceBadge({
         dataSource === 'REAL_HARDWARE' && "bg-[#10B981] animate-ping",
         dataSource === 'SIMULATED' && "bg-purple-400",
         dataSource === 'CACHED' && "bg-amber-500 animate-pulse",
+        dataSource === 'STALE' && "bg-orange-500",
         dataSource === 'DISCONNECTED' && "bg-red-500"
       )} />
 
@@ -145,6 +166,7 @@ export function DataSourceBadge({
         {dataSource === 'REAL_HARDWARE' && 'REAL HARDWARE'}
         {dataSource === 'SIMULATED' && 'SIMULATED DATA'}
         {dataSource === 'CACHED' && 'CACHED DATA'}
+        {dataSource === 'STALE' && 'STALE DATA'}
         {dataSource === 'DISCONNECTED' && 'DISCONNECTED'}
       </span>
 
@@ -154,7 +176,7 @@ export function DataSourceBadge({
         </span>
       )}
 
-      {showFreshness && dataSource === 'CACHED' && (
+      {showFreshness && (dataSource === 'CACHED' || dataSource === 'STALE') && (
         <span className="opacity-70 text-[10px] lowercase">
           · {freshnessSec}s old
         </span>

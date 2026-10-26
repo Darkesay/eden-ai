@@ -96,10 +96,13 @@ export default function HardwareConfigPage() {
     setIsUploadingSample(true);
     setSampleUploadResult(null);
     try {
-      // User must provide key or enter test key - never hardcode secrets in client
-      const keyToUse = testCameraKey.trim() || prompt('Enter your CAMERA_UPLOAD_KEY to authorize the test upload:') || '';
+      // User must provide key via inline password input - never hardcode secrets or use window.prompt
+      const keyToUse = testCameraKey.trim();
       if (!keyToUse) {
-        setSampleUploadResult({ success: false, error: 'Test upload aborted: CAMERA_UPLOAD_KEY is required to authenticate.' });
+        setSampleUploadResult({
+          success: false,
+          error: 'Enter your CAMERA_UPLOAD_KEY in the X-Camera-Key test input before running the upload check.'
+        });
         return;
       }
 
@@ -562,7 +565,7 @@ export default function HardwareConfigPage() {
                     <code className="text-xs font-mono text-gray-300">X-Camera-Key: &lt;configured_key&gt;</code>
                   </div>
                   <p className="text-[10px] text-gray-400 leading-relaxed mt-1">
-                    Also supports URL query token: <code className="text-gray-300">?token=&lt;key&gt;</code>.
+                    Validated against server-side <code className="text-gray-300">CAMERA_UPLOAD_KEY</code>. Never pass keys in URLs.
                   </p>
                 </div>
               </div>
@@ -620,7 +623,15 @@ export default function HardwareConfigPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    placeholder="Enter X-Camera-Key to test..."
+                    value={testCameraKey}
+                    onChange={(e) => setTestCameraKey(e.target.value)}
+                    className="h-9 w-52 bg-black/50 border-emerald-500/30 text-xs font-mono text-white placeholder:text-gray-500 rounded-xl"
+                  />
                   <Button
                     type="button"
                     size="sm"
