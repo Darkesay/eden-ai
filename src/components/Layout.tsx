@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useMqtt } from '../lib/mqtt';
-import { Sun, Moon, LogOut, Loader2, Menu, X, LayoutDashboard, Brain, Cpu, Sliders } from 'lucide-react';
+import { useAuth } from '../lib/auth';
+import { Sun, Moon, LogOut, LayoutDashboard, Brain, Cpu, Sliders, Sprout } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { OnboardingTour } from './OnboardingTour';
@@ -16,7 +17,7 @@ export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { status } = useMqtt();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { user, logout } = useAuth();
   const [forceTour, setForceTour] = useState(false);
 
   // Listen for custom event to trigger tour from anywhere
@@ -50,13 +51,14 @@ export default function Layout() {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('botanix_auth');
+  const handleLogout = async () => {
+    await logout();
     navigate('/login');
   };
 
   const navLinks = [
     { to: '/', label: 'Control Center' },
+    { to: '/greenhouses', label: 'Greenhouses' },
     { to: '/ai-lab', label: 'AI Lab' },
     { to: '/devices', label: 'Device Management' },
     { to: '/hardware', label: 'Hardware Config' },
@@ -126,12 +128,17 @@ export default function Layout() {
               </span>
             </div>
 
+            {user && (
+              <span className="hidden lg:inline-block text-xs font-medium opacity-75 truncate max-w-[140px]">
+                {user.displayName}
+              </span>
+            )}
             <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-white/5 transition-all">
               <div className={cn("transition-transform duration-500", isDark ? "rotate-180" : "rotate-0")}>
                 {isDark ? <Moon size={20} /> : <Sun size={20} />}
               </div>
             </button>
-            <button onClick={handleLogout} className="p-2 rounded-full hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 transition-colors">
+            <button onClick={handleLogout} title="Sign Out" className="p-2 rounded-full hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 transition-colors">
               <LogOut size={20} />
             </button>
           </div>
@@ -155,6 +162,7 @@ export default function Layout() {
                 )}
               >
                 {link.to === '/' ? <LayoutDashboard size={20} /> : 
+                 link.to === '/greenhouses' ? <Sprout size={20} /> :
                  link.to === '/hardware' ? <Sliders size={20} /> :
                  isAiLab ? (
                    <>

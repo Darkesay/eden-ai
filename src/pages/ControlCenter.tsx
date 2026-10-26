@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { useStoreValue, useStoreTable, store } from '../lib/store';
 import { useMqtt } from '../lib/mqtt';
+import { useAuth } from '../lib/auth';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
-import { Settings, Sun, Lightbulb, CloudRain, Droplet, Battery, BatteryMedium, BatteryLow, Power, Wind, Fan, Settings2, Activity, Video, RadioReceiver, Zap, Flame, Snowflake, Home, Thermometer, ThermometerSun, ThermometerSnowflake, Leaf, Bot, Calendar, Play } from 'lucide-react';
+import { Settings, Sun, Lightbulb, CloudRain, Droplet, Battery, BatteryMedium, BatteryLow, Power, Wind, Fan, Settings2, Activity, Video, RadioReceiver, Zap, Flame, Snowflake, Home, Thermometer, ThermometerSun, ThermometerSnowflake, Leaf, Bot, Calendar, Play, QrCode } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -279,6 +281,7 @@ export default function ControlCenter() {
   };
 
   const activeAgentsCount = [climateAgent, irrigationAgent, visionAgent, harvestAgent, alertAgent].filter(Boolean).length;
+  const { greenhouses, activeGreenhouse } = useAuth();
 
   return (
     <div className="space-y-6">
@@ -288,6 +291,56 @@ export default function ControlCenter() {
           <p className="opacity-70 text-sm mt-1 uppercase tracking-[0.05em] font-sans text-[10px]">Command & Control Hub</p>
         </div>
         <SettingsPanel />
+      </div>
+
+      {/* Self-Service Greenhouse Enrollment & Status Bar */}
+      <div className="rounded-2xl border border-[#10B981]/30 bg-[#FFFFFF]/80 dark:bg-[#080808]/90 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        {activeGreenhouse ? (
+          <>
+            <div className="text-xs space-y-0.5">
+              <div className="font-bold text-sm flex items-center gap-2">
+                <span>{activeGreenhouse.name}</span>
+                <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#10B981]/15 text-[#10B981]">
+                  {activeGreenhouse.overallStatus}
+                </span>
+              </div>
+              <div className="opacity-70">
+                {greenhouses.length} authorized greenhouse{greenhouses.length === 1 ? '' : 's'} • Camera:{' '}
+                <span className="font-mono">{activeGreenhouse.camera.connectionStatus}</span> • Controller:{' '}
+                <span className="font-mono">{activeGreenhouse.controller.connectionStatus}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Link
+                to={`/greenhouses/${activeGreenhouse.id}`}
+                className="px-3.5 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-black text-xs font-semibold transition-colors"
+              >
+                Open Greenhouse Details
+              </Link>
+              <Link
+                to="/greenhouses"
+                className="px-3 py-2 rounded-xl border border-[#D1E8D1] dark:border-[#1A2A1A] text-xs font-medium hover:border-[#10B981]/40"
+              >
+                Switch / Scan QR
+              </Link>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="text-xs">
+              <div className="font-bold text-sm">Connect Your Physical EDENS AI Greenhouse Kit</div>
+              <div className="opacity-70">
+                Scan your kit QR code or launch the Guided Setup Wizard to enroll your ESP32-CAM & Main ESP32 controller.
+              </div>
+            </div>
+            <Link
+              to="/greenhouses"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-black text-xs font-semibold shrink-0"
+            >
+              <QrCode size={14} /> Enroll Greenhouse Kit
+            </Link>
+          </>
+        )}
       </div>
 
       {/* Real Hardware / Simulated / Cached / Disconnected Banner */}

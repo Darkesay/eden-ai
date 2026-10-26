@@ -101,10 +101,30 @@ export function createVisionDiagnosisHandler(deps: {
   languages: Record<string, LanguageMetadata>;
   isAiConfigured: () => boolean;
   runVisionModel: VisionModelRunner;
+  resolveRequestStore?: (
+    req: express.Request
+  ) =>
+    | { ok: true; store: CameraImageStore; greenhouseId?: string }
+    | { ok: false; statusCode: number; errorCode: string; message: string };
 }): express.RequestHandler {
-  const { imageStore, languages, isAiConfigured, runVisionModel } = deps;
+  const { imageStore, languages, isAiConfigured, runVisionModel, resolveRequestStore } = deps;
 
   return async (req, res) => {
+    let activeStore = imageStore;
+    let resolvedGreenhouseId: string | undefined;
+
+    if (resolveRequestStore) {
+      const storeCheck = resolveRequestStore(req);
+      if ('errorCode' in storeCheck) {
+        return res.status(storeCheck.statusCode).json({
+          error: storeCheck.errorCode,
+          message: storeCheck.message
+        });
+      }
+      activeStore = storeCheck.store;
+      resolvedGreenhouseId = storeCheck.greenhouseId;
+    }
+
     const {
       image,
       useLatestCameraFrame = false,
@@ -137,8 +157,12 @@ export function createVisionDiagnosisHandler(deps: {
       dataSource: string;
     } | null = null;
 
-    if (useLatestCameraFrame || (typeof image === 'string' && image.startsWith('/api/camera/latest.jpg'))) {
-      const latest = imageStore.getLatest();
+    if (
+      useLatestCameraFrame ||
+      (typeof image === 'string' &&
+        (image.startsWith('/api/camera/latest.jpg') || image.includes('/camera/latest.jpg')))
+    ) {
+      const latest = activeStore.getLatest();
       if (!latest || !latest.frame.buffer || latest.frame.buffer.length === 0) {
         return res.status(404).json({
           error: 'NO_CAMERA_FRAME',
@@ -202,7 +226,7 @@ export function createVisionDiagnosisHandler(deps: {
       imgBuffer = Buffer.from(cleanBase64, 'base64');
     }
 
-    const byteCheck = validateRasterImageBytes(imgBuffer, imageStore.getMaxUploadBytes());
+    const byteCheck = validateRasterImageBytes(imgBuffer, activeStore.getMaxUploadBytes());
     if (!byteCheck.valid) {
       return res.status(byteCheck.statusCode).json({
         error: byteCheck.errorCode || 'INVALID_IMAGE_BYTES',
@@ -265,15 +289,19 @@ In the JSON response:
       const parsed = JSON.parse(trimmed);
       parsed.language = langInfo.name;
       parsed.imageSource = resolvedSource;
+      if (resolvedGreenhouseId) {
+        parsed.greenhouseId = resolvedGreenhouseId;
+      }
       if (cameraFrameMeta) {
         parsed.frameId = cameraFrameMeta.id;
         parsed.frameTimestamp = cameraFrameMeta.timestamp;
         parsed.frameAgeSeconds = cameraFrameMeta.ageSeconds;
-        imageStore.markAnalyzed(cameraFrameMeta.id, parsed);
+        activeStore.markAnalyzed(cameraFrameMeta.id, parsed);
       }
 
       return res.json({
         success: true,
+        greenhouseId: resolvedGreenhouseId,
         result: parsed,
         imageSource: resolvedSource,
         cameraFrame: cameraFrameMeta,

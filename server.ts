@@ -5,8 +5,11 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { CameraImageStore } from './src/server/cameraStorage';
-import { registerCameraRoutes } from './src/server/cameraAcquisition';
+import { GreenhouseCameraStoreRegistry, registerCameraRoutes } from './src/server/cameraAcquisition';
 import { createVisionDiagnosisHandler } from './src/server/visionDiagnosis';
+import { PlatformDatabase } from './src/server/database';
+import { extractClientIp, registerSelfServiceGreenhouseRoutes } from './src/server/greenhouseRoutes';
+import { validateControllerTelemetryPayload } from './src/server/telemetryContract';
 
 dotenv.config();
 
@@ -22,6 +25,21 @@ const MAX_AUDIO_MB = parseInt(process.env.AUDIO_MAX_UPLOAD_MB || '15', 10);
 // Dedicated Camera Image Storage Layer (lazy disk writes via CAMERA_STORAGE_PATH)
 export const cameraImageStore = new CameraImageStore({
   maxUploadBytes: MAX_UPLOAD_MB * 1024 * 1024
+});
+
+// Multi-tenant SQLite Database & Per-Greenhouse Isolated Camera Stores
+export const platformDb = new PlatformDatabase();
+export const cameraStoreRegistry = new GreenhouseCameraStoreRegistry({
+  maxUploadBytes: MAX_UPLOAD_MB * 1024 * 1024
+});
+
+app.use(async (_req, _res, next) => {
+  try {
+    await platformDb.init();
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 // --------------------------------------------------------------------
@@ -50,8 +68,55 @@ app.use((req, res, next) => {
   return urlencodedParser(req, res, next);
 });
 
-// 3. Register Dedicated ESP32-CAM Acquisition & Retrieval Routes
-registerCameraRoutes(app, cameraImageStore);
+// 3. Register Self-Service Greenhouse Auth, Onboarding, QR & RBAC Routes
+const { requireAuthenticatedUser } = registerSelfServiceGreenhouseRoutes(app, {
+  platformDb,
+  cameraRegistry: cameraStoreRegistry
+});
+
+// 4. Register Dedicated ESP32-CAM Acquisition & Retrieval Routes (Global + Per-Device Isolated)
+registerCameraRoutes(app, cameraImageStore, {
+  resolvePerDeviceUpload: (req, providedKey) => {
+    const claimedGhId = (req.headers['x-greenhouse-id'] as string | undefined)?.trim();
+    const claimedDevId = (req.headers['x-device-id'] as string | undefined)?.trim();
+
+    if (
+      providedKey.startsWith('edcam_') ||
+      providedKey.startsWith('edctrl_') ||
+      Boolean(claimedGhId) ||
+      Boolean(claimedDevId)
+    ) {
+      const authRes = platformDb.authenticateDeviceKey({
+        rawKey: providedKey,
+        expectedType: 'esp32_cam',
+        claimedGreenhouseId: claimedGhId,
+        claimedDeviceId: claimedDevId
+      });
+      if ('errorCode' in authRes) {
+        return {
+          authorized: false,
+          status: authRes.statusCode,
+          error: authRes.errorCode,
+          message: authRes.message
+        };
+      }
+      return {
+        authorized: true,
+        targetStore: cameraStoreRegistry.getStore(authRes.device.greenhouseId),
+        greenhouseId: authRes.device.greenhouseId,
+        deviceId: authRes.device.id,
+        onFrameStored: ({ clientIp }) => {
+          platformDb.recordDeviceCheckIn({
+            deviceId: authRes.device.id,
+            greenhouseId: authRes.device.greenhouseId,
+            ipAddress: clientIp
+          });
+        }
+      };
+    }
+    return null;
+  }
+});
 
 // --------------------------------------------------------------------
 // SECURE HARDWARE INTEGRATION GATEWAY (CONTROLLER)
@@ -151,6 +216,74 @@ function isHardwareAuthorized(req: express.Request): { authorized: boolean; stat
  * to forward physical /status telemetry to cloud deployments without exposing private LAN ports.
  */
 app.post('/api/telemetry/upload', (req, res) => {
+  if (req.query.token || req.query.key || req.query.auth) {
+    const hasHeader = Boolean(
+      req.headers['x-hardware-key'] || req.headers['x-api-key'] || req.headers['authorization']
+    );
+    if (!hasHeader) {
+      return res.status(401).json({
+        error: 'QUERY_AUTH_DISALLOWED',
+        message: 'Passing controller credentials in URL query parameters is disabled. Use X-Hardware-Key header.',
+        requiredHeader: 'X-Hardware-Key'
+      });
+    }
+  }
+
+  const headerKey = (req.headers['x-hardware-key'] || req.headers['x-api-key']) as string | undefined;
+  const authHeader = req.headers['authorization'];
+  const bearerKey = authHeader ? (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) : undefined;
+  const providedKey = (headerKey || bearerKey || '').trim();
+  const claimedGhId = (req.headers['x-greenhouse-id'] as string | undefined)?.trim();
+  const claimedDevId = (req.headers['x-device-id'] as string | undefined)?.trim();
+
+  // Per-device authenticated greenhouse telemetry path
+  if (
+    providedKey.startsWith('edctrl_') ||
+    providedKey.startsWith('edcam_') ||
+    Boolean(claimedGhId) ||
+    Boolean(claimedDevId)
+  ) {
+    const devAuth = platformDb.authenticateDeviceKey({
+      rawKey: providedKey,
+      expectedType: 'esp32_controller',
+      claimedGreenhouseId: claimedGhId,
+      claimedDeviceId: claimedDevId
+    });
+    if ('errorCode' in devAuth) {
+      return res.status(devAuth.statusCode).json({
+        error: devAuth.errorCode,
+        message: devAuth.message,
+        requiredHeader: 'X-Hardware-Key'
+      });
+    }
+
+    const validated = validateControllerTelemetryPayload(req.body);
+    if ('errorCode' in validated) {
+      return res.status(validated.statusCode).json({
+        error: validated.errorCode,
+        message: validated.message
+      });
+    }
+
+    const stored = platformDb.storeControllerTelemetry({
+      greenhouseId: devAuth.device.greenhouseId,
+      deviceId: devAuth.device.id,
+      telemetry: validated,
+      ipAddress: extractClientIp(req)
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Physical ESP32 controller telemetry validated and stored.',
+      greenhouseId: devAuth.device.greenhouseId,
+      deviceId: devAuth.device.id,
+      readingId: stored.readingId,
+      timestamp: stored.recordedAt,
+      dataSource: 'REAL_HARDWARE'
+    });
+  }
+
+  // Backward-compatible global HARDWARE_API_KEY intake
   const auth = isHardwareAuthorized(req);
   if (!auth.authorized) {
     return res.status(auth.status).json({
@@ -781,6 +914,35 @@ app.post(
     imageStore: cameraImageStore,
     languages: NIGERIAN_LANG_NAMES,
     isAiConfigured: () => Boolean(getGeminiClient()),
+    resolveRequestStore: (req) => {
+      const ghId = String(req.body?.greenhouseId || req.query?.greenhouseId || '').trim();
+      if (!ghId) {
+        return { ok: true, store: cameraImageStore };
+      }
+      const user = requireAuthenticatedUser(req);
+      if (!user) {
+        return {
+          ok: false,
+          statusCode: 401,
+          errorCode: 'UNAUTHENTICATED',
+          message: 'Sign in required to diagnose a greenhouse camera snapshot.'
+        };
+      }
+      const gh = platformDb.getGreenhouseForUser(ghId, user.id);
+      if (!gh) {
+        return {
+          ok: false,
+          statusCode: 403,
+          errorCode: 'FORBIDDEN_GREENHOUSE',
+          message: 'You do not have permission to diagnose this greenhouse camera.'
+        };
+      }
+      return {
+        ok: true,
+        store: cameraStoreRegistry.getStore(gh.id),
+        greenhouseId: gh.id
+      };
+    },
     runVisionModel: async ({ base64Data, mimeType, promptText, responseSchema }) => {
       const ai = getGeminiClient();
       if (!ai) {
@@ -1066,6 +1228,7 @@ app.post('/api/ai/speech', async (req, res) => {
 // --------------------------------------------------------------------
 
 async function startServer() {
+  await platformDb.init();
   if (!isProd) {
     const vite = await createViteServer({
       server: { middlewareMode: true },

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 import express from 'express';
 import { Readable } from 'node:stream';
 import { CameraImageStore } from './cameraStorage';
@@ -8,6 +9,60 @@ export interface CameraAuthCheckResult {
   status: number;
   error: string;
   message: string;
+}
+
+export type PerDeviceCameraAuthResolution =
+  | {
+      authorized: true;
+      targetStore: CameraImageStore;
+      greenhouseId: string;
+      deviceId: string;
+      onFrameStored?: (info: { frameId: string; timestamp: string; clientIp: string }) => void;
+    }
+  | {
+      authorized: false;
+      status: number;
+      error: string;
+      message: string;
+    };
+
+export class GreenhouseCameraStoreRegistry {
+  private readonly stores = new Map<string, CameraImageStore>();
+  private readonly rootBaseDir: string;
+  private readonly maxUploadBytes?: number;
+  private readonly freshMaxSeconds?: number;
+  private readonly cachedMaxSeconds?: number;
+
+  constructor(options: {
+    rootBaseDir?: string;
+    maxUploadBytes?: number;
+    freshMaxSeconds?: number;
+    cachedMaxSeconds?: number;
+  } = {}) {
+    this.rootBaseDir =
+      options.rootBaseDir ||
+      process.env.CAMERA_STORAGE_PATH ||
+      process.env.UPLOADS_DIR ||
+      path.join(process.cwd(), 'uploads');
+    this.maxUploadBytes = options.maxUploadBytes;
+    this.freshMaxSeconds = options.freshMaxSeconds;
+    this.cachedMaxSeconds = options.cachedMaxSeconds;
+  }
+
+  public getStore(greenhouseId: string): CameraImageStore {
+    const safeId = greenhouseId.replace(/[^a-zA-Z0-9_-]/g, '');
+    let store = this.stores.get(safeId);
+    if (!store) {
+      store = new CameraImageStore({
+        storageBaseDir: path.join(this.rootBaseDir, 'greenhouses', safeId),
+        maxUploadBytes: this.maxUploadBytes,
+        freshMaxSeconds: this.freshMaxSeconds,
+        cachedMaxSeconds: this.cachedMaxSeconds
+      });
+      this.stores.set(safeId, store);
+    }
+    return store;
+  }
 }
 
 export interface ValidatedLanCameraTarget {
@@ -29,6 +84,7 @@ export interface RegisterCameraRoutesOptions {
   allowLoopbackLanTargets?: boolean;
   getUploadSecret?: () => string;
   isCloudHosted?: () => boolean;
+  resolvePerDeviceUpload?: (req: express.Request, providedKey: string) => PerDeviceCameraAuthResolution | null;
 }
 
 export const DEFAULT_ESP32_CAM_LAN_HOST = '';
@@ -474,6 +530,62 @@ export function registerCameraRoutes(
   app.post(
     '/api/camera/upload',
     (req, res, next) => {
+      if (req.query.token || req.query.key || req.query.auth) {
+        const hasHeader = Boolean(
+          req.headers['x-camera-key'] || req.headers['x-api-key'] || req.headers['authorization']
+        );
+        if (!hasHeader) {
+          return res.status(401).json({
+            error: 'QUERY_AUTH_DISALLOWED',
+            message:
+              'Passing camera credentials in URL query parameters is disabled. Send the secret in the X-Camera-Key HTTP header.',
+            requiredHeader: 'X-Camera-Key'
+          });
+        }
+      }
+
+      const xCameraKey = req.headers['x-camera-key'];
+      const xApiKey = req.headers['x-api-key'];
+      const authHeader = req.headers['authorization'];
+      const rawHeader =
+        (Array.isArray(xCameraKey) ? xCameraKey[0] : xCameraKey) ||
+        (Array.isArray(xApiKey) ? xApiKey[0] : xApiKey) ||
+        (typeof authHeader === 'string'
+          ? authHeader.startsWith('Bearer ')
+            ? authHeader.slice(7)
+            : authHeader
+          : '');
+      const providedKey = (rawHeader || '').trim();
+
+      if (options.resolvePerDeviceUpload) {
+        const perDevice = options.resolvePerDeviceUpload(req, providedKey);
+        if (perDevice) {
+          if ('error' in perDevice) {
+            return res.status(perDevice.status).json({
+              error: perDevice.error,
+              message: perDevice.message,
+              requiredHeader: 'X-Camera-Key'
+            });
+          }
+          (req as any).__perDeviceCameraUpload = perDevice;
+          return rawUploadMiddleware(req, res, (err: any) => {
+            if (err) {
+              if (err.type === 'entity.too.large' || err.status === 413) {
+                return res.status(413).json({
+                  error: 'PAYLOAD_TOO_LARGE',
+                  message: `Uploaded camera image exceeds maximum size limit of ${maxUploadMb} MB.`
+                });
+              }
+              return res.status(400).json({
+                error: 'UPLOAD_READ_ERROR',
+                message: err.message || 'Failed reading uploaded image stream.'
+              });
+            }
+            next();
+          });
+        }
+      }
+
       // Authenticate BEFORE buffering or processing untrusted camera payloads where possible
       const auth = verifyCameraUploadAuth(req, getSecret);
       if (!auth.authorized) {
@@ -514,7 +626,12 @@ export function registerCameraRoutes(
       const cameraAddrHeader = (req.headers['x-camera-address'] as string | undefined)?.trim();
       const capturedAtHeader = (req.headers['x-captured-at'] as string | undefined)?.trim();
 
-      const stored = imageStore.validateAndStoreJpeg(req.body, {
+      const perDeviceCtx = (req as any).__perDeviceCameraUpload as
+        | Extract<PerDeviceCameraAuthResolution, { authorized: true }>
+        | undefined;
+      const targetStore = perDeviceCtx ? perDeviceCtx.targetStore : imageStore;
+
+      const stored = targetStore.validateAndStoreJpeg(req.body, {
         acquisitionMethod: 'ESP32_CAM_UPLOAD',
         cameraAddress: cameraAddrHeader,
         clientIp,
@@ -529,6 +646,18 @@ export function registerCameraRoutes(
       }
 
       const { frame, totalStored } = stored;
+      if (perDeviceCtx?.onFrameStored) {
+        perDeviceCtx.onFrameStored({
+          frameId: frame.id,
+          timestamp: frame.timestamp,
+          clientIp
+        });
+      }
+
+      const publicUrl = perDeviceCtx
+        ? `/api/greenhouses/${encodeURIComponent(perDeviceCtx.greenhouseId)}/camera/latest.jpg?frame=${encodeURIComponent(frame.id)}`
+        : frame.url;
+
       console.log(
         `[Camera Upload] Frame ${frame.id} stored (${frame.sizeBytes} bytes, sha256=${frame.sha256.slice(0, 10)}) at ${frame.timestamp}`
       );
@@ -536,13 +665,15 @@ export function registerCameraRoutes(
       return res.status(200).json({
         success: true,
         message: 'ESP32-CAM frame received, validated, and stored.',
+        greenhouseId: perDeviceCtx?.greenhouseId,
+        deviceId: perDeviceCtx?.deviceId,
         imageId: frame.id,
         timestamp: frame.timestamp,
         capturedAt: frame.capturedAt,
         sizeBytes: frame.sizeBytes,
         sha256: frame.sha256,
         mimeType: frame.mimeType,
-        url: frame.url,
+        url: publicUrl,
         acquisitionMethod: frame.acquisitionMethod,
         totalUploadsReceived: totalStored,
         readyForVisionAnalysis: true

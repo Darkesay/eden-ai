@@ -7,5 +7,10 @@ coverage/
 .env*
 !.env.example
 uploads/
+data/
+*.sqlite
+*.sqlite-tmp
 **/camera_secrets.h
 **/secrets.h
+**/controller_secrets.h
+

@@ -13,8 +13,13 @@
 // Production EDENS AI HTTPS camera intake endpoint
 #define EDENS_CAMERA_UPLOAD_URL "https://edens-ai.onrender.com/api/camera/upload"
 
-// Secret key matching the server-side CAMERA_UPLOAD_KEY environment variable on Render
-#define EDENS_CAMERA_UPLOAD_KEY "REPLACE_WITH_RENDER_CAMERA_UPLOAD_KEY"
+// Per-device camera key (edcam_...) issued in EDENS AI Greenhouse Setup Wizard,
+// OR global CAMERA_UPLOAD_KEY environment variable for single-unit lab testing
+#define EDENS_CAMERA_UPLOAD_KEY "REPLACE_WITH_ISSUED_CAMERA_DEVICE_KEY"
+
+// Optional multi-tenant binding headers (auto-populated when downloaded from Setup Wizard)
+#define EDENS_GREENHOUSE_ID ""
+#define EDENS_CAMERA_DEVICE_ID ""
 
 // Periodic snapshot upload interval in milliseconds (15000 ms = 15 seconds; keeps frames well within 90s FRESH window)
 #define EDENS_CAMERA_UPLOAD_INTERVAL_MS 15000UL

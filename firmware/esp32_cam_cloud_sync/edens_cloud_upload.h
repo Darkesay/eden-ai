@@ -44,6 +44,19 @@
   #endif
 #endif
 
+#ifndef EDENS_CAMERA_UPLOAD_URL
+  #define EDENS_CAMERA_UPLOAD_URL "https://edens-ai.onrender.com/api/camera/upload"
+#endif
+#ifndef EDENS_CAMERA_UPLOAD_INTERVAL_MS
+  #define EDENS_CAMERA_UPLOAD_INTERVAL_MS 15000UL
+#endif
+#ifndef EDENS_GREENHOUSE_ID
+  #define EDENS_GREENHOUSE_ID ""
+#endif
+#ifndef EDENS_CAMERA_DEVICE_ID
+  #define EDENS_CAMERA_DEVICE_ID ""
+#endif
+
 // Root CA PEM Bundle covering Render / Cloudflare / Let's Encrypt TLS certificate chains:
 // 1) Google Trust Services LLC — GTS Root R1
 // 2) GlobalSign Root CA (cross-signer for GTS)
@@ -261,6 +274,12 @@ inline bool edensUploadSingleSnapshot() {
     https.addHeader("Content-Type", "image/jpeg");
     https.addHeader("X-Camera-Key", uploadKey);
     https.addHeader("X-Captured-At", isoTimestamp);
+    if (strlen(EDENS_GREENHOUSE_ID) > 0) {
+      https.addHeader("X-Greenhouse-Id", EDENS_GREENHOUSE_ID);
+    }
+    if (strlen(EDENS_CAMERA_DEVICE_ID) > 0) {
+      https.addHeader("X-Device-Id", EDENS_CAMERA_DEVICE_ID);
+    }
 
     int httpCode = https.POST(copyBuf, jpegLen);
     s_edensLastHttpCode = httpCode;
