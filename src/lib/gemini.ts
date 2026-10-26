@@ -238,24 +238,21 @@ export async function analyzePlantImage(
 ): Promise<PlantAnalysisResult> {
   const isBrowser = typeof window !== 'undefined' && typeof window.fetch === 'function';
   if (isBrowser) {
-    try {
-      const res = await fetch('/api/ai/diagnose', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: base64Image, languageId })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.result) return data.result;
-      } else {
-        const errJson = await res.json().catch(() => ({}));
-        if (res.status === 503) {
-          throw new Error(errJson.message || 'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard.');
-        }
+    const res = await fetch('/api/ai/diagnose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: base64Image, languageId })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.result) return data.result;
+      throw new Error("Diagnosis response missing result data");
+    } else {
+      const errJson = await res.json().catch(() => ({}));
+      if (res.status === 503) {
+        throw new Error(errJson.message || 'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard.');
       }
-    } catch (err: any) {
-      if (err.message && err.message.includes('GEMINI_API_KEY')) throw err;
-      console.warn("Backend /api/ai/diagnose note, attempting client fallback:", err.message);
+      throw new Error(errJson.message || `Plant diagnosis failed with HTTP ${res.status}`);
     }
   }
 
@@ -554,7 +551,21 @@ function getLocalAgronomistFallback(
       reply = `Greenhouse thermal management: Maintain ambient canopy temperature between 22°C and 28°C for optimal pollination and fruit set. When temperatures exceed 30°C, trigger automated roof vents and circulation fans to evacuate the hot ceiling layer and prevent flower blossom abortion.`;
     }
   }
-  // 6. General Agricultural Guidance
+  // 6. Conversational continuation (go on, continue, next steps)
+  else if (m === 'go on' || m === 'continue' || m === 'next' || m === 'more' || m.startsWith('go on') || m.startsWith('continue')) {
+    if (languageId === 'pcm') {
+      reply = `To continue on your ${crop}: Next key step na to verify your automated watering schedule (6:30am - 8:30am), check that the sub-canopy get good air flow, and look for any early yellowing under the leaves. Wetin specifically you wan make we examine next?`;
+    } else if (languageId === 'ha') {
+      reply = `Ci gaba da bayani kan ${crop}: Mataki na gaba shi ne duba yanayin shigar iska a greenhouse, tabbatar da cewa ma'aunin zafi bai haura 28°C ba, da kuma duba ƙasan ganye don tabbatar da babu kwari. Wane bangare kake so mu yi karin bayani a kansa?`;
+    } else if (languageId === 'yo') {
+      reply = `Láti tẹ̀síwájú lórí ${crop}: Àwọn ìgbésẹ̀ tó kàn ni láti ṣàyẹ̀wò ètò omi lílọ (6:30am - 8:30am), rí i dájú pé afẹ́fẹ́ ń wọlé dáadáa, kí o sì yẹ abẹ́ ewé wò fún àrùn. Apá wo ni o fẹ́ kí a sọ̀rọ̀ lé lórí síi?`;
+    } else if (languageId === 'ig') {
+      reply = `Iji gaa n'ihu na ${crop}: Nzọụkwụ ndị ọzọ dị mkpa gụnyere ịhụ na mmiri na-agba n'oge kwesịrị ekwesị, ịhụ na ikuku na-eku nke ọma na greenhouse, na inyocha akwụkwọ maka nje. Kedu akụkụ ị ga-achọ ka anyị kwurịtakwuo?`;
+    } else {
+      reply = `Continuing with ${crop} management: Next critical measures include: 1) Verifying automated drip cycle delivers 50–65% soil moisture, 2) Ensuring greenhouse vents open when temperatures exceed 28°C, and 3) Inspecting crown foliage for early blight. Which specific parameter would you like to drill into?`;
+    }
+  }
+  // 7. General Agricultural Guidance
   else {
     if (languageId === 'ha') {
       reply = `Masanin EDENS AI na kula da yanayin ${crop} ɗinka. Don samun kyakkyawan amfani, kula da daidaita ruwa, zafin daki, da kuma bincika ganyaye akai-akai don gano alamun cuta ko kwari da wuri.`;
@@ -586,6 +597,9 @@ export async function consultAgronomist(
     temperature?: number;
     humidity?: number;
     soilMoisture?: number;
+    dataSource?: string;
+    isStale?: boolean;
+    lastSeen?: string;
   }
 ): Promise<string> {
   const isBrowser = typeof window !== 'undefined' && typeof window.fetch === 'function';
@@ -619,8 +633,10 @@ export async function consultAgronomist(
       if (fetchErr.message && (fetchErr.message.includes('GEMINI_API_KEY') || fetchErr.message.includes('Render') || fetchErr.message.includes('unconfigured'))) {
         throw fetchErr;
       }
-      console.warn("Backend chat endpoint note, falling back to local agronomist knowledge:", fetchErr.message);
-      return getLocalAgronomistFallback(message, languageId, contextData?.cropType, fetchErr.message);
+      console.warn("Backend chat endpoint unreachable, using explicit offline knowledge base:", fetchErr.message);
+      const fallbackText = getLocalAgronomistFallback(message, languageId, contextData?.cropType, fetchErr.message);
+      // Explicitly label the fallback so it is NEVER silently presented as a live Gemini response
+      return `[Offline Knowledge Base Advisory — Live Gemini AI Unreachable: ${fetchErr.message || 'Network error'}]\n\n${fallbackText}`;
     }
   }
 

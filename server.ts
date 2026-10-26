@@ -883,22 +883,36 @@ app.post('/api/ai/chat', async (req, res) => {
 
   const langInfo = NIGERIAN_LANG_NAMES[languageId] || NIGERIAN_LANG_NAMES['pcm'];
 
-  const systemInstruction = `You are EDENS AI, an expert autonomous agricultural assistant and botanist for smart greenhouse farming in Nigeria and West Africa, powered by RA.
-You have native, fluent fluency in all Nigerian languages: Hausa, Igbo, Yoruba, Nigerian Pidgin, Fulfulde, Tiv, Efik, and English.
+  const systemInstruction = `You are EDENS AI, the dedicated autonomous agricultural intelligence engine and expert agronomist for the EDENS smart greenhouse system, powered by RA.
+You have fluent mastery of Nigerian languages: Hausa, Igbo, Yoruba, Nigerian Pidgin, Fulfulde, Tiv, Efik, and English.
 
+COMMUNICATION REQUIREMENTS:
 The farmer wants to communicate with you in: ${langInfo.name} (${langInfo.native}) [Region: ${langInfo.region}].
-ALWAYS reply directly, warmly, and thoroughly in ${langInfo.name}.
-If the user speaks in Nigerian Pidgin, respond in cheerful, knowledgeable Nigerian Pidgin.
-If the user speaks in Hausa, respond in respectful, accurate Harshen Hausa.
-If the user speaks in Yoruba, respond in respectful, rich Èdè Yorùbá.
-If the user speaks in Igbo, respond in clear, supportive Asụsụ Igbo.
-Provide practical advice with local Nigerian agricultural realities in mind: organic pest remedies (e.g. Dongoyaro/Neem extract, wood ash, garlic spray), soil care, watering schedules, greenhouse ventilation, solar power considerations, and market-ready crop health.
+- ALWAYS reply directly, warmly, and thoroughly in ${langInfo.name}.
+- If the user speaks in Nigerian Pidgin, respond in cheerful, knowledgeable Nigerian Pidgin.
+- If the user speaks in Hausa, respond in respectful, accurate Harshen Hausa.
+- If the user speaks in Yoruba, respond in respectful, rich Èdè Yorùbá.
+- If the user speaks in Igbo, respond in clear, supportive Asụsụ Igbo.
+- Provide practical advice with local Nigerian agricultural realities: organic pest remedies (Dongoyaro/Neem extract, wood ash, garlic spray), soil care, watering schedules, greenhouse ventilation, solar power, and harvest readiness.
 
-${contextData ? `Current Greenhouse telemetry context:
-- Monitored Crop: ${contextData.cropType || 'Vegetables'}
-- Temp: ${contextData.temperature ?? 24}°C
-- Humidity: ${contextData.humidity ?? 65}%
-- Soil Moisture: ${contextData.soilMoisture ?? 50}%` : ''}`;
+HARDWARE & ARCHITECTURE INTEGRATION AWARENESS:
+- You are directly integrated into the EDENS AI physical greenhouse hardware platform:
+  * Main ESP32 Controller: monitors environmental sensors (temperature, relative humidity, soil moisture, sunlight, rain sensor, reservoir water level, battery voltage) and controls actuators (exhaust fan, irrigation pump, roof vents, thermal heater, peltier cooling, grow lights).
+  * ESP32-CAM: captures high-resolution botanical frames pushed to the server endpoint (POST /api/camera/upload).
+  * Firmware Safety Interlocks: Rain vs Roof Lock (prevents rain entering vents), Dry-Run Pump Lock (reservoir < 10%), Thermal Heater Lock (> 32°C).
+- If the farmer explicitly asks whether you have direct hardware integration, confirm that you are the central AI brain of the EDENS AI smart greenhouse system, explain the hardware integration status, and reference the current telemetry source (${contextData?.dataSource || 'LIVE_TELEMETRY'}) and readings. Never claim you are a detached chatbot without physical sensors.
+
+CONVERSATION & CONTINUATION HANDLING:
+- If the farmer's prompt is a brief continuation request such as "go on", "continue", "tell me more", "explain further", or "what next", DO NOT restart with a generic greeting or welcome message. Look at the previous turns in the conversation history and continue providing detailed, actionable agricultural advice on the topic previously being discussed.
+
+${contextData ? `LIVE GREENHOUSE TELEMETRY CONTEXT:
+- Data Source: ${contextData.dataSource || 'TELEMETRY'} ${contextData.isStale ? '(Cached/Stale data)' : '(Fresh reading)'}
+- Monitored Crop: ${contextData.cropType || 'Greenhouse Crops'}
+- Temperature: ${contextData.temperature ?? 24}°C
+- Relative Humidity: ${contextData.humidity ?? 65}%
+- Soil Moisture: ${contextData.soilMoisture ?? 50}%
+${contextData.actuators ? `- Active Actuators: ${JSON.stringify(contextData.actuators)}` : ''}
+${contextData.interlocks ? `- Safety Interlocks: ${JSON.stringify(contextData.interlocks)}` : ''}` : ''}`;
 
   // Multi-turn turn sanitization for Gemini
   const validHistory: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
@@ -919,11 +933,17 @@ ${contextData ? `Current Greenhouse telemetry context:
     }
   }
 
+  // Ensure history ends with 'model' so appending userTurn alternates correctly
   if (validHistory.length > 0 && validHistory[validHistory.length - 1].role === 'user') {
     validHistory.pop();
   }
 
-  const slicedHistory = validHistory.slice(-6);
+  // Take the most recent turns ensuring first item is 'user'
+  let slicedHistory = validHistory.slice(-6);
+  while (slicedHistory.length > 0 && slicedHistory[0].role !== 'user') {
+    slicedHistory.shift();
+  }
+
   const userTurn = {
     role: 'user' as const,
     parts: [{ text: `[Speaking in ${langInfo.name}]: ${message.trim()}` }]
@@ -950,7 +970,8 @@ ${contextData ? `Current Greenhouse telemetry context:
       success: true,
       reply: replyText,
       languageId,
-      languageName: langInfo.name
+      languageName: langInfo.name,
+      dataSource: contextData?.dataSource || 'REAL_HARDWARE'
     });
   } catch (err: any) {
     console.error('Gemini chat error on server:', err.message);
@@ -989,6 +1010,16 @@ app.post('/api/ai/diagnose', async (req, res) => {
     } else {
       cleanBase64 = cleanBase64.split(',')[1] || cleanBase64;
     }
+  }
+
+  // Validate image MIME type: Gemini only supports raster images (jpeg, png, webp)
+  const baseMime = mimeType.split(';')[0].toLowerCase();
+  const allowedImageMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  if (!allowedImageMimes.includes(baseMime)) {
+    return res.status(400).json({
+      error: 'INVALID_IMAGE_FORMAT',
+      message: `Image format "${baseMime}" is not supported for computer vision diagnosis. Please provide a JPEG, PNG, or WebP photo.`
+    });
   }
 
   const langInfo = NIGERIAN_LANG_NAMES[languageId] || NIGERIAN_LANG_NAMES['ha'];

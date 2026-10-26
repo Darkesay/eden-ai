@@ -56,6 +56,7 @@ import {
   MicrophoneAccessError,
   validateAudioFile
 } from '../lib/audio';
+import { hardwareService } from '../lib/hardwareService';
 import { format } from 'date-fns';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -89,11 +90,40 @@ export default function AiLab() {
   const humVal = useStoreValue('humidity', 65.0);
   const soilVal = useStoreValue('soilMoisture', 52.0);
   const cropType = useStoreValue('cropType', 'Tomato (Tumatir / Tòmátì)');
+  const hardwareDataSource = useStoreValue<string>('hardware_dataSource', 'SIMULATED');
+  const hardwareLastSeen = useStoreValue('hardware_lastSeen', '');
+  const isTelemetryStale = hardwareLastSeen ? (Date.now() - new Date(hardwareLastSeen).getTime()) > 8000 : true;
 
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<PlantAnalysisResult | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const historyTable = useStoreTable('ai_history');
+
+  const [latestUploadedFrame, setLatestUploadedFrame] = useState<{
+    exists: boolean;
+    id?: string;
+    timestamp?: string;
+    url?: string;
+    sizeBytes?: number;
+    base64?: string;
+  } | null>(null);
+  const [customImagePreview, setCustomImagePreview] = useState<string | null>(null);
+  const plantImageInputRef = useRef<HTMLInputElement>(null);
+
+  const fetchLatestFrame = async () => {
+    try {
+      const frame = await hardwareService.getLatestUploadedCameraImage();
+      if (frame && frame.exists) {
+        setLatestUploadedFrame(frame);
+      }
+    } catch (_) {}
+  };
+
+  useEffect(() => {
+    fetchLatestFrame();
+    const interval = setInterval(fetchLatestFrame, 8000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Language selection: Default to Nigerian Pidgin or Hausa / Yoruba / Igbo
   const [selectedLangId, setSelectedLangId] = useState<string>(() => {
@@ -190,23 +220,103 @@ export default function AiLab() {
 
   // Capture and analyze plant image with active Nigerian language
   const handleCapture = async () => {
-    if (!imgRef.current) return;
+    let imageToAnalyze: string | null = null;
+
+    if (customImagePreview) {
+      imageToAnalyze = customImagePreview;
+    } else if (latestUploadedFrame?.exists && latestUploadedFrame?.base64) {
+      imageToAnalyze = latestUploadedFrame.base64;
+    } else if (imgRef.current && camUrl) {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = imgRef.current.width || 640;
+        canvas.height = imgRef.current.height || 480;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(imgRef.current, 0, 0, canvas.width, canvas.height);
+          imageToAnalyze = canvas.toDataURL('image/jpeg');
+        }
+      } catch (canvasErr: any) {
+        console.warn("Canvas stream capture failed:", canvasErr.message);
+      }
+    }
+
+    if (!imageToAnalyze) {
+      alert(
+        activeLanguage.id === 'ha'
+          ? 'Babu hoton shuka da aka samu. Da fatan za a loda hoton ganye ko a tura hoto daga ESP32-CAM zuwa /api/camera/upload.'
+          : activeLanguage.id === 'pcm'
+          ? 'No plant image dey available. Abeg upload a leaf picture or push a frame from your ESP32-CAM to /api/camera/upload.'
+          : 'No plant image available. Please upload a leaf photo or connect your ESP32-CAM to push a frame to /api/camera/upload.'
+      );
+      return;
+    }
+
     setAnalyzing(true);
     setResult(null);
     stopAllAudio();
     setCurrentPlayingId(null);
 
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = imgRef.current.width || 640;
-      canvas.height = imgRef.current.height || 480;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(imgRef.current, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/jpeg');
+      const res = await analyzePlantImage(imageToAnalyze, selectedLangId);
+      setResult(res);
+      
+      store.addRow('ai_history', {
+        timestamp: new Date().toISOString(),
+        species: res.species || 'Unknown',
+        speciesLocal: res.speciesLocal || res.species || 'Unknown',
+        healthStatus: res.healthStatus || 'N/A',
+        healthStatusLocal: res.healthStatusLocal || res.healthStatus || 'N/A',
+        symptoms: res.symptoms || 'N/A',
+        cause: res.cause || 'N/A',
+        recommendation: res.recommendation || 'N/A',
+        language: activeLanguage.name,
+        image: imageToAnalyze
+      });
+
+      // Auto announce summary in Nigerian language if auto-speak is enabled
+      if (autoSpeak && (res.audioSummary || res.recommendation)) {
+        setTimeout(() => {
+          const speechText = `${res.speciesLocal || res.species}. ${res.healthStatusLocal || res.healthStatus}. ${res.audioSummary || res.recommendation}`;
+          playSpeech(speechText, 'diag-auto');
+        }, 600);
+      }
+    } catch (e: any) {
+      console.error(e);
+      alert('EDENS AI diagnostic service note: ' + (e as Error).message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const handlePlantPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please select a valid image file (JPEG, PNG, or WebP).');
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Plant photo exceeds 10MB limit. Please upload an image under 10MB.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result as string;
+      setCustomImagePreview(dataUrl);
+
+      setAnalyzing(true);
+      setResult(null);
+      stopAllAudio();
+      setCurrentPlayingId(null);
+
+      try {
         const res = await analyzePlantImage(dataUrl, selectedLangId);
         setResult(res);
-        
+
         store.addRow('ai_history', {
           timestamp: new Date().toISOString(),
           species: res.species || 'Unknown',
@@ -220,20 +330,20 @@ export default function AiLab() {
           image: dataUrl
         });
 
-        // Auto announce summary in Nigerian language if auto-speak is enabled
         if (autoSpeak && (res.audioSummary || res.recommendation)) {
           setTimeout(() => {
             const speechText = `${res.speciesLocal || res.species}. ${res.healthStatusLocal || res.healthStatus}. ${res.audioSummary || res.recommendation}`;
             playSpeech(speechText, 'diag-auto');
           }, 600);
         }
+      } catch (err: any) {
+        console.error("Leaf photo diagnosis error:", err);
+        alert(`Plant diagnosis failed: ${err.message}`);
+      } finally {
+        setAnalyzing(false);
       }
-    } catch (e) {
-      console.error(e);
-      alert('EDENS AI diagnostic service is currently unavailable. ' + (e as Error).message);
-    } finally {
-      setAnalyzing(false);
-    }
+    };
+    reader.readAsDataURL(file);
   };
 
   // Interactive Agronomist Chat
@@ -582,15 +692,19 @@ export default function AiLab() {
     setVoiceState('waiting_ai');
 
     try {
+      const currentHistory = [...chatMessages, userMsg];
       const reply = await consultAgronomist(
         promptToSend.trim(),
         selectedLangId,
-        chatMessages,
+        currentHistory,
         {
           cropType: String(cropType),
           temperature: Number(tempVal),
           humidity: Number(humVal),
-          soilMoisture: Number(soilVal)
+          soilMoisture: Number(soilVal),
+          dataSource: hardwareDataSource,
+          isStale: isTelemetryStale,
+          lastSeen: hardwareLastSeen
         }
       );
 
@@ -766,9 +880,29 @@ export default function AiLab() {
               {activeLanguage.name} Mode
             </div>
           </CardHeader>
-          <CardContent className="flex-1 space-y-6 p-6">
+          <CardContent className="flex-1 space-y-4 p-6">
              <div className="w-full aspect-video bg-[#050505] rounded-2xl overflow-hidden relative border border-[#222] shadow-[inset_0_0_50px_rgba(0,0,0,0.8)]">
-               {camUrl ? (
+               {customImagePreview ? (
+                 <div className="relative w-full h-full">
+                   <img ref={imgRef} src={customImagePreview} alt="Uploaded Leaf Photo" className="w-full h-full object-contain" />
+                   <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-blue-500/50 text-[10px] font-mono text-blue-400 font-bold">
+                     <Leaf size={12} /> USER UPLOADED LEAF PHOTO
+                   </div>
+                 </div>
+               ) : latestUploadedFrame?.exists && latestUploadedFrame?.url ? (
+                 <div className="relative w-full h-full">
+                   <img ref={imgRef} src={latestUploadedFrame.url} alt="ESP32-CAM Uploaded Frame" className="w-full h-full object-cover" />
+                   <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/85 backdrop-blur-md px-3 py-1.5 rounded-full border border-emerald-500/50 text-[10px] font-mono text-emerald-400 font-bold">
+                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                     REAL_HARDWARE ESP32-CAM · {Math.round((latestUploadedFrame.sizeBytes || 0) / 1024)} KB
+                   </div>
+                   {latestUploadedFrame.timestamp && (
+                     <div className="absolute bottom-3 left-3 bg-black/80 backdrop-blur-md px-2.5 py-1 rounded-lg text-[9px] font-mono text-gray-300">
+                       Captured: {format(new Date(latestUploadedFrame.timestamp), 'yyyy-MM-dd HH:mm:ss')}
+                     </div>
+                   )}
+                 </div>
+               ) : camUrl ? (
                  <img ref={imgRef} src={camUrl} crossOrigin="anonymous" alt="ESP32-CAM Stream" className="w-full h-full object-cover mix-blend-luminosity hover:mix-blend-normal transition-all duration-700" />
                ) : (
                  <HardwareSetupGuide variant="custom">
@@ -777,23 +911,54 @@ export default function AiLab() {
                          <div className="absolute inset-0 bg-[#14B8A6]/20 animate-pulse opacity-50" />
                          <Camera size={32} className="text-[#14B8A6] relative z-10 opacity-80 drop-shadow-[0_0_5px_rgba(20,184,166,0.5)]" />
                       </div>
-                      <span className="tracking-widest opacity-100 font-bold text-white uppercase text-sm drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]">Visual Stream Offline</span>
-                      <span className="opacity-60 max-w-sm mb-2 text-xs leading-relaxed">Connect an ESP32-CAM to enable live plant monitoring and EDENS AI analysis in your native tongue.</span>
-                      <span className="text-[#14B8A6] text-[10px] font-bold uppercase tracking-widest mt-2 border border-[#14B8A6]/30 bg-[#14B8A6]/10 px-3 py-1.5 rounded-full drop-shadow-[0_0_5px_rgba(20,184,166,0.3)]">Click to View Setup Guide</span>
+                      <span className="tracking-widest opacity-100 font-bold text-white uppercase text-sm drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]">No Camera Frame Received Yet</span>
+                      <span className="opacity-60 max-w-sm mb-2 text-xs leading-relaxed">Awaiting ESP32-CAM upload at POST /api/camera/upload, or select a plant photo below for instant AI diagnosis.</span>
+                      <span className="text-[#14B8A6] text-[10px] font-bold uppercase tracking-widest mt-2 border border-[#14B8A6]/30 bg-[#14B8A6]/10 px-3 py-1.5 rounded-full drop-shadow-[0_0_5px_rgba(20,184,166,0.3)]">Click to View Hardware Guide</span>
                    </button>
                  </HardwareSetupGuide>
                )}
                <div className="absolute inset-0 pointer-events-none bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPgo8cmVjdCB3aWR0aD0iNCIgaGVpZ2h0PSIxIiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMDUpIi8+Cjwvc3ZnPg==')] opacity-40 mix-blend-overlay" />
              </div>
 
-             <Button 
-               onClick={handleCapture}
-               disabled={!camUrl || analyzing}
-               className="w-full bg-[#14B8A6] hover:bg-[#0D9488] text-white font-bold tracking-wide h-14 rounded-2xl shadow-[0_4px_20px_rgba(20,184,166,0.3)] border-0 cursor-pointer transition-all"
-             >
-               <Camera className="mr-2" size={20} /> 
-               {analyzing ? `EDENS AI ń ṣe àyẹ̀wò...` : `Capture Frame & Diagnose in ${activeLanguage.name}`}
-             </Button>
+             {/* Action bar: Diagnose image, Upload Photo, Refresh */}
+             <div className="flex flex-col sm:flex-row gap-3">
+               <Button 
+                 onClick={handleCapture}
+                 disabled={analyzing || (!latestUploadedFrame?.exists && !customImagePreview && !camUrl)}
+                 className="flex-1 bg-[#14B8A6] hover:bg-[#0D9488] text-white font-bold tracking-wide h-13 rounded-2xl shadow-[0_4px_20px_rgba(20,184,166,0.3)] border-0 cursor-pointer transition-all"
+               >
+                 <Camera className="mr-2" size={18} /> 
+                 {analyzing ? `Analyzing plant frame...` : `Diagnose Image in ${activeLanguage.name}`}
+               </Button>
+
+               <input 
+                 type="file" 
+                 ref={plantImageInputRef}
+                 onChange={handlePlantPhotoUpload}
+                 accept="image/jpeg,image/png,image/webp" 
+                 className="hidden" 
+               />
+
+               <Button 
+                 type="button"
+                 onClick={() => plantImageInputRef.current?.click()}
+                 disabled={analyzing}
+                 variant="outline"
+                 className="h-13 rounded-2xl border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5 font-semibold text-xs px-4"
+               >
+                 <Upload className="mr-1.5" size={16} /> Upload Photo
+               </Button>
+
+               <Button 
+                 type="button"
+                 onClick={fetchLatestFrame}
+                 title="Check for new ESP32-CAM upload"
+                 variant="outline"
+                 className="h-13 w-13 p-0 rounded-2xl border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5 flex items-center justify-center shrink-0"
+               >
+                 <RefreshCw size={16} />
+               </Button>
+             </div>
           </CardContent>
         </Card>
 
@@ -1043,9 +1208,20 @@ export default function AiLab() {
               </select>
             </div>
 
-            <div className="hidden xl:flex items-center gap-1.5 text-xs font-mono opacity-70 bg-black/5 dark:bg-white/5 px-3 py-1.5 rounded-xl border border-black/5 dark:border-white/5">
-              <Sparkles size={13} className="text-[#10B981]" />
-              <span>{Number(tempVal).toFixed(1)}°C · {Number(humVal).toFixed(0)}% Hum</span>
+            <div className="flex items-center gap-2 text-xs font-mono bg-black/5 dark:bg-white/5 px-3 py-1.5 rounded-xl border border-black/10 dark:border-white/10">
+              <span className={cn(
+                "w-2 h-2 rounded-full shrink-0",
+                hardwareDataSource === 'REAL_HARDWARE' ? "bg-emerald-500" :
+                hardwareDataSource === 'CACHED' ? "bg-amber-500 animate-pulse" :
+                hardwareDataSource === 'SIMULATED' ? "bg-blue-500" : "bg-red-500"
+              )} />
+              <span className="font-bold text-[10px] uppercase tracking-wider text-foreground">
+                {hardwareDataSource}
+                {isTelemetryStale && hardwareDataSource === 'REAL_HARDWARE' ? ' (STALE)' : ''}
+              </span>
+              <span className="opacity-70 text-[10px] hidden sm:inline">
+                {Number(tempVal).toFixed(1)}°C · {Number(humVal).toFixed(0)}% Hum · {Number(soilVal).toFixed(0)}% Soil
+              </span>
             </div>
           </div>
         </CardHeader>

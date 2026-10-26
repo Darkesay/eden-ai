@@ -1,16 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { store } from '../lib/store';
 import { hardwareService } from '../lib/hardwareService';
-import { GoogleGenAI, Type } from '@google/genai';
-
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || (typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_GEMINI_API_KEY || '') : ''),
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
-  }
-});
+import { analyzePlantImage } from '../lib/gemini';
 
 export function useVisionAgent() {
   const isRunning = useRef(false);
@@ -66,137 +57,41 @@ export function useVisionAgent() {
           }
         }
 
-        // Gemini only accepts raster formats (jpeg, png, webp, heic, heif).
-        // If an SVG or unsupported format is supplied, rasterize it or use valid JPEG
-        if (mimeType.includes('svg') || !mimeType.startsWith('image/')) {
-          mimeType = 'image/jpeg';
-          rawBase64 = '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=';
+        const analysisResult = await analyzePlantImage(snapshotResult.base64Image, 'en');
+        const now = new Date().toISOString();
+
+        store.setValue('agent_VisionAgent_lastRun', now);
+        store.setValue('plantHealthStatus', analysisResult.healthStatus);
+        store.setValue('lastVisionAnalysis', JSON.stringify({
+          species: analysisResult.species,
+          healthStatus: analysisResult.healthStatus,
+          foliageCondition: analysisResult.symptoms,
+          cause: analysisResult.cause,
+          recommendedAction: analysisResult.recommendation,
+          timestamp: now,
+          dataSource: snapshotResult.dataSource,
+          isUploaded: Boolean(snapshotResult.isUploaded),
+          imageId: snapshotResult.imageId || null
+        }));
+
+        // Mark backend uploaded image analyzed if applicable
+        if (snapshotResult.isUploaded && snapshotResult.imageId) {
+          await hardwareService.markCameraImageAnalyzed(snapshotResult.imageId, analysisResult);
+          store.setValue('cameraUploadActive', true);
+          store.setValue('cameraLastAnalyzedFrame', snapshotResult.imageId);
         }
 
-        const temp = Number(store.getValue('temperature') ?? 24);
-        const hum = Number(store.getValue('humidity') ?? 60);
-        const soil = Number(store.getValue('soilMoisture') ?? 50);
-        const activeCrop = (store.getValue('cropType') as string) || 'Tomato';
+        const sourceLabel = snapshotResult.isUploaded 
+          ? 'REAL ESP32-CAM UPLOAD'
+          : snapshotResult.dataSource === 'SIMULATED' 
+            ? 'SIMULATION' 
+            : 'REAL HARDWARE';
 
-        // Prepare grounded prompt with current telemetry
-        const textPrompt = `You are EDENS AI Botanical Vision Agent, inspecting greenhouse foliage for ${activeCrop}.
-Current Greenhouse Telemetry (${snapshotResult.dataSource}):
-- Temperature: ${temp}°C
-- Humidity: ${hum}%
-- Soil Moisture: ${soil}%
-
-Analyze this camera frame carefully:
-1. Assess plant foliage vigor, leaf color, turgidity, and visible anomalies (chlorosis, necrosis, mildew, pests).
-2. Correlate with current environmental telemetry.
-3. Recommend safe agricultural actions (e.g. increase ventilation, maintain irrigation, inspect for aphids).
-4. Clearly state health status: "Healthy" | "Mild stress" | "Severe stress" | "Requires attention".
-
-Return JSON with exact fields:
-{
-  "healthStatus": "Healthy" | "Mild stress" | "Severe stress" | "Requires attention",
-  "foliageCondition": "string (1-2 concise sentences)",
-  "recommendedAction": "string (1 safe recommendation)",
-  "confidenceScore": number (0 to 100)
-}`;
-
-        let response: any;
-        try {
-          response = await ai.models.generateContent({
-            model: 'gemini-3.8-flash',
-            contents: [
-              {
-                role: 'user',
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: mimeType === 'image/png' || mimeType === 'image/webp' ? mimeType : 'image/jpeg',
-                      data: rawBase64
-                    }
-                  },
-                  {
-                    text: textPrompt
-                  }
-                ]
-              }
-            ],
-            config: {
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  healthStatus: { type: Type.STRING },
-                  foliageCondition: { type: Type.STRING },
-                  recommendedAction: { type: Type.STRING },
-                  confidenceScore: { type: Type.NUMBER }
-                },
-                required: ["healthStatus", "foliageCondition", "recommendedAction", "confidenceScore"]
-              }
-            }
-          });
-        } catch (genError: any) {
-          // If Gemini rejected image decoding, fallback to telemetry-grounded evaluation
-          console.warn('VisionAgent multimodal analysis error, falling back to telemetry-assisted analysis:', genError.message);
-          response = await ai.models.generateContent({
-            model: 'gemini-3.8-flash',
-            contents: [
-              {
-                role: 'user',
-                parts: [
-                  {
-                    text: `${textPrompt}\n\nNote: Visual sensor frame was degraded or unparseable. Assess plant condition based on current telemetry readings and typical ${activeCrop} growing requirements.`
-                  }
-                ]
-              }
-            ],
-            config: {
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  healthStatus: { type: Type.STRING },
-                  foliageCondition: { type: Type.STRING },
-                  recommendedAction: { type: Type.STRING },
-                  confidenceScore: { type: Type.NUMBER }
-                },
-                required: ["healthStatus", "foliageCondition", "recommendedAction", "confidenceScore"]
-              }
-            }
-          });
-        }
-
-        if (response?.text) {
-          const result = JSON.parse(response.text.trim());
-          const now = new Date().toISOString();
-
-          store.setValue('agent_VisionAgent_lastRun', now);
-          store.setValue('plantHealthStatus', result.healthStatus);
-          store.setValue('lastVisionAnalysis', JSON.stringify({
-            ...result,
-            timestamp: now,
-            dataSource: snapshotResult.dataSource,
-            isUploaded: Boolean(snapshotResult.isUploaded),
-            imageId: snapshotResult.imageId || null
-          }));
-
-          // Mark backend uploaded image analyzed if applicable
-          if (snapshotResult.isUploaded && snapshotResult.imageId) {
-            await hardwareService.markCameraImageAnalyzed(snapshotResult.imageId, result);
-            store.setValue('cameraUploadActive', true);
-            store.setValue('cameraLastAnalyzedFrame', snapshotResult.imageId);
-          }
-
-          const sourceLabel = snapshotResult.isUploaded 
-            ? 'REAL ESP32-CAM UPLOAD'
-            : snapshotResult.dataSource === 'SIMULATED' 
-              ? 'SIMULATION' 
-              : 'REAL HARDWARE';
-
-          store.setRow('activityLog', Date.now().toString() + 'va', {
-            timestamp: now,
-            type: 'agent',
-            message: `📸 Vision Agent [${sourceLabel}]: ${result.healthStatus} (${result.confidenceScore}% conf) — ${result.foliageCondition} Action: ${result.recommendedAction}`
-          });
-        }
+        store.setRow('activityLog', Date.now().toString() + 'va', {
+          timestamp: now,
+          type: 'agent',
+          message: `📸 Vision Agent [${sourceLabel}]: ${analysisResult.species} — ${analysisResult.healthStatus}. Symptoms: ${analysisResult.symptoms}. Action: ${analysisResult.recommendation}`
+        });
       } catch (err: any) {
         console.warn("VisionAgent cycle warning:", err.message);
         store.setRow('activityLog', Date.now().toString() + 'va_warn', {
