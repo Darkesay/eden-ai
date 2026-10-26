@@ -1,10 +1,12 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
-import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
+import { CameraImageStore } from './src/server/cameraStorage';
+import { registerCameraRoutes } from './src/server/cameraAcquisition';
+import { createVisionDiagnosisHandler } from './src/server/visionDiagnosis';
 
 dotenv.config();
 
@@ -17,58 +19,16 @@ const isProd = process.env.NODE_ENV === 'production';
 const MAX_UPLOAD_MB = parseInt(process.env.CAMERA_MAX_UPLOAD_MB || '10', 10);
 const MAX_AUDIO_MB = parseInt(process.env.AUDIO_MAX_UPLOAD_MB || '15', 10);
 
-// Camera Upload Storage Directories (supports Render Persistent Disks via CAMERA_STORAGE_PATH)
-// Created lazily on actual upload so empty runtime folders are not generated on startup.
-const STORAGE_BASE = process.env.CAMERA_STORAGE_PATH || process.env.UPLOADS_DIR || path.join(process.cwd(), 'uploads');
-const UPLOAD_DIR = path.join(STORAGE_BASE, 'camera');
-const HISTORY_DIR = path.join(UPLOAD_DIR, 'history');
-
-// In-Memory Cache of Latest Uploaded Camera Frame
-export interface UploadedCameraFrame {
-  id: string;
-  timestamp: string;
-  sizeBytes: number;
-  mimeType: string;
-  buffer: Buffer;
-  base64DataUri: string;
-  url: string;
-  clientIp?: string;
-  analyzed: boolean;
-  analysis?: any;
-}
-
-let latestUploadedFrame: UploadedCameraFrame | null = null;
-let totalCameraUploadsCount = 0;
-
-// Restore persistent frame from disk if available
-try {
-  const metaPath = path.join(UPLOAD_DIR, 'metadata.json');
-  const latestImgPath = path.join(UPLOAD_DIR, 'latest.jpg');
-  if (fs.existsSync(metaPath) && fs.existsSync(latestImgPath)) {
-    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-    const buf = fs.readFileSync(latestImgPath);
-    latestUploadedFrame = {
-      ...meta,
-      buffer: buf,
-      base64DataUri: `data:image/jpeg;base64,${buf.toString('base64')}`
-    };
-    console.log(`📸 Restored latest camera frame from disk (${latestUploadedFrame?.sizeBytes} bytes, ${latestUploadedFrame?.timestamp})`);
-  }
-} catch (e) {
-  // Clean initialization
-}
+// Dedicated Camera Image Storage Layer (lazy disk writes via CAMERA_STORAGE_PATH)
+export const cameraImageStore = new CameraImageStore({
+  maxUploadBytes: MAX_UPLOAD_MB * 1024 * 1024
+});
 
 // --------------------------------------------------------------------
 // BODY PARSERS
 // --------------------------------------------------------------------
 
-// 1. Raw body parser specifically for camera uploads (handles raw binary JPEG, octet-stream, and multipart)
-app.use('/api/camera/upload', express.raw({
-  type: () => true, // capture raw buffer regardless of content-type header for custom validation
-  limit: `${MAX_UPLOAD_MB}mb`
-}));
-
-// 2. Raw body parser for audio transcription direct binary stream uploads
+// 1. Raw body parser for audio transcription direct binary stream uploads
 app.use('/api/ai/transcribe', (req, res, next) => {
   const cType = (req.headers['content-type'] || '').toLowerCase();
   if (cType.startsWith('audio/') || cType.includes('octet-stream')) {
@@ -77,9 +37,21 @@ app.use('/api/ai/transcribe', (req, res, next) => {
   return next();
 });
 
-// 3. Standard JSON parser for API routes (allows voice note base64 payloads up to MAX_AUDIO_MB)
-app.use(express.json({ limit: `${MAX_AUDIO_MB + 5}mb` }));
-app.use(express.urlencoded({ extended: true, limit: `${MAX_AUDIO_MB + 5}mb` }));
+// 2. Standard JSON & URL-encoded parsers (bypassed for binary /api/camera/upload)
+const jsonParser = express.json({ limit: `${MAX_AUDIO_MB + 5}mb` });
+const urlencodedParser = express.urlencoded({ extended: true, limit: `${MAX_AUDIO_MB + 5}mb` });
+
+app.use((req, res, next) => {
+  if (req.path === '/api/camera/upload') return next();
+  return jsonParser(req, res, next);
+});
+app.use((req, res, next) => {
+  if (req.path === '/api/camera/upload') return next();
+  return urlencodedParser(req, res, next);
+});
+
+// 3. Register Dedicated ESP32-CAM Acquisition & Retrieval Routes
+registerCameraRoutes(app, cameraImageStore);
 
 // --------------------------------------------------------------------
 // SECURE HARDWARE INTEGRATION GATEWAY (CONTROLLER)
@@ -100,379 +72,7 @@ function getControllerBaseUrl(overrideHost?: string, overridePort?: number) {
   return host.replace(/\/$/, '');
 }
 
-function getCameraBaseUrl(overrideHost?: string, overridePort?: number, defaultPort: number = 80) {
-  let host = (overrideHost || process.env.HARDWARE_CAMERA_HOST || '').trim();
-  if (!host) return null;
-  if (!host.startsWith('http://') && !host.startsWith('https://')) {
-    host = `http://${host}`;
-  }
-  const envHttpPort = process.env.HARDWARE_CAMERA_HTTP_PORT
-    ? parseInt(process.env.HARDWARE_CAMERA_HTTP_PORT, 10)
-    : undefined;
-  const port = overridePort || envHttpPort || defaultPort;
-  if (port && port !== 80) {
-    const u = new URL(host);
-    u.port = port.toString();
-    return u.origin;
-  }
-  return host.replace(/\/$/, '');
-}
 
-function classifyCameraFrameState(timestampIso: string): {
-  ageSeconds: number;
-  status: 'ONLINE' | 'CACHED' | 'STALE';
-  dataSource: 'REAL_HARDWARE' | 'CACHED' | 'STALE';
-  isStale: boolean;
-} {
-  const parsedMs = new Date(timestampIso).getTime();
-  const ageSeconds = Number.isFinite(parsedMs)
-    ? Math.max(0, Math.round((Date.now() - parsedMs) / 1000))
-    : 999999;
-  if (ageSeconds <= 120) {
-    return { ageSeconds, status: 'ONLINE', dataSource: 'REAL_HARDWARE', isStale: false };
-  }
-  if (ageSeconds <= 600) {
-    return { ageSeconds, status: 'CACHED', dataSource: 'CACHED', isStale: false };
-  }
-  return { ageSeconds, status: 'STALE', dataSource: 'STALE', isStale: true };
-}
-
-// --------------------------------------------------------------------
-// ESP32 CAMERA UPLOAD ENDPOINT (PUSH MODEL)
-// --------------------------------------------------------------------
-
-/**
- * Helper to get configured camera secret from environment.
- * NEVER falls back to any hardcoded or default public secret.
- */
-function getCameraUploadSecret(): string {
-  return (process.env.CAMERA_UPLOAD_KEY || process.env.HARDWARE_API_KEY || '').trim();
-}
-
-/**
- * Validates camera authorization against the configured secret key.
- * Fails securely if the secret is unconfigured on the server.
- */
-function isCameraAuthorized(req: express.Request): { authorized: boolean; status: number; error: string; message: string } {
-  const configuredKey = getCameraUploadSecret();
-  if (!configuredKey) {
-    return {
-      authorized: false,
-      status: 503,
-      error: 'SERVER_MISCONFIGURED',
-      message: 'CAMERA_UPLOAD_KEY is not configured on the server. Camera uploads are rejected for security.'
-    };
-  }
-
-  // Accept credential from custom header, standard auth header, or query param
-  const incomingHeaderKey = (req.headers['x-camera-key'] || req.headers['x-api-key']) as string | undefined;
-  const authHeader = req.headers['authorization'];
-  let bearerKey: string | undefined;
-  if (authHeader) {
-    bearerKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
-  }
-  const queryKey = (req.query.token || req.query.key || req.query.auth) as string | undefined;
-
-  const keyToTest = (incomingHeaderKey || bearerKey || queryKey || '').trim();
-  if (!keyToTest) {
-    return {
-      authorized: false,
-      status: 401,
-      error: 'UNAUTHORIZED_CAMERA',
-      message: 'Authentication failed. ESP32-CAM or local relay must provide valid credential via X-Camera-Key header.'
-    };
-  }
-
-  if (keyToTest !== configuredKey) {
-    return {
-      authorized: false,
-      status: 401,
-      error: 'UNAUTHORIZED_CAMERA',
-      message: 'Invalid camera authentication credential provided.'
-    };
-  }
-
-  return { authorized: true, status: 200, error: '', message: '' };
-}
-
-/**
- * Extracts and validates JPEG bytes from buffer (handles both raw binary and multipart).
- */
-function extractJpegBuffer(bodyBuffer: Buffer): { buffer: Buffer; error?: string } {
-  if (!bodyBuffer || bodyBuffer.length === 0) {
-    return { buffer: Buffer.alloc(0), error: 'Empty payload received.' };
-  }
-
-  // Minimum JPEG file size (SOI marker + APP0 + DQT + SOF0 + DHT + SOS + EOI) is ~64-100 bytes
-  if (bodyBuffer.length < 32) {
-    return { buffer: Buffer.alloc(0), error: 'Payload too small to be a valid JPEG.' };
-  }
-
-  // Check for direct JPEG SOI marker (0xFF, 0xD8) at start
-  if (bodyBuffer[0] === 0xff && bodyBuffer[1] === 0xd8) {
-    return { buffer: bodyBuffer };
-  }
-
-  // If payload is multipart/form-data, find the embedded JPEG SOI marker (0xFF, 0xD8)
-  const soiIndex = bodyBuffer.indexOf(Buffer.from([0xff, 0xd8]));
-  if (soiIndex !== -1) {
-    // Find trailing EOI marker (0xFF, 0xD9)
-    const eoiIndex = bodyBuffer.lastIndexOf(Buffer.from([0xff, 0xd9]));
-    if (eoiIndex > soiIndex) {
-      const sliced = bodyBuffer.slice(soiIndex, eoiIndex + 2);
-      return { buffer: sliced };
-    }
-    // If no closing EOI marker found, slice from SOI onwards
-    const sliced = bodyBuffer.slice(soiIndex);
-    return { buffer: sliced };
-  }
-
-  return {
-    buffer: Buffer.alloc(0),
-    error: 'Payload does not contain valid JPEG magic bytes (0xFF, 0xD8). Expected raw image/jpeg binary stream.'
-  };
-}
-
-/**
- * POST /api/camera/upload
- * Primary intake endpoint for ESP32-CAM images.
- */
-app.post('/api/camera/upload', (req, res) => {
-  // 1. Authenticate Camera securely
-  const auth = isCameraAuthorized(req);
-  if (!auth.authorized) {
-    return res.status(auth.status).json({
-      error: auth.error,
-      message: auth.message,
-      requiredHeader: 'X-Camera-Key'
-    });
-  }
-
-  // 2. Validate Body Type & Content
-  if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-    return res.status(400).json({
-      error: 'INVALID_BODY',
-      message: 'Request body must be a binary JPEG image buffer.',
-      receivedType: typeof req.body
-    });
-  }
-
-  // 3. Extract and Validate JPEG Format
-  const { buffer: jpegBuffer, error: validationError } = extractJpegBuffer(req.body);
-  if (validationError || jpegBuffer.length === 0) {
-    return res.status(400).json({
-      error: 'INVALID_IMAGE_FORMAT',
-      message: validationError || 'Provided data is not a valid JPEG.'
-    });
-  }
-
-  // 4. Generate metadata & store image
-  const imageId = `cam_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-  const timestamp = new Date().toISOString();
-  const sizeBytes = jpegBuffer.length;
-  const base64DataUri = `data:image/jpeg;base64,${jpegBuffer.toString('base64')}`;
-  const clientIp = req.headers['x-forwarded-for'] as string || req.socket.remoteAddress || 'unknown';
-
-  totalCameraUploadsCount++;
-
-  const frameData: UploadedCameraFrame = {
-    id: imageId,
-    timestamp,
-    sizeBytes,
-    mimeType: 'image/jpeg',
-    buffer: jpegBuffer,
-    base64DataUri,
-    url: '/api/camera/latest.jpg',
-    clientIp,
-    analyzed: false
-  };
-
-  latestUploadedFrame = frameData;
-
-  // 5. Persist to Disk Storage
-  try {
-    fs.mkdirSync(HISTORY_DIR, { recursive: true });
-    const latestFilePath = path.join(UPLOAD_DIR, 'latest.jpg');
-    fs.writeFileSync(latestFilePath, jpegBuffer);
-
-    const historyFilePath = path.join(HISTORY_DIR, `${imageId}.jpg`);
-    fs.writeFileSync(historyFilePath, jpegBuffer);
-
-    const metaFilePath = path.join(UPLOAD_DIR, 'metadata.json');
-    fs.writeFileSync(metaFilePath, JSON.stringify({
-      id: imageId,
-      timestamp,
-      sizeBytes,
-      mimeType: 'image/jpeg',
-      url: '/api/camera/latest.jpg',
-      analyzed: false
-    }, null, 2));
-
-    // Prune history to last 20 images
-    const historyFiles = fs.readdirSync(HISTORY_DIR)
-      .filter(f => f.endsWith('.jpg'))
-      .map(f => ({ name: f, time: fs.statSync(path.join(HISTORY_DIR, f)).mtime.getTime() }))
-      .sort((a, b) => b.time - a.time);
-
-    if (historyFiles.length > 20) {
-      historyFiles.slice(20).forEach(file => {
-        try {
-          fs.unlinkSync(path.join(HISTORY_DIR, file.name));
-        } catch (_) {}
-      });
-    }
-  } catch (storageErr: any) {
-    console.error('Persistent storage warning (in-memory cache preserved):', storageErr.message);
-  }
-
-  console.log(`[Camera Upload] Frame ${imageId} accepted (${sizeBytes} bytes) at ${timestamp}`);
-
-  return res.status(200).json({
-    success: true,
-    message: 'ESP32-CAM frame received and stored successfully.',
-    imageId,
-    timestamp,
-    sizeBytes,
-    mimeType: 'image/jpeg',
-    url: '/api/camera/latest.jpg',
-    totalUploadsReceived: totalCameraUploadsCount,
-    readyForVisionAnalysis: true
-  });
-});
-
-/**
- * GET /api/camera/upload
- * Helpful guidance for engineers who open the upload URL in a browser.
- */
-app.get('/api/camera/upload', (req, res) => {
-  res.status(405).json({
-    error: 'METHOD_NOT_ALLOWED',
-    message: 'The /api/camera/upload endpoint expects HTTP POST containing raw JPEG binary body authenticated via X-Camera-Key header.',
-    expectedMethod: 'POST',
-    contentType: 'image/jpeg',
-    authHeader: 'X-Camera-Key: <CAMERA_UPLOAD_KEY>',
-    testCurl: 'curl -X POST https://edens-ai.onrender.com/api/camera/upload -H "Content-Type: image/jpeg" -H "X-Camera-Key: $CAMERA_UPLOAD_KEY" --data-binary @photo.jpg'
-  });
-});
-
-/**
- * GET /api/camera/latest.jpg
- * Returns the raw binary JPEG of the latest uploaded frame.
- */
-app.get('/api/camera/latest.jpg', (req, res) => {
-  if (!latestUploadedFrame || !latestUploadedFrame.buffer) {
-    return res.status(404).json({
-      error: 'NO_FRAME_AVAILABLE',
-      message: 'No camera frame has been uploaded yet. Awaiting ESP32-CAM POST to /api/camera/upload.'
-    });
-  }
-
-  const frameState = classifyCameraFrameState(latestUploadedFrame.timestamp);
-  res.setHeader('Content-Type', 'image/jpeg');
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.setHeader('X-Frame-ID', latestUploadedFrame.id);
-  res.setHeader('X-Frame-Timestamp', latestUploadedFrame.timestamp);
-  res.setHeader('X-Frame-Age-Seconds', String(frameState.ageSeconds));
-  res.setHeader('X-Data-Source', frameState.dataSource);
-  return res.send(latestUploadedFrame.buffer);
-});
-
-/**
- * GET /api/camera/latest
- * Returns JSON metadata and base64 data URI for VisionAgent and UI display.
- */
-app.get('/api/camera/latest', (req, res) => {
-  if (!latestUploadedFrame) {
-    return res.status(200).json({
-      exists: false,
-      status: 'WAITING_FOR_UPLOAD',
-      message: 'No camera frame uploaded yet. Awaiting ESP32-CAM upload at POST /api/camera/upload.',
-      uploadEndpoint: '/api/camera/upload',
-      dataSource: 'DISCONNECTED',
-      totalUploadsCount: totalCameraUploadsCount
-    });
-  }
-
-  const frameState = classifyCameraFrameState(latestUploadedFrame.timestamp);
-  return res.status(200).json({
-    exists: true,
-    status: frameState.status,
-    id: latestUploadedFrame.id,
-    timestamp: latestUploadedFrame.timestamp,
-    ageSeconds: frameState.ageSeconds,
-    isStale: frameState.isStale,
-    sizeBytes: latestUploadedFrame.sizeBytes,
-    mimeType: latestUploadedFrame.mimeType,
-    url: latestUploadedFrame.url,
-    base64: latestUploadedFrame.base64DataUri,
-    analyzed: latestUploadedFrame.analyzed,
-    analysis: latestUploadedFrame.analysis,
-    dataSource: frameState.dataSource,
-    totalUploadsCount: totalCameraUploadsCount
-  });
-});
-
-/**
- * GET /api/camera/upload-info
- * Returns upload configuration guidelines and live telemetry for UI panels.
- */
-app.get('/api/camera/upload-info', (req, res) => {
-  const hasKey = Boolean(process.env.CAMERA_UPLOAD_KEY || process.env.HARDWARE_API_KEY);
-  const frameState = latestUploadedFrame ? classifyCameraFrameState(latestUploadedFrame.timestamp) : null;
-  res.json({
-    endpoint: '/api/camera/upload',
-    method: 'POST',
-    supportedContentTypes: ['image/jpeg', 'application/octet-stream', 'multipart/form-data'],
-    authHeader: 'X-Camera-Key',
-    authQueryParam: 'token',
-    maxSizeMb: MAX_UPLOAD_MB,
-    authConfigured: hasKey,
-    latestUploadTimestamp: latestUploadedFrame?.timestamp || null,
-    latestImageId: latestUploadedFrame?.id || null,
-    latestSizeBytes: latestUploadedFrame?.sizeBytes || 0,
-    latestDataSource: frameState ? frameState.dataSource : 'DISCONNECTED',
-    totalUploadsReceived: totalCameraUploadsCount,
-    hasUploadedImage: Boolean(latestUploadedFrame)
-  });
-});
-
-/**
- * POST /api/camera/mark-analyzed
- * Records VisionAgent inspection results on the current frame.
- */
-app.post('/api/camera/mark-analyzed', (req, res) => {
-  if (latestUploadedFrame && req.body?.id === latestUploadedFrame.id) {
-    latestUploadedFrame.analyzed = true;
-    latestUploadedFrame.analysis = req.body.analysis;
-  }
-  return res.json({ success: true });
-});
-
-/**
- * DELETE /api/camera/latest
- * Diagnostics & testing: clears uploaded frame from memory and disk.
- * Protected by camera authentication when CAMERA_UPLOAD_KEY / HARDWARE_API_KEY is configured.
- */
-app.delete('/api/camera/latest', (req, res) => {
-  if (getCameraUploadSecret()) {
-    const auth = isCameraAuthorized(req);
-    if (!auth.authorized) {
-      return res.status(auth.status).json({
-        error: auth.error,
-        message: auth.message,
-        requiredHeader: 'X-Camera-Key'
-      });
-    }
-  }
-  latestUploadedFrame = null;
-  try {
-    const latestFilePath = path.join(UPLOAD_DIR, 'latest.jpg');
-    const metaFilePath = path.join(UPLOAD_DIR, 'metadata.json');
-    if (fs.existsSync(latestFilePath)) fs.unlinkSync(latestFilePath);
-    if (fs.existsSync(metaFilePath)) fs.unlinkSync(metaFilePath);
-  } catch (_) {}
-  return res.json({ success: true, message: 'Latest camera frame cache cleared.' });
-});
 
 // --------------------------------------------------------------------
 // MAIN ESP32 TELEMETRY PUSH INTAKE & CONTROLLER PROXY ROUTES
@@ -742,111 +342,7 @@ app.all('/api/hardware', async (req, res) => {
   }
 });
 
-// Camera Snapshot Pull Proxy: /api/camera/capture (Pull Model)
-app.get('/api/camera/capture', async (req, res) => {
-  // If an uploaded frame is present, serve it with accurate freshness classification
-  if (latestUploadedFrame && latestUploadedFrame.buffer) {
-    const frameState = classifyCameraFrameState(latestUploadedFrame.timestamp);
-    res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('X-Data-Source', frameState.dataSource);
-    res.setHeader('X-Frame-Age-Seconds', String(frameState.ageSeconds));
-    return res.send(latestUploadedFrame.buffer);
-  }
 
-  const overrideHost = req.query.host as string | undefined;
-  const overridePort = req.query.port ? parseInt(req.query.port as string, 10) : undefined;
-  const cameraBase = getCameraBaseUrl(overrideHost, overridePort, 80);
-
-  if (!cameraBase) {
-    return res.status(503).json({
-      error: 'CAMERA_NOT_CONFIGURED',
-      message: 'ESP32-CAM host is not configured on server and no uploaded frame exists.'
-    });
-  }
-
-  const requestedPath = (req.query.path as string) || '/photo';
-  const candidatePaths = requestedPath === '/photo' ? ['/photo', '/capture'] : [requestedPath];
-
-  try {
-    let response: Response | null = null;
-    for (const candidate of candidatePaths) {
-      const targetUrl = `${cameraBase}${candidate.startsWith('/') ? candidate : '/' + candidate}`;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
-      response = await fetch(targetUrl, { signal: controller.signal });
-      clearTimeout(timeout);
-      if (response.ok) break;
-    }
-
-    if (!response || !response.ok) {
-      return res.status(response?.status || 502).json({ error: `Camera returned HTTP ${response?.status || 502}` });
-    }
-
-    const buffer = await response.arrayBuffer();
-    res.setHeader('Content-Type', response.headers.get('content-type') || 'image/jpeg');
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('X-Data-Source', 'REAL_HARDWARE');
-    return res.send(Buffer.from(buffer));
-  } catch (err: any) {
-    return res.status(502).json({
-      error: 'CAMERA_UNREACHABLE',
-      message: `Failed to fetch frame from ESP32-CAM: ${err.message}`
-    });
-  }
-});
-
-// Camera Status Proxy: /api/camera/status
-app.get('/api/camera/status', async (req, res) => {
-  // If an uploaded image exists, report push status with accurate freshness state
-  if (latestUploadedFrame) {
-    const frameState = classifyCameraFrameState(latestUploadedFrame.timestamp);
-    return res.json({
-      connected: frameState.status === 'ONLINE',
-      mode: 'PUSH_UPLOAD',
-      sensorModel: 'ESP32-CAM (Push Intake)',
-      status: frameState.status,
-      dataSource: frameState.dataSource,
-      isStale: frameState.isStale,
-      lastUploadTimestamp: latestUploadedFrame.timestamp,
-      ageSeconds: frameState.ageSeconds,
-      sizeBytes: latestUploadedFrame.sizeBytes,
-      totalUploadsReceived: totalCameraUploadsCount
-    });
-  }
-
-  const overrideHost = req.query.host as string | undefined;
-  const overridePort = req.query.port ? parseInt(req.query.port as string, 10) : undefined;
-  const cameraBase = getCameraBaseUrl(overrideHost, overridePort);
-
-  if (!cameraBase) {
-    return res.json({
-      connected: false,
-      mode: 'PUSH_OR_PULL',
-      sensorModel: 'ESP32-CAM',
-      status: 'AWAITING_UPLOAD_OR_CONFIG'
-    });
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
-    const response = await fetch(`${cameraBase}/status`, { signal: controller.signal });
-    clearTimeout(timeout);
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    return res.json({ connected: true, mode: 'PULL_DIRECT', ...data });
-  } catch (err: any) {
-    return res.json({
-      connected: false,
-      mode: 'PULL_DIRECT',
-      sensorModel: 'ESP32-CAM',
-      status: 'OFFLINE',
-      error: err.message
-    });
-  }
-});
 
 // Test Suite Endpoint: /api/hardware/test-suite
 app.get('/api/hardware/test-suite', (req, res) => {
@@ -900,14 +396,17 @@ function getGeminiClient(): GoogleGenAI | null {
 
 const GEMINI_TEXT_VISION_MODELS = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'] as const;
 
-function isTransientDemandError(err: any): boolean {
+function isFallbackEligibleError(err: any): boolean {
   const msg = String(err?.message || err || '');
   return (
     msg.includes('503') ||
     msg.includes('UNAVAILABLE') ||
     msg.includes('high demand') ||
     msg.includes('429') ||
-    msg.includes('RESOURCE_EXHAUSTED')
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('404') ||
+    msg.includes('NOT_FOUND') ||
+    msg.toLowerCase().includes('not found')
   );
 }
 
@@ -927,8 +426,8 @@ async function generateWithModelFallback(
       return { response, modelUsed: modelName };
     } catch (err: any) {
       lastErr = err;
-      if (i < models.length - 1 && isTransientDemandError(err)) {
-        await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+      if (i < models.length - 1 && isFallbackEligibleError(err)) {
+        await new Promise((r) => setTimeout(r, 300 * (i + 1)));
         continue;
       }
       throw err;
@@ -937,30 +436,7 @@ async function generateWithModelFallback(
   throw lastErr || new Error('Gemini model generation failed.');
 }
 
-function validateRasterImageBytes(buf: Buffer): { valid: boolean; detectedMime?: string; error?: string } {
-  if (!buf || buf.length < 32) {
-    return { valid: false, error: 'Decoded image payload is empty or smaller than 32 bytes.' };
-  }
-  // JPEG: FF D8
-  if (buf[0] === 0xff && buf[1] === 0xd8) {
-    return { valid: true, detectedMime: 'image/jpeg' };
-  }
-  // PNG: 89 50 4E 47 0D 0A 1A 0A
-  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
-    return { valid: true, detectedMime: 'image/png' };
-  }
-  // WebP: RIFF....WEBP
-  if (
-    buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
-    buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
-  ) {
-    return { valid: true, detectedMime: 'image/webp' };
-  }
-  return {
-    valid: false,
-    error: 'Payload does not contain valid JPEG, PNG, or WebP magic bytes.'
-  };
-}
+
 
 const NIGERIAN_LANG_NAMES: Record<string, { name: string; native: string; region: string }> = {
   ha: { name: 'Hausa', native: 'Harshen Hausa', region: 'Northern Nigeria / Arewa' },
@@ -1295,150 +771,45 @@ ${telemetryContextBlock}`;
 
 /**
  * POST /api/ai/diagnose
- * Computer vision plant disease & botanical diagnosis in Nigerian languages.
- * Verifies genuine raster image bytes (JPEG/PNG/WebP) before invoking Gemini vision.
+ * Dedicated AI Vision Analysis Layer decoupled from camera acquisition & storage.
+ * Enforces genuine raster image bytes and refuses simulated or stale camera snapshots
+ * when diagnosing live ESP32-CAM captures.
  */
-app.post('/api/ai/diagnose', async (req, res) => {
-  const ai = getGeminiClient();
-  if (!ai) {
-    return res.status(503).json({
-      error: 'AI_SERVICE_UNCONFIGURED',
-      message: 'GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY in your Render dashboard under Environment Variables.'
-    });
-  }
-
-  const { image, useLatestCameraFrame = false, languageId = 'ha' } = req.body || {};
-
-  let cleanBase64 = '';
-  let mimeType = 'image/jpeg';
-  let imgBuffer: Buffer;
-
-  if (useLatestCameraFrame || image === '/api/camera/latest.jpg') {
-    if (!latestUploadedFrame || !latestUploadedFrame.buffer || latestUploadedFrame.buffer.length === 0) {
-      return res.status(404).json({
-        error: 'NO_CAMERA_FRAME',
-        message: 'No ESP32-CAM photograph has been uploaded to /api/camera/upload yet.'
-      });
-    }
-    imgBuffer = latestUploadedFrame.buffer;
-    mimeType = latestUploadedFrame.mimeType || 'image/jpeg';
-    cleanBase64 = imgBuffer.toString('base64');
-  } else {
-    if (!image || typeof image !== 'string' || !image.trim()) {
-      return res.status(400).json({ error: 'EMPTY_IMAGE', message: 'No image provided for diagnosis.' });
-    }
-
-    cleanBase64 = image.trim();
-    if (cleanBase64.startsWith('data:')) {
-      const match = cleanBase64.match(/^data:([^;]+);base64,(.+)$/);
-      if (match) {
-        mimeType = match[1].toLowerCase();
-        cleanBase64 = match[2];
-      } else {
-        cleanBase64 = cleanBase64.split(',')[1] || cleanBase64;
+app.post(
+  '/api/ai/diagnose',
+  createVisionDiagnosisHandler({
+    imageStore: cameraImageStore,
+    languages: NIGERIAN_LANG_NAMES,
+    isAiConfigured: () => Boolean(getGeminiClient()),
+    runVisionModel: async ({ base64Data, mimeType, promptText, responseSchema }) => {
+      const ai = getGeminiClient();
+      if (!ai) {
+        throw new Error('GEMINI_API_KEY is not configured on the server.');
       }
-    }
-
-    const baseMimeCheck = mimeType.split(';')[0].toLowerCase();
-    const allowedImageMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!allowedImageMimes.includes(baseMimeCheck)) {
-      return res.status(400).json({
-        error: 'INVALID_IMAGE_FORMAT',
-        message: `Image format "${baseMimeCheck}" is not supported for computer vision diagnosis. Please provide a JPEG, PNG, or WebP photo.`
-      });
-    }
-
-    imgBuffer = Buffer.from(cleanBase64, 'base64');
-  }
-
-  // Strictly verify genuine raster image magic bytes before passing to Gemini
-  const byteCheck = validateRasterImageBytes(imgBuffer);
-  if (!byteCheck.valid) {
-    return res.status(400).json({
-      error: 'INVALID_IMAGE_BYTES',
-      message: byteCheck.error || 'Provided image does not contain valid raster image bytes.'
-    });
-  }
-
-  const baseMime = byteCheck.detectedMime || (mimeType.split(';')[0].toLowerCase() === 'image/jpg' ? 'image/jpeg' : mimeType.split(';')[0].toLowerCase());
-  const langInfo = NIGERIAN_LANG_NAMES[languageId] || NIGERIAN_LANG_NAMES['ha'];
-
-  const promptText = `You are EDENS AI, an elite plant health expert and agronomist for Nigerian and tropical greenhouse farming, powered by RA.
-Analyze this plant leaf/crop image carefully.
-
-CRITICAL REQUIREMENT:
-The user selected the language: "${langInfo.name} (${langInfo.native}) - ${langInfo.region}".
-Communicate the diagnosis, visible symptoms, likely cause, and recommendations fluently and naturally in ${langInfo.name} (${langInfo.native}), suitable for farmers in Nigeria.
-If Nigerian Pidgin is selected, use authentic, friendly Naija Pidgin.
-If Hausa is selected, use authentic Harshen Hausa.
-If Yoruba is selected, use authentic Èdè Yorùbá.
-If Igbo is selected, use authentic Asụsụ Igbo.
-For other Nigerian native tongues (Fulfulde, Tiv, Efik), communicate accurately in that tongue.
-
-In the JSON response:
-- 'species': Scientific or common English name with local Nigerian name (e.g. "Tomato (Tumatir / Tòmátì)").
-- 'speciesLocal': The name solely in ${langInfo.name}.
-- 'healthStatus': One of: "Healthy", "Stressed", "Diseased".
-- 'healthStatusLocal': Translated status in ${langInfo.name}.
-- 'symptoms': Detailed visible symptoms written in ${langInfo.name}.
-- 'cause': Root cause explanation written in ${langInfo.name}.
-- 'recommendation': Actionable, practical steps in ${langInfo.name} (include organic/local Nigerian remedies like neem leaf/dongoyaro water, wood ash, proper spacing, drip watering where appropriate).
-- 'audioSummary': A short, clear 1-2 sentence spoken summary written in ${langInfo.name} for audio read-aloud.`;
-
-  try {
-    const { response, modelUsed } = await generateWithModelFallback(ai, {
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: baseMime,
-              data: cleanBase64
-            }
-          },
-          { text: promptText }
-        ]
-      },
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            species: { type: Type.STRING },
-            speciesLocal: { type: Type.STRING },
-            healthStatus: { type: Type.STRING },
-            healthStatusLocal: { type: Type.STRING },
-            symptoms: { type: Type.STRING },
-            cause: { type: Type.STRING },
-            recommendation: { type: Type.STRING },
-            audioSummary: { type: Type.STRING }
-          },
-          required: ['species', 'healthStatus', 'symptoms', 'cause', 'recommendation']
+      const { response, modelUsed } = await generateWithModelFallback(ai, {
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType,
+                data: base64Data
+              }
+            },
+            { text: promptText }
+          ]
+        },
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: responseSchema as any
         }
-      }
-    });
-
-    const rawText = response.text?.trim();
-    if (!rawText) {
-      throw new Error('Gemini vision model returned an empty response.');
+      });
+      return {
+        rawJsonText: response.text || '',
+        modelUsed
+      };
     }
-
-    const parsed = JSON.parse(rawText);
-    parsed.language = langInfo.name;
-    return res.json({
-      success: true,
-      result: parsed,
-      imageBytesVerified: imgBuffer.length,
-      mimeType: baseMime,
-      modelUsed
-    });
-  } catch (err: any) {
-    console.error('Plant diagnosis error on server:', err.message);
-    return res.status(502).json({
-      error: 'DIAGNOSIS_FAILED',
-      message: `Plant diagnosis failed: ${err.message}`
-    });
-  }
-});
+  })
+);
 
 /**
  * POST /api/ai/predict-harvest

@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test": "tsx test/hardware.test.ts && tsx test/camera_upload.test.ts && tsx test/voice_system.test.ts"
+    "test": "tsx test/hardware.test.ts && tsx test/camera_upload.test.ts && tsx test/voice_system.test.ts",
+    "camera:relay": "node scripts/camera-lan-relay.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",

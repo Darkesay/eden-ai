@@ -1,230 +1,81 @@
 /**
- * EDENS AI - ESP32-CAM Upload Endpoint Test Suite
- * Tests Phase 6 requirements:
- * 1. Successful JPEG uploads (raw binary & multipart)
- * 2. Missing or invalid authentication
- * 3. Unsupported image types & empty bodies
- * 4. Oversized images (exceeding limit)
- * 5. Invalid request bodies & corrupted magic bytes
- * 6. Image retrieval by VisionAgent (GET /api/camera/latest, GET /api/camera/latest.jpg)
- * 7. Storage persistence & history rotation
- * 8. Camera disconnection & waiting states
+ * EDENS AI - ESP32-CAM Acquisition, Storage & Vision Diagnosis Integration Test Suite
+ *
+ * Exercises the real production modules:
+ * - src/server/cameraStorage.ts (CameraImageStore, extractAndValidateJpeg, classifyCameraFrameFreshness)
+ * - src/server/cameraAcquisition.ts (registerCameraRoutes, verifyCameraUploadAuth, validateLanCameraTarget)
+ * - src/server/visionDiagnosis.ts (createVisionDiagnosisHandler, validateRasterImageBytes)
+ *
+ * Covers:
+ * 1. Initial disconnected/waiting state (GET /api/camera/latest, GET /api/camera/latest.jpg)
+ * 2. Vision diagnosis when no image is available (404 NO_CAMERA_FRAME)
+ * 3. X-Camera-Key authentication enforcement, missing/wrong keys, query-param rejection, unconfigured secret
+ * 4. Invalid image uploads (empty, non-JPEG, truncated missing EOI, oversized 413)
+ * 5. Successful raw binary & multipart JPEG uploads + byte-accurate retrieval + disk persistence
+ * 6. Vision diagnosis with genuine fresh JPEG bytes + rejection of SIMULATED images
+ * 7. Image freshness aging (FRESH -> CACHED -> STALE) & refusal to diagnose stale/cached frames as live (409)
+ * 8. LAN gateway pull sync, physical camera disconnection handling, and cloud private-LAN guard
  */
 
 import assert from 'node:assert';
-import http from 'node:http';
 import express from 'express';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { CameraImageStore } from '../src/server/cameraStorage';
+import { registerCameraRoutes } from '../src/server/cameraAcquisition';
+import { createVisionDiagnosisHandler, VisionModelInput } from '../src/server/visionDiagnosis';
 
-const TEST_PORT = 3199;
-const TEST_KEY = 'test_secret_cam_key_2026';
-process.env.CAMERA_UPLOAD_KEY = TEST_KEY;
-process.env.CAMERA_MAX_UPLOAD_MB = '2'; // 2MB for fast oversize test
+const TEST_KEY = 'test_secret_cam_key_2026_verified';
 
-// Create a valid synthetic JPEG buffer (SOI 0xFF 0xD8 ... EOI 0xFF 0xD9)
-function createValidTestJpeg(): Buffer {
-  const buf = Buffer.alloc(128);
-  // SOI marker
+function createValidTestJpeg(extraMarkerByte: number = 0x11): Buffer {
+  const buf = Buffer.alloc(160, extraMarkerByte);
+  // SOI marker (0xFF 0xD8)
   buf[0] = 0xff;
   buf[1] = 0xd8;
-  // APP0 marker
+  // APP0 JFIF marker (0xFF 0xE0)
   buf[2] = 0xff;
   buf[3] = 0xe0;
-  buf.write('JFIF', 6);
-  // EOI marker at end
-  buf[126] = 0xff;
-  buf[127] = 0xd9;
+  buf[4] = 0x00;
+  buf[5] = 0x10;
+  buf.write('JFIF\0', 6, 'ascii');
+  // EOI marker (0xFF 0xD9)
+  buf[buf.length - 2] = 0xff;
+  buf[buf.length - 1] = 0xd9;
   return buf;
 }
 
-// Build Express test server replicating server.ts logic
-function buildTestApp() {
-  const app = express();
-  const UPLOAD_DIR = path.join(os.tmpdir(), `edens_camera_test_${process.pid}`);
-  const HISTORY_DIR = path.join(UPLOAD_DIR, 'history');
-  fs.mkdirSync(HISTORY_DIR, { recursive: true });
-
-  interface Frame {
-    id: string;
-    timestamp: string;
-    sizeBytes: number;
-    mimeType: string;
-    buffer: Buffer;
-    url: string;
-    base64: string;
-    analyzed: boolean;
-    analysis?: any;
-  }
-
-  let latestFrame: Frame | null = null;
-  let totalUploads = 0;
-
-  app.use('/api/camera/upload', express.raw({
-    type: () => true,
-    limit: '2mb'
-  }));
-  app.use(express.json());
-
-  function isAuthorized(req: express.Request): boolean {
-    const key = (
-      req.headers['x-camera-key'] ||
-      req.headers['x-api-key'] ||
-      (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].slice(7) : req.headers['authorization']) ||
-      req.query.token ||
-      req.query.key
-    ) as string | undefined;
-    return Boolean(key && key.trim() === TEST_KEY);
-  }
-
-  function extractJpeg(bodyBuffer: Buffer): { buffer: Buffer; error?: string } {
-    if (!bodyBuffer || bodyBuffer.length === 0) {
-      return { buffer: Buffer.alloc(0), error: 'Empty payload received.' };
-    }
-    if (bodyBuffer.length < 32) {
-      return { buffer: Buffer.alloc(0), error: 'Payload too small to be a valid JPEG.' };
-    }
-    if (bodyBuffer[0] === 0xff && bodyBuffer[1] === 0xd8) {
-      return { buffer: bodyBuffer };
-    }
-    const soi = bodyBuffer.indexOf(Buffer.from([0xff, 0xd8]));
-    if (soi !== -1) {
-      const eoi = bodyBuffer.lastIndexOf(Buffer.from([0xff, 0xd9]));
-      if (eoi > soi) return { buffer: bodyBuffer.slice(soi, eoi + 2) };
-      return { buffer: bodyBuffer.slice(soi) };
-    }
-    return { buffer: Buffer.alloc(0), error: 'Payload does not contain valid JPEG SOI magic bytes (0xFF, 0xD8).' };
-  }
-
-  app.post('/api/camera/upload', (req, res) => {
-    if (!isAuthorized(req)) {
-      return res.status(401).json({ error: 'UNAUTHORIZED_CAMERA', message: 'Authentication failed.' });
-    }
-    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-      return res.status(400).json({ error: 'INVALID_BODY', message: 'Request body must be binary JPEG buffer.' });
-    }
-    const { buffer, error } = extractJpeg(req.body);
-    if (error || buffer.length === 0) {
-      return res.status(400).json({ error: 'INVALID_IMAGE_FORMAT', message: error });
-    }
-
-    const imageId = `cam_test_${Date.now()}`;
-    const timestamp = new Date().toISOString();
-    totalUploads++;
-
-    latestFrame = {
-      id: imageId,
-      timestamp,
-      sizeBytes: buffer.length,
-      mimeType: 'image/jpeg',
-      buffer,
-      url: '/api/camera/latest.jpg',
-      base64: `data:image/jpeg;base64,${buffer.toString('base64')}`,
-      analyzed: false
-    };
-
-    // Store to disk
-    fs.writeFileSync(path.join(UPLOAD_DIR, 'latest.jpg'), buffer);
-    fs.writeFileSync(path.join(HISTORY_DIR, `${imageId}.jpg`), buffer);
-
-    return res.status(200).json({
-      success: true,
-      message: 'ESP32-CAM frame received and stored successfully.',
-      imageId,
-      timestamp,
-      sizeBytes: buffer.length,
-      mimeType: 'image/jpeg',
-      url: '/api/camera/latest.jpg',
-      totalUploadsReceived: totalUploads
-    });
-  });
-
-  app.get('/api/camera/latest.jpg', (req, res) => {
-    if (!latestFrame) {
-      return res.status(404).json({ error: 'NO_FRAME_AVAILABLE', message: 'No frame uploaded yet.' });
-    }
-    res.setHeader('Content-Type', 'image/jpeg');
-    return res.send(latestFrame.buffer);
-  });
-
-  app.get('/api/camera/latest', (req, res) => {
-    if (!latestFrame) {
-      return res.json({
-        exists: false,
-        status: 'WAITING_FOR_UPLOAD',
-        message: 'No camera frame uploaded yet.',
-        dataSource: 'DISCONNECTED',
-        totalUploadsCount: totalUploads
-      });
-    }
-    return res.json({
-      exists: true,
-      status: 'ONLINE',
-      id: latestFrame.id,
-      timestamp: latestFrame.timestamp,
-      sizeBytes: latestFrame.sizeBytes,
-      url: latestFrame.url,
-      base64: latestFrame.base64,
-      analyzed: latestFrame.analyzed,
-      analysis: latestFrame.analysis,
-      dataSource: 'REAL_HARDWARE',
-      totalUploadsCount: totalUploads
-    });
-  });
-
-  app.post('/api/camera/mark-analyzed', (req, res) => {
-    if (latestFrame && req.body?.id === latestFrame.id) {
-      latestFrame.analyzed = true;
-      latestFrame.analysis = req.body.analysis;
-    }
-    return res.json({ success: true });
-  });
-
-  app.delete('/api/camera/latest', (req, res) => {
-    latestFrame = null;
-    return res.json({ success: true });
-  });
-
-  // Express error handler (e.g. 413 entity too large)
-  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (err.type === 'entity.too.large' || err.status === 413) {
-      return res.status(413).json({ error: 'PAYLOAD_TOO_LARGE', message: 'File size exceeds limit.' });
-    }
-    return res.status(500).json({ error: err.message });
-  });
-
-  return { app, uploadDir: UPLOAD_DIR };
-}
-
-// Helper to make HTTP request to test server
-function makeRequest(
+function makeHttpRequest(
+  port: number,
   method: string,
   urlPath: string,
-  headers: Record<string, string>,
+  headers: Record<string, string> = {},
   body?: Buffer | string
-): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string; json: () => any }> {
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; rawBuffer: Buffer; body: string; json: () => any }> {
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
         hostname: '127.0.0.1',
-        port: TEST_PORT,
+        port,
         path: urlPath,
         method,
         headers
       },
       (res) => {
-        let chunks: Buffer[] = [];
-        res.on('data', (c) => chunks.push(c));
+        const chunks: Buffer[] = [];
+        res.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
         res.on('end', () => {
-          const raw = Buffer.concat(chunks).toString();
+          const rawBuffer = Buffer.concat(chunks);
+          const text = rawBuffer.toString('utf8');
           resolve({
             status: res.statusCode || 500,
             headers: res.headers,
-            body: raw,
+            rawBuffer,
+            body: text,
             json: () => {
               try {
-                return JSON.parse(raw);
+                return JSON.parse(text);
               } catch (_) {
                 return null;
               }
@@ -234,7 +85,7 @@ function makeRequest(
       }
     );
     req.on('error', reject);
-    if (body) {
+    if (body !== undefined) {
       req.write(body);
     }
     req.end();
@@ -242,202 +93,559 @@ function makeRequest(
 }
 
 async function runTestSuite() {
-  console.log('🧪 Starting EDENS AI Camera Upload & Intake Test Suite...\n');
-  const { app, uploadDir } = buildTestApp();
+  console.log('🧪 Starting EDENS AI Camera Acquisition, Freshness & Vision Diagnosis Test Suite...\n');
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'edens_cam_suite_'));
+  let activeSecret = TEST_KEY;
+  let simulateCloudHosted = false;
+  let visionCalls: VisionModelInput[] = [];
+
+  const imageStore = new CameraImageStore({
+    storageBaseDir: tmpRoot,
+    maxUploadBytes: 2 * 1024 * 1024, // 2MB limit for fast oversize verification
+    freshMaxSeconds: 90,
+    cachedMaxSeconds: 300,
+    maxHistoryFiles: 5
+  });
+
+  const app = express();
+  app.use(express.json({ limit: '5mb' }));
+
+  registerCameraRoutes(app, imageStore, {
+    allowLoopbackLanTargets: true,
+    getUploadSecret: () => activeSecret,
+    isCloudHosted: () => simulateCloudHosted
+  });
+
+  app.post(
+    '/api/ai/diagnose',
+    createVisionDiagnosisHandler({
+      imageStore,
+      languages: {
+        ha: { name: 'Hausa', native: 'Harshen Hausa', region: 'Northern Nigeria' },
+        en: { name: 'English', native: 'Nigerian English', region: 'Nigeria' }
+      },
+      isAiConfigured: () => true,
+      runVisionModel: async (input) => {
+        visionCalls.push(input);
+        return {
+          modelUsed: 'gemini-2.5-flash-test-double',
+          rawJsonText: JSON.stringify({
+            species: 'Solanum lycopersicum (Tomato)',
+            speciesLocal: 'Tumatir',
+            healthStatus: 'Healthy',
+            healthStatusLocal: 'Lafiya kalau',
+            symptoms: 'Clean green foliage with turgid stems.',
+            cause: 'Balanced greenhouse moisture and light.',
+            recommendation: 'Maintain current drip irrigation schedule.',
+            audioSummary: 'Shukar tumatir tana cikin koshin lafiya.'
+          })
+        };
+      }
+    })
+  );
+
+  // Express payload-too-large handler matching server.ts
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    if (err?.type === 'entity.too.large' || err?.status === 413) {
+      return res.status(413).json({
+        error: 'PAYLOAD_TOO_LARGE',
+        message: 'Uploaded payload exceeds maximum configured camera size limit.'
+      });
+    }
+    return res.status(500).json({ error: err?.message || 'INTERNAL_ERROR' });
+  });
 
   const server = http.createServer(app);
-  await new Promise<void>((resolve) => server.listen(TEST_PORT, '127.0.0.1', () => resolve()));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const addressInfo = server.address() as { port: number };
+  const appPort = addressInfo.port;
 
+  let mockCamServer: http.Server | null = null;
   let passed = 0;
-  let failed = 0;
-
-  async function test(name: string, fn: () => Promise<void>) {
-    try {
-      await fn();
-      console.log(`  ✅ PASS: ${name}`);
-      passed++;
-    } catch (err: any) {
-      console.error(`  ❌ FAIL: ${name}`);
-      console.error(`     Error: ${err.message}`);
-      failed++;
-    }
-  }
 
   try {
-    // 1. Initial State: No Uploaded Frames
-    await test('1. GET /api/camera/latest reports WAITING_FOR_UPLOAD when no frame has been sent', async () => {
-      const res = await makeRequest('GET', '/api/camera/latest', {});
-      assert.strictEqual(res.status, 200);
-      const json = res.json();
-      assert.strictEqual(json.exists, false);
-      assert.strictEqual(json.status, 'WAITING_FOR_UPLOAD');
-      assert.strictEqual(json.dataSource, 'DISCONNECTED');
-    });
+    // -------------------------------------------------------------------------
+    // 1. Initial disconnected state when no camera photograph exists
+    // -------------------------------------------------------------------------
+    {
+      const latestRes = await makeHttpRequest(appPort, 'GET', '/api/camera/latest');
+      assert.strictEqual(latestRes.status, 200);
+      const latestJson = latestRes.json();
+      assert.strictEqual(latestJson.exists, false);
+      assert.strictEqual(latestJson.connectionState, 'DISCONNECTED');
+      assert.strictEqual(latestJson.status, 'WAITING_FOR_UPLOAD');
+      assert.strictEqual(latestJson.dataSource, 'DISCONNECTED');
+      assert.strictEqual(latestJson.isLiveStream, false);
 
-    // 2. Reject Missing Authentication (401)
-    await test('2. POST /api/camera/upload rejects requests without authentication with HTTP 401', async () => {
-      const jpeg = createValidTestJpeg();
-      const res = await makeRequest('POST', '/api/camera/upload', {
-        'Content-Type': 'image/jpeg',
-        'Content-Length': String(jpeg.length)
-      }, jpeg);
-      assert.strictEqual(res.status, 401);
-      const json = res.json();
-      assert.strictEqual(json.error, 'UNAUTHORIZED_CAMERA');
-    });
+      const jpgRes = await makeHttpRequest(appPort, 'GET', '/api/camera/latest.jpg');
+      assert.strictEqual(jpgRes.status, 404);
+      assert.strictEqual(jpgRes.json()?.error, 'NO_FRAME_AVAILABLE');
 
-    // 3. Reject Invalid Authentication (401)
-    await test('3. POST /api/camera/upload rejects requests with invalid API key with HTTP 401', async () => {
-      const jpeg = createValidTestJpeg();
-      const res = await makeRequest('POST', '/api/camera/upload', {
-        'Content-Type': 'image/jpeg',
-        'X-Camera-Key': 'wrong_key_12345',
-        'Content-Length': String(jpeg.length)
-      }, jpeg);
-      assert.strictEqual(res.status, 401);
-    });
+      const infoRes = await makeHttpRequest(appPort, 'GET', '/api/camera/upload-info');
+      assert.strictEqual(infoRes.status, 200);
+      assert.strictEqual(infoRes.json()?.authConfigured, true);
+      assert.strictEqual(infoRes.json()?.authHeader, 'X-Camera-Key');
+      assert.strictEqual(infoRes.body.includes(TEST_KEY), false, 'Secret must never appear in upload-info');
+      console.log('  ✅ 1. Initial disconnected state & non-leaky upload-info verified');
+      passed++;
+    }
 
-    // 3b. Strictly Reject Former Public Default Key (401)
-    await test('3b. POST /api/camera/upload strictly rejects former public default secret edens_camera_secret_2026', async () => {
-      const jpeg = createValidTestJpeg();
-      const res = await makeRequest('POST', '/api/camera/upload', {
-        'Content-Type': 'image/jpeg',
-        'X-Camera-Key': 'edens_camera_secret_2026',
-        'Content-Length': String(jpeg.length)
-      }, jpeg);
-      assert.strictEqual(res.status, 401);
-      const json = res.json();
-      assert.strictEqual(json.error, 'UNAUTHORIZED_CAMERA');
-    });
+    // -------------------------------------------------------------------------
+    // 2. Vision diagnosis when NO camera image is available -> 404 NO_CAMERA_FRAME
+    // -------------------------------------------------------------------------
+    {
+      const diagNoImg = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/ai/diagnose',
+        { 'Content-Type': 'application/json' },
+        JSON.stringify({ useLatestCameraFrame: true, requireFresh: true, languageId: 'ha' })
+      );
+      assert.strictEqual(diagNoImg.status, 404);
+      assert.strictEqual(diagNoImg.json()?.error, 'NO_CAMERA_FRAME');
+      assert.strictEqual(visionCalls.length, 0, 'Vision model must not run when no image exists');
+      console.log('  ✅ 2. Vision diagnosis returns 404 NO_CAMERA_FRAME when no photograph is stored');
+      passed++;
+    }
 
-    // 4. Successful Upload with Header Auth (200)
-    await test('4. POST /api/camera/upload accepts valid raw binary JPEG with X-Camera-Key header', async () => {
-      const jpeg = createValidTestJpeg();
-      const res = await makeRequest('POST', '/api/camera/upload', {
-        'Content-Type': 'image/jpeg',
-        'X-Camera-Key': TEST_KEY,
-        'Content-Length': String(jpeg.length)
-      }, jpeg);
-      assert.strictEqual(res.status, 200);
-      const json = res.json();
-      assert.strictEqual(json.success, true);
-      assert.strictEqual(json.sizeBytes, 128);
-      assert.strictEqual(json.mimeType, 'image/jpeg');
-      assert.ok(json.imageId.startsWith('cam_test_'));
-    });
+    // -------------------------------------------------------------------------
+    // 3. Authentication enforcement on POST /api/camera/upload
+    // -------------------------------------------------------------------------
+    {
+      const validJpeg = createValidTestJpeg();
 
-    // 5. Successful Upload with Query Parameter Auth (200)
-    await test('5. POST /api/camera/upload accepts valid JPEG with ?token= query parameter', async () => {
-      const jpeg = createValidTestJpeg();
-      const res = await makeRequest('POST', `/api/camera/upload?token=${TEST_KEY}`, {
-        'Content-Type': 'image/jpeg',
-        'Content-Length': String(jpeg.length)
-      }, jpeg);
-      assert.strictEqual(res.status, 200);
-      const json = res.json();
-      assert.strictEqual(json.success, true);
-    });
+      // Missing auth header
+      const noAuth = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/upload',
+        { 'Content-Type': 'image/jpeg' },
+        validJpeg
+      );
+      assert.strictEqual(noAuth.status, 401);
+      assert.strictEqual(noAuth.json()?.error, 'UNAUTHORIZED_CAMERA');
 
-    // 6. Image Retrieval by VisionAgent (GET /api/camera/latest)
-    await test('6. GET /api/camera/latest returns uploaded frame with REAL_HARDWARE data source', async () => {
-      const res = await makeRequest('GET', '/api/camera/latest', {});
-      assert.strictEqual(res.status, 200);
-      const json = res.json();
-      assert.strictEqual(json.exists, true);
-      assert.strictEqual(json.status, 'ONLINE');
-      assert.strictEqual(json.dataSource, 'REAL_HARDWARE');
-      assert.ok(json.base64.startsWith('data:image/jpeg;base64,'));
-    });
+      // Wrong X-Camera-Key
+      const badAuth = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/upload',
+        { 'Content-Type': 'image/jpeg', 'X-Camera-Key': 'wrong_key_value' },
+        validJpeg
+      );
+      assert.strictEqual(badAuth.status, 401);
+      assert.strictEqual(badAuth.json()?.error, 'UNAUTHORIZED_CAMERA');
 
-    // 7. Binary JPEG Retrieval (GET /api/camera/latest.jpg)
-    await test('7. GET /api/camera/latest.jpg serves raw image/jpeg binary stream', async () => {
-      const res = await makeRequest('GET', '/api/camera/latest.jpg', {});
-      assert.strictEqual(res.status, 200);
-      assert.strictEqual(res.headers['content-type'], 'image/jpeg');
-      assert.strictEqual(res.body.length, 128);
-    });
+      // Query string secret rejected to prevent URL/log secret leakage
+      const queryAuth = await makeHttpRequest(
+        appPort,
+        'POST',
+        `/api/camera/upload?token=${encodeURIComponent(TEST_KEY)}`,
+        { 'Content-Type': 'image/jpeg' },
+        validJpeg
+      );
+      assert.strictEqual(queryAuth.status, 401);
+      assert.strictEqual(queryAuth.json()?.error, 'QUERY_AUTH_DISALLOWED');
 
-    // 8. Reject Corrupted / Non-JPEG Format (400)
-    await test('8. POST /api/camera/upload rejects corrupted data missing JPEG magic bytes (0xFF, 0xD8)', async () => {
-      const fakeData = Buffer.from('NOT A REAL JPEG IMAGE FILE DATA THAT HAS NO MAGIC BYTES AT ALL');
-      const res = await makeRequest('POST', '/api/camera/upload', {
-        'Content-Type': 'image/jpeg',
-        'X-Camera-Key': TEST_KEY,
-        'Content-Length': String(fakeData.length)
-      }, fakeData);
-      assert.strictEqual(res.status, 400);
-      const json = res.json();
-      assert.strictEqual(json.error, 'INVALID_IMAGE_FORMAT');
-    });
+      // Server unconfigured secret -> 503
+      activeSecret = '';
+      const unconfigured = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/upload',
+        { 'Content-Type': 'image/jpeg', 'X-Camera-Key': TEST_KEY },
+        validJpeg
+      );
+      assert.strictEqual(unconfigured.status, 503);
+      assert.strictEqual(unconfigured.json()?.error, 'SERVER_MISCONFIGURED');
+      activeSecret = TEST_KEY;
 
-    // 9. Reject Oversized Payload (413)
-    await test('9. POST /api/camera/upload rejects oversized images exceeding limit with HTTP 413', async () => {
-      // Create 3MB buffer (exceeds our 2MB test limit)
-      const hugeBuffer = Buffer.alloc(3 * 1024 * 1024);
-      hugeBuffer[0] = 0xff;
-      hugeBuffer[1] = 0xd8;
-      const res = await makeRequest('POST', '/api/camera/upload', {
-        'Content-Type': 'image/jpeg',
-        'X-Camera-Key': TEST_KEY,
-        'Content-Length': String(hugeBuffer.length)
-      }, hugeBuffer);
-      assert.strictEqual(res.status, 413);
-    });
+      console.log('  ✅ 3. X-Camera-Key authentication, query-secret rejection, and unconfigured guard verified');
+      passed++;
+    }
 
-    // 10. VisionAgent Analysis Tracking (POST /api/camera/mark-analyzed)
-    await test('10. VisionAgent can mark an uploaded frame as analyzed and persist diagnosis', async () => {
-      const latest = (await makeRequest('GET', '/api/camera/latest', {})).json();
-      assert.ok(latest.id);
+    // -------------------------------------------------------------------------
+    // 4. Invalid & oversized image uploads rejected cleanly
+    // -------------------------------------------------------------------------
+    {
+      // Empty payload
+      const emptyRes = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/upload',
+        { 'Content-Type': 'image/jpeg', 'X-Camera-Key': TEST_KEY },
+        Buffer.alloc(0)
+      );
+      assert.strictEqual(emptyRes.status, 400);
 
-      const markRes = await makeRequest('POST', '/api/camera/mark-analyzed', {
-        'Content-Type': 'application/json'
-      }, JSON.stringify({
-        id: latest.id,
-        analysis: { healthStatus: 'Healthy', foliageCondition: 'Vibrant chlorophyll' }
-      }));
-      assert.strictEqual(markRes.status, 200);
+      // Non-JPEG text payload
+      const textRes = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/upload',
+        { 'Content-Type': 'text/plain', 'X-Camera-Key': TEST_KEY },
+        Buffer.from('not a real camera photograph payload at all — plain text string padding here!')
+      );
+      assert.strictEqual(textRes.status, 400);
+      assert.strictEqual(textRes.json()?.error, 'INVALID_IMAGE_FORMAT');
 
-      const after = (await makeRequest('GET', '/api/camera/latest', {})).json();
-      assert.strictEqual(after.analyzed, true);
-      assert.strictEqual(after.analysis?.healthStatus, 'Healthy');
-    });
+      // Truncated JPEG (valid SOI + APP0, but missing closing EOI 0xFF 0xD9)
+      const truncated = Buffer.alloc(120, 0x22);
+      truncated[0] = 0xff;
+      truncated[1] = 0xd8;
+      truncated[2] = 0xff;
+      truncated[3] = 0xe0;
+      const truncRes = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/upload',
+        { 'Content-Type': 'image/jpeg', 'X-Camera-Key': TEST_KEY },
+        truncated
+      );
+      assert.strictEqual(truncRes.status, 400);
+      assert.strictEqual(truncRes.json()?.error, 'INVALID_IMAGE_FORMAT');
 
-    // 11. Persistent Disk Storage Verification
-    await test('11. Verifies persistent file storage written to disk under uploads directory', async () => {
-      const latestDiskPath = path.join(uploadDir, 'latest.jpg');
-      assert.ok(fs.existsSync(latestDiskPath), 'latest.jpg must exist on disk');
-      const diskBytes = fs.readFileSync(latestDiskPath);
-      assert.strictEqual(diskBytes[0], 0xff);
-      assert.strictEqual(diskBytes[1], 0xd8);
-    });
+      // Oversized payload (> 2MB)
+      const hugeBuf = Buffer.alloc(2.4 * 1024 * 1024, 0xff);
+      const hugeRes = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/upload',
+        { 'Content-Type': 'image/jpeg', 'X-Camera-Key': TEST_KEY },
+        hugeBuf
+      );
+      assert.strictEqual(hugeRes.status, 413);
+      assert.strictEqual(hugeRes.json()?.error, 'PAYLOAD_TOO_LARGE');
 
-    // 12. Camera Disconnection Handling (DELETE /api/camera/latest)
-    await test('12. Handles camera disconnection / clearing state safely', async () => {
-      await makeRequest('DELETE', '/api/camera/latest', {});
-      const res = await makeRequest('GET', '/api/camera/latest', {});
-      const json = res.json();
-      assert.strictEqual(json.exists, false);
-      assert.strictEqual(json.dataSource, 'DISCONNECTED');
-    });
+      console.log('  ✅ 4. Empty, non-JPEG, truncated (missing EOI), and oversized (>2MB) uploads rejected');
+      passed++;
+    }
 
+    // -------------------------------------------------------------------------
+    // 5. Successful raw binary & multipart JPEG uploads + retrieval + persistence
+    // -------------------------------------------------------------------------
+    {
+      const rawJpeg = createValidTestJpeg(0x3a);
+      const uploadRes = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/upload',
+        {
+          'Content-Type': 'image/jpeg',
+          'X-Camera-Key': TEST_KEY,
+          'X-Camera-Address': '10.87.237.36'
+        },
+        rawJpeg
+      );
+      assert.strictEqual(uploadRes.status, 200);
+      const uploadJson = uploadRes.json();
+      assert.strictEqual(uploadJson.success, true);
+      assert.strictEqual(uploadJson.sizeBytes, rawJpeg.length);
+
+      // Retrieve metadata (must NEVER expose internal LAN IP sent in X-Camera-Address to browser clients)
+      const latestMeta = await makeHttpRequest(appPort, 'GET', '/api/camera/latest');
+      assert.strictEqual(latestMeta.status, 200);
+      const metaJson = latestMeta.json();
+      assert.strictEqual(metaJson.exists, true);
+      assert.strictEqual(metaJson.connectionState, 'CONNECTED');
+      assert.strictEqual(metaJson.freshness, 'FRESH');
+      assert.strictEqual(metaJson.freshnessState, 'FRESH');
+      assert.strictEqual(metaJson.isFresh, true);
+      assert.strictEqual(metaJson.isStale, false);
+      assert.strictEqual(metaJson.isLiveStream, false);
+      assert.strictEqual(metaJson.dataSource, 'REAL_HARDWARE');
+      assert.strictEqual(metaJson.cameraAddress, undefined, 'Internal camera LAN address must not be exposed to browsers');
+      assert.strictEqual(latestMeta.body.includes('10.87.237.36'), false, 'Private LAN IP must not leak in /api/camera/latest');
+
+      // Retrieve binary JPEG
+      const latestBin = await makeHttpRequest(appPort, 'GET', '/api/camera/latest.jpg');
+      assert.strictEqual(latestBin.status, 200);
+      assert.ok(String(latestBin.headers['content-type']).includes('image/jpeg'));
+      assert.strictEqual(Buffer.compare(latestBin.rawBuffer, rawJpeg), 0);
+
+      // Multipart JPEG upload
+      const multipartJpeg = createValidTestJpeg(0x4b);
+      const boundary = '----EdensEsp32CamBoundary';
+      const multipartPayload = Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="photo.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`
+        ),
+        multipartJpeg,
+        Buffer.from(`\r\n--${boundary}--\r\n`)
+      ]);
+      const mpRes = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/upload',
+        {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'X-Camera-Key': TEST_KEY
+        },
+        multipartPayload
+      );
+      assert.strictEqual(mpRes.status, 200);
+      assert.strictEqual(mpRes.json()?.sizeBytes, multipartJpeg.length);
+      assert.ok(fs.existsSync(path.join(imageStore.getUploadDir(), 'latest.jpg')));
+      assert.ok(fs.existsSync(path.join(imageStore.getUploadDir(), 'metadata.json')));
+
+      console.log('  ✅ 5. Raw & multipart JPEG uploads, byte-accurate retrieval, and disk persistence verified');
+      passed++;
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. Vision diagnosis with fresh camera image & rejection of SIMULATED images
+    // -------------------------------------------------------------------------
+    {
+      // Simulated image source must be rejected with 400
+      const simDiag = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/ai/diagnose',
+        { 'Content-Type': 'application/json' },
+        JSON.stringify({
+          image: `data:image/jpeg;base64,${createValidTestJpeg().toString('base64')}`,
+          source: 'SIMULATED',
+          languageId: 'ha'
+        })
+      );
+      assert.strictEqual(simDiag.status, 400);
+      assert.strictEqual(simDiag.json()?.error, 'SIMULATED_IMAGE_REJECTED');
+
+      // Fresh camera frame diagnosis succeeds and passes genuine JPEG bytes to model runner
+      const freshDiag = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/ai/diagnose',
+        { 'Content-Type': 'application/json' },
+        JSON.stringify({ useLatestCameraFrame: true, requireFresh: true, languageId: 'ha' })
+      );
+      assert.strictEqual(freshDiag.status, 200);
+      const diagJson = freshDiag.json();
+      assert.strictEqual(diagJson?.result?.speciesLocal, 'Tumatir');
+      assert.strictEqual(diagJson?.result?.imageSource, 'ESP32_CAM_FRESH');
+      assert.ok(diagJson?.result?.frameId);
+      assert.strictEqual(visionCalls.length, 1);
+      assert.strictEqual(visionCalls[0].mimeType, 'image/jpeg');
+
+      // Confirm frame was marked analyzed
+      const afterDiagMeta = await makeHttpRequest(appPort, 'GET', '/api/camera/latest');
+      assert.strictEqual(afterDiagMeta.json()?.analyzed, true);
+
+      console.log('  ✅ 6. Fresh ESP32-CAM vision diagnosis & SIMULATED placeholder rejection verified');
+      passed++;
+    }
+
+    // -------------------------------------------------------------------------
+    // 7. Image freshness aging (FRESH -> CACHED -> STALE) & refusal to diagnose old photos as live
+    // -------------------------------------------------------------------------
+    {
+      // Age frame to 150 seconds ago -> CACHED (not fresh, not live)
+      const cachedIso = new Date(Date.now() - 150 * 1000).toISOString();
+      imageStore.setLatestTimestampForTesting(cachedIso);
+
+      const cachedMeta = await makeHttpRequest(appPort, 'GET', '/api/camera/latest');
+      assert.strictEqual(cachedMeta.json()?.connectionState, 'DISCONNECTED');
+      assert.strictEqual(cachedMeta.json()?.freshness, 'CACHED');
+      assert.strictEqual(cachedMeta.json()?.freshnessState, 'STALE');
+      assert.strictEqual(cachedMeta.json()?.dataSource, 'CACHED');
+      assert.strictEqual(cachedMeta.json()?.isFresh, false);
+      assert.strictEqual(cachedMeta.json()?.isLiveStream, false);
+
+      // Vision diagnosis with requireFresh: true must refuse CACHED image with 409
+      const cachedDiag = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/ai/diagnose',
+        { 'Content-Type': 'application/json' },
+        JSON.stringify({ useLatestCameraFrame: true, requireFresh: true, languageId: 'ha' })
+      );
+      assert.strictEqual(cachedDiag.status, 409);
+      assert.strictEqual(cachedDiag.json()?.error, 'STALE_CAMERA_FRAME');
+
+      // Age frame to 420 seconds ago -> STALE
+      const staleIso = new Date(Date.now() - 420 * 1000).toISOString();
+      imageStore.setLatestTimestampForTesting(staleIso);
+
+      const staleMeta = await makeHttpRequest(appPort, 'GET', '/api/camera/latest');
+      assert.strictEqual(staleMeta.json()?.connectionState, 'DISCONNECTED');
+      assert.strictEqual(staleMeta.json()?.freshness, 'STALE');
+      assert.strictEqual(staleMeta.json()?.freshnessState, 'STALE');
+      assert.strictEqual(staleMeta.json()?.dataSource, 'STALE');
+      assert.strictEqual(staleMeta.json()?.isStale, true);
+      assert.strictEqual(staleMeta.json()?.isFresh, false);
+      assert.strictEqual(staleMeta.json()?.isLiveStream, false);
+
+      const staleDiag = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/ai/diagnose',
+        { 'Content-Type': 'application/json' },
+        JSON.stringify({ useLatestCameraFrame: true, requireFresh: true, languageId: 'ha' })
+      );
+      assert.strictEqual(staleDiag.status, 409);
+      assert.strictEqual(staleDiag.json()?.error, 'STALE_CAMERA_FRAME');
+      assert.strictEqual(visionCalls.length, 1, 'Stale/cached frames must not invoke live camera diagnosis');
+
+      console.log('  ✅ 7. Freshness transitions (FRESH -> CACHED -> STALE) & 409 stale-frame diagnosis guard verified');
+      passed++;
+    }
+
+    // -------------------------------------------------------------------------
+    // 8. Local LAN gateway pull sync, camera disconnection, & cloud private-LAN guard
+    // -------------------------------------------------------------------------
+    {
+      const lanPhotoJpeg = createValidTestJpeg(0x6c);
+      mockCamServer = http.createServer((req, res) => {
+        if (req.url?.startsWith('/photo')) {
+          res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+          res.end(lanPhotoJpeg);
+          return;
+        }
+        if (req.url?.startsWith('/status')) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ framesize: 10, quality: 12, rssi: -58 }));
+          return;
+        }
+        res.writeHead(404);
+        res.end();
+      });
+
+      await new Promise<void>((resolve) => mockCamServer!.listen(0, '127.0.0.1', () => resolve()));
+      const mockCamPort = (mockCamServer.address() as { port: number }).port;
+
+      // LAN status probe while camera is online
+      const lanOnline = await makeHttpRequest(
+        appPort,
+        'GET',
+        `/api/camera/lan/status?host=127.0.0.1&httpPort=${mockCamPort}`
+      );
+      assert.strictEqual(lanOnline.status, 200);
+      assert.strictEqual(lanOnline.json()?.lanReachable, true);
+
+      // LAN sync pulls a fresh JPEG into CameraImageStore
+      const syncRes = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/lan/sync',
+        { 'Content-Type': 'application/json' },
+        JSON.stringify({ host: '127.0.0.1', httpPort: mockCamPort, photoPath: '/photo' })
+      );
+      assert.strictEqual(syncRes.status, 200);
+      assert.strictEqual(syncRes.json()?.acquisitionMethod, 'LAN_GATEWAY_PULL');
+
+      const freshAfterSync = await makeHttpRequest(appPort, 'GET', '/api/camera/latest');
+      assert.strictEqual(freshAfterSync.json()?.isFresh, true);
+      assert.strictEqual(freshAfterSync.json()?.acquisitionMethod, 'LAN_GATEWAY_PULL');
+
+      // Simulate physical ESP32-CAM disconnection by closing mock camera server
+      await new Promise<void>((resolve) => mockCamServer!.close(() => resolve()));
+      mockCamServer = null;
+
+      const lanOffline = await makeHttpRequest(
+        appPort,
+        'GET',
+        `/api/camera/lan/status?host=127.0.0.1&httpPort=${mockCamPort}`
+      );
+      assert.strictEqual(lanOffline.status, 200);
+      assert.strictEqual(lanOffline.json()?.lanReachable, false);
+
+      const syncOffline = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/lan/sync',
+        { 'Content-Type': 'application/json' },
+        JSON.stringify({ host: '127.0.0.1', httpPort: mockCamPort, photoPath: '/photo' })
+      );
+      assert.strictEqual(syncOffline.status, 502);
+      assert.strictEqual(syncOffline.json()?.error, 'CAMERA_LAN_UNREACHABLE');
+
+      // Simulate cloud deployment (Render) attempting to reach private LAN 10.87.237.36 directly
+      simulateCloudHosted = true;
+      const cloudLanAttempt = await makeHttpRequest(
+        appPort,
+        'POST',
+        '/api/camera/lan/sync',
+        { 'Content-Type': 'application/json' },
+        JSON.stringify({ host: '10.87.237.36', httpPort: 80, photoPath: '/photo' })
+      );
+      assert.strictEqual(cloudLanAttempt.status, 503);
+      assert.strictEqual(cloudLanAttempt.json()?.error, 'PRIVATE_LAN_UNREACHABLE_FROM_CLOUD');
+      simulateCloudHosted = false;
+
+      // Unauthenticated DELETE is blocked; authenticated DELETE clears cache -> DISCONNECTED
+      const unauthDelete = await makeHttpRequest(appPort, 'DELETE', '/api/camera/latest');
+      assert.strictEqual(unauthDelete.status, 401);
+
+      const clearRes = await makeHttpRequest(appPort, 'DELETE', '/api/camera/latest', {
+        'X-Camera-Key': TEST_KEY
+      });
+      assert.strictEqual(clearRes.status, 200);
+
+      const afterClear = await makeHttpRequest(appPort, 'GET', '/api/camera/latest');
+      assert.strictEqual(afterClear.json()?.exists, false);
+      assert.strictEqual(afterClear.json()?.dataSource, 'DISCONNECTED');
+
+      console.log('  ✅ 8. LAN gateway pull sync, camera disconnection handling, and cloud private-LAN guard verified');
+      passed++;
+    }
+
+    // -------------------------------------------------------------------------
+    // 9. Public frontend secret/LAN-IP hygiene & ESP32-CAM verified TLS module audit
+    // -------------------------------------------------------------------------
+    {
+      const srcRoot = path.join(process.cwd(), 'src');
+      const collectFiles = (dir: string): string[] => {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        const out: string[] = [];
+        for (const e of entries) {
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) out.push(...collectFiles(full));
+          else if (/\.(ts|tsx|js|jsx)$/.test(e.name)) out.push(full);
+        }
+        return out;
+      };
+
+      const clientFiles = collectFiles(srcRoot).filter((f) => !f.includes(`${path.sep}server${path.sep}`));
+      for (const file of clientFiles) {
+        const text = fs.readFileSync(file, 'utf8');
+        assert.strictEqual(
+          text.includes('10.87.237.36'),
+          false,
+          `Public client file ${path.relative(process.cwd(), file)} must not hardcode private camera LAN IP`
+        );
+        assert.strictEqual(
+          text.includes('setInsecure('),
+          false,
+          `Public client file ${path.relative(process.cwd(), file)} must not recommend insecure TLS`
+        );
+      }
+
+      const fwHeaderPath = path.join(process.cwd(), 'firmware', 'esp32_cam_cloud_sync', 'edens_cloud_upload.h');
+      assert.ok(fs.existsSync(fwHeaderPath), 'Direct ESP32-CAM cloud upload header must exist');
+      const fwCode = fs.readFileSync(fwHeaderPath, 'utf8');
+      assert.ok(fwCode.includes('setCACert(EDENS_CLOUD_ROOT_CA_BUNDLE)'), 'Firmware must verify HTTPS Root CA certificate');
+      assert.strictEqual(fwCode.includes('secureClient.setInsecure()'), false, 'Firmware must not disable TLS certificate verification');
+      assert.ok(fwCode.includes('"X-Camera-Key"'), 'Firmware must authenticate via X-Camera-Key header');
+
+      const gitignoreText = fs.readFileSync(path.join(process.cwd(), '.gitignore'), 'utf8');
+      assert.ok(gitignoreText.includes('camera_secrets.h'), '.gitignore must protect camera_secrets.h');
+
+      console.log('  ✅ 9. Frontend LAN-IP/secret hygiene & verified Root CA TLS firmware module verified');
+      passed++;
+    }
+
+    console.log(`\n🎉 All ${passed}/9 Camera Acquisition, Freshness, Vision Diagnosis & Security test groups passed!\n`);
   } finally {
-    server.close();
-    // Clean up test directory
-    try {
-      fs.rmSync(uploadDir, { recursive: true, force: true });
-    } catch (_) {}
-  }
-
-  console.log(`\n========================================`);
-  console.log(`Test Results: ${passed} passed, ${failed} failed.`);
-  console.log(`========================================\n`);
-
-  if (failed > 0) {
-    process.exit(1);
+    if (mockCamServer) {
+      await new Promise<void>((resolve) => mockCamServer!.close(() => resolve()));
+    }
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 }
 
 runTestSuite().catch((err) => {
-  console.error('Fatal test error:', err);
+  console.error('❌ Camera integration test suite failed:', err);
   process.exit(1);
 });

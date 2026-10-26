@@ -132,17 +132,25 @@ export interface CameraUploadResponse {
 export interface LatestUploadedImage {
   exists: boolean;
   status: 'ONLINE' | 'IDLE' | 'CACHED' | 'STALE' | 'WAITING_FOR_UPLOAD' | 'OFFLINE';
+  freshness?: 'FRESH' | 'CACHED' | 'STALE' | 'NONE';
+  isFresh?: boolean;
+  isStale?: boolean;
+  isLiveStream?: boolean;
   id?: string;
   timestamp?: string;
+  capturedAt?: string;
   ageSeconds?: number;
   sizeBytes?: number;
   mimeType?: string;
   url?: string;
   base64?: string;
+  acquisitionMethod?: 'ESP32_CAM_UPLOAD' | 'LAN_GATEWAY_PULL';
+  cameraAddress?: string | null;
   analyzed?: boolean;
   analysis?: any;
   dataSource: DataSource;
   totalUploadsCount?: number;
+  freshMaxSeconds?: number;
   uploadEndpoint?: string;
 }
 
@@ -151,12 +159,19 @@ export interface CameraUploadInfo {
   method: string;
   supportedContentTypes: string[];
   authHeader: string;
-  authQueryParam: string;
+  authQueryParam?: string;
   maxSizeMb: number;
+  freshMaxSeconds?: number;
   authConfigured: boolean;
+  cloudHosted?: boolean;
+  lanGatewayConfigured?: boolean;
   latestUploadTimestamp: string | null;
   latestImageId?: string | null;
   latestSizeBytes?: number;
+  latestFreshness?: string;
+  latestIsFresh?: boolean;
+  latestAgeSeconds?: number | null;
+  latestDataSource?: DataSource;
   totalUploadsReceived: number;
   hasUploadedImage: boolean;
 }

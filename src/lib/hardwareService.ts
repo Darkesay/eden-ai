@@ -203,7 +203,11 @@ class HardwareService {
     try {
       const stored = localStorage.getItem('edens_hardware_config');
       if (stored) {
-        return JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        if (!parsed.cameraHost || String(parsed.cameraHost).includes('placeholder-ip')) {
+          parsed.cameraHost = '';
+        }
+        return parsed;
       }
     } catch (_) {}
 
@@ -871,17 +875,21 @@ class HardwareService {
   public async getCameraSnapshot(): Promise<{
     base64Image: string;
     dataSource: DataSource;
+    isFresh?: boolean;
+    ageSeconds?: number;
     isUploaded?: boolean;
     imageId?: string;
     timestamp?: string;
   }> {
-    // 1. Check for real uploaded camera frame from push endpoint
+    // 1. Check for real uploaded camera frame from push endpoint (only treat fresh frames as live captures)
     try {
       const latestUpload = await this.getLatestUploadedCameraImage();
-      if (latestUpload.exists && latestUpload.base64) {
+      if (latestUpload.exists && latestUpload.base64 && latestUpload.isFresh) {
         return {
           base64Image: latestUpload.base64,
-          dataSource: latestUpload.dataSource || 'REAL_HARDWARE',
+          dataSource: 'REAL_HARDWARE',
+          isFresh: true,
+          ageSeconds: latestUpload.ageSeconds,
           isUploaded: true,
           imageId: latestUpload.id,
           timestamp: latestUpload.timestamp
@@ -889,10 +897,10 @@ class HardwareService {
       }
     } catch (_) {}
 
-    // 2. If simulation mode is explicitly enabled and no real frame exists, generate synthetic frame
+    // 2. If simulation mode is explicitly enabled and no fresh physical frame exists, generate labelled simulation preview
     if (this.config.mode === 'simulation') {
       const simBase64 = this.generateSimulatedPlantSnapshot();
-      return { base64Image: simBase64, dataSource: 'SIMULATED' };
+      return { base64Image: simBase64, dataSource: 'SIMULATED', isFresh: false };
     }
 
     // 3. If cameraHost is configured, try direct HTTP pull (/photo on port 80 first, with /capture fallback)

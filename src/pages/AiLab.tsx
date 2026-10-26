@@ -30,14 +30,16 @@ import {
   AudioLines,
   Check,
   X,
-  SlidersHorizontal,
   Headphones,
   ExternalLink,
   RefreshCw,
-  Lock
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import { 
   analyzePlantImage, 
+  diagnoseLatestCameraFrame,
+  CameraDiagnosisError,
   consultAgronomist, 
   transcribeSpeechAudio,
   generateSpeechAudio,
@@ -56,7 +58,10 @@ import {
   MicrophoneAccessError,
   validateAudioFile
 } from '../lib/audio';
-import { hardwareService } from '../lib/hardwareService';
+import {
+  useCameraConnection,
+  formatFrameAge
+} from '../lib/cameraConnectionManager';
 import { format } from 'date-fns';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -84,7 +89,7 @@ export interface VoiceErrorInfo {
 }
 
 export default function AiLab() {
-  const camUrl = useStoreValue('cameraUrl', import.meta.env.VITE_ESP32_CAM_STREAM_URL || '');
+  const camera = useCameraConnection();
   const isVisionAgentEnabled = useStoreValue('agent_VisionAgent_enabled', false);
   const tempVal = useStoreValue('temperature', 24.5);
   const humVal = useStoreValue('humidity', 65.0);
@@ -99,38 +104,10 @@ export default function AiLab() {
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<PlantAnalysisResult | null>(null);
   const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
   const historyTable = useStoreTable('ai_history');
 
-  const [latestUploadedFrame, setLatestUploadedFrame] = useState<{
-    exists: boolean;
-    status?: string;
-    dataSource?: string;
-    ageSeconds?: number;
-    isStale?: boolean;
-    id?: string;
-    timestamp?: string;
-    url?: string;
-    sizeBytes?: number;
-    base64?: string;
-  } | null>(null);
   const [customImagePreview, setCustomImagePreview] = useState<string | null>(null);
   const plantImageInputRef = useRef<HTMLInputElement>(null);
-
-  const fetchLatestFrame = async () => {
-    try {
-      const frame = await hardwareService.getLatestUploadedCameraImage();
-      if (frame) {
-        setLatestUploadedFrame(frame);
-      }
-    } catch (_) {}
-  };
-
-  useEffect(() => {
-    fetchLatestFrame();
-    const interval = setInterval(fetchLatestFrame, 8000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Language selection: Default to Nigerian Pidgin or Hausa / Yoruba / Igbo
   const [selectedLangId, setSelectedLangId] = useState<string>(() => {
@@ -225,40 +202,10 @@ export default function AiLab() {
     }
   };
 
-  // Capture and analyze plant image with active Nigerian language
+  // Capture and analyze plant image with active Nigerian language.
+  // Strictly uses either an explicit user-uploaded leaf photo OR a verified fresh ESP32-CAM frame.
+  // Never scrapes blank canvases or passes cached/stale snapshots as fresh physical camera captures.
   const handleCapture = async () => {
-    let imageToAnalyze: string | null = null;
-
-    if (customImagePreview) {
-      imageToAnalyze = customImagePreview;
-    } else if (latestUploadedFrame?.exists && latestUploadedFrame?.base64) {
-      imageToAnalyze = latestUploadedFrame.base64;
-    } else if (imgRef.current && camUrl) {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = imgRef.current.width || 640;
-        canvas.height = imgRef.current.height || 480;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(imgRef.current, 0, 0, canvas.width, canvas.height);
-          imageToAnalyze = canvas.toDataURL('image/jpeg');
-        }
-      } catch (canvasErr: any) {
-        console.warn("Canvas stream capture failed:", canvasErr.message);
-      }
-    }
-
-    if (!imageToAnalyze) {
-      setDiagnosisError(
-        activeLanguage.id === 'ha'
-          ? 'Babu hoton shuka da aka samu. Da fatan za a loda hoton ganye ko a tura hoto daga ESP32-CAM zuwa /api/camera/upload.'
-          : activeLanguage.id === 'pcm'
-          ? 'No plant image dey available. Abeg upload a leaf picture or push a frame from your ESP32-CAM to /api/camera/upload.'
-          : 'No plant image available. Please upload a leaf photo or connect your ESP32-CAM to push a frame to /api/camera/upload.'
-      );
-      return;
-    }
-
     setAnalyzing(true);
     setResult(null);
     setDiagnosisError(null);
@@ -266,9 +213,35 @@ export default function AiLab() {
     setCurrentPlayingId(null);
 
     try {
-      const res = await analyzePlantImage(imageToAnalyze, selectedLangId);
+      let res: PlantAnalysisResult;
+      let historyImageRef: string;
+
+      if (customImagePreview) {
+        res = await analyzePlantImage(customImagePreview, selectedLangId);
+        historyImageRef = customImagePreview;
+      } else {
+        const syncedFrame = await camera.refreshNow(false);
+        const activeFrame = syncedFrame || camera.latestFrame;
+
+        if (!activeFrame) {
+          setDiagnosisError(
+            activeLanguage.id === 'ha'
+              ? 'Babu hoton kyamara na greenhouse a halin yanzu. Jira ESP32-CAM ta turo sabon hoto ko ka loda hoton ganye da hannu.'
+              : activeLanguage.id === 'pcm'
+              ? 'No greenhouse camera picture dey available right now. Wait make ESP32-CAM upload fresh snapshot or upload leaf photo.'
+              : 'No real greenhouse camera photograph is currently available. Wait for the ESP32-CAM to upload a fresh snapshot, or upload a leaf photo.'
+          );
+          setAnalyzing(false);
+          return;
+        }
+
+        res = await diagnoseLatestCameraFrame(selectedLangId);
+        historyImageRef = activeFrame.base64 || activeFrame.url;
+        void camera.refreshNow(false);
+      }
+
       setResult(res);
-      
+
       store.addRow('ai_history', {
         timestamp: new Date().toISOString(),
         species: res.species || 'Unknown',
@@ -279,7 +252,7 @@ export default function AiLab() {
         cause: res.cause || 'N/A',
         recommendation: res.recommendation || 'N/A',
         language: activeLanguage.name,
-        image: imageToAnalyze
+        image: historyImageRef
       });
 
       // Auto announce summary in Nigerian language if auto-speak is enabled
@@ -291,7 +264,21 @@ export default function AiLab() {
       }
     } catch (e: any) {
       console.error(e);
-      setDiagnosisError('EDENS AI plant diagnosis failed: ' + (e as Error).message);
+      if (e instanceof CameraDiagnosisError) {
+        if (e.code === 'STALE_CAMERA_FRAME') {
+          setDiagnosisError(
+            `Stale snapshot rejected (${formatFrameAge(e.ageSeconds ?? camera.displayAgeSeconds)}): EDENS AI will not diagnose an older stored photograph as a live physical capture. Wait for a fresh ESP32-CAM upload or upload a leaf photo.`
+          );
+        } else if (e.code === 'NO_CAMERA_FRAME') {
+          setDiagnosisError(
+            'No real greenhouse camera photograph is currently stored on the cloud server. Wait for the ESP32-CAM to upload a fresh snapshot, or upload a leaf photo.'
+          );
+        } else {
+          setDiagnosisError(e.message);
+        }
+      } else {
+        setDiagnosisError('EDENS AI plant diagnosis failed: ' + (e as Error).message);
+      }
     } finally {
       setAnalyzing(false);
     }
@@ -875,108 +862,276 @@ export default function AiLab() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2 items-start">
         
         {/* Camera Stream & Capture Card */}
-        <Card id="tour-ai-camera" className="border border-[#14B8A6]/20 dark:border-white/5 bg-[#FFFFFF]/80 dark:bg-[#080808]/80 backdrop-blur-xl rounded-3xl shadow-[0_4px_24px_-4px_rgba(20,184,166,0.05)] flex flex-col hover:scale-[1.01] transition-transform duration-300 relative group overflow-hidden">
+        <Card id="tour-ai-camera" className="border border-[#14B8A6]/20 dark:border-white/5 bg-[#FFFFFF]/80 dark:bg-[#080808]/80 backdrop-blur-xl rounded-3xl shadow-[0_4px_24px_-4px_rgba(20,184,166,0.05)] flex flex-col relative group overflow-hidden">
           <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#14B8A6]" />
-          <CardHeader className="pb-4 border-b border-[#D1E8D1] dark:border-[#1A2A1A] flex flex-row items-center justify-between">
-            <div className="text-[10px] w-max font-bold font-sans uppercase tracking-[0.05em] flex items-center gap-2 text-[#808080]">
-              <Camera size={14} className="text-[#14B8A6]" /> LIVE CAMERA STREAM & VISUAL CAPTURE
+          <CardHeader className="pb-3 border-b border-[#D1E8D1] dark:border-[#1A2A1A] flex flex-row flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-[10px] font-bold font-sans uppercase tracking-[0.05em] flex items-center gap-2 text-[#808080]">
+                <Camera size={14} className="text-[#14B8A6]" /> GREENHOUSE CLOUD CAMERA
+              </div>
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[10px] font-mono tabular-nums font-bold border",
+                  camera.connectionBadge === 'CONNECTED'
+                    ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
+                    : camera.connectionBadge === 'RECONNECTING'
+                    ? "bg-sky-500/10 text-sky-400 border-sky-500/30"
+                    : camera.status === 'ERROR'
+                    ? "bg-red-500/10 text-red-400 border-red-500/30"
+                    : "bg-zinc-500/10 text-zinc-400 border-zinc-500/30"
+                )}
+              >
+                {camera.connectionBadge === 'CONNECTED' ? (
+                  <Wifi size={11} />
+                ) : camera.connectionBadge === 'RECONNECTING' ? (
+                  <RefreshCw size={11} className="animate-spin" />
+                ) : (
+                  <WifiOff size={11} />
+                )}
+                {camera.connectionBadge}
+              </span>
+
+              {camera.freshnessBadge && (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono tabular-nums font-bold border",
+                    camera.freshnessBadge === 'FRESH'
+                      ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
+                      : "bg-amber-500/10 text-amber-500 border-amber-500/30"
+                  )}
+                >
+                  {camera.freshnessBadge}
+                </span>
+              )}
             </div>
-            <div className="text-[10px] font-mono text-[#14B8A6] font-bold">
-              {activeLanguage.name} Mode
+
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-muted-foreground hidden sm:inline">
+                Snapshot Preview
+              </span>
+              <div className="text-[10px] font-mono text-[#14B8A6] font-bold">
+                {activeLanguage.name}
+              </div>
             </div>
           </CardHeader>
-          <CardContent className="flex-1 space-y-4 p-6">
-             <div className="w-full aspect-video bg-[#050505] rounded-2xl overflow-hidden relative border border-[#222] shadow-[inset_0_0_50px_rgba(0,0,0,0.8)]">
-               {customImagePreview ? (
-                 <div className="relative w-full h-full">
-                   <img ref={imgRef} src={customImagePreview} alt="Uploaded Leaf Photo" className="w-full h-full object-contain" />
-                   <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-blue-500/50 text-[10px] font-mono text-blue-400 font-bold">
-                     <Leaf size={12} /> USER UPLOADED LEAF PHOTO
-                   </div>
-                 </div>
-               ) : latestUploadedFrame?.exists && latestUploadedFrame?.url ? (
-                 <div className="relative w-full h-full">
-                   <img ref={imgRef} src={latestUploadedFrame.url} alt="ESP32-CAM Uploaded Frame" className="w-full h-full object-cover" />
-                   <div className={cn(
-                     "absolute top-3 left-3 flex items-center gap-2 bg-black/85 backdrop-blur-md px-3 py-1.5 rounded-full border text-[10px] font-mono font-bold",
-                     latestUploadedFrame.dataSource === 'STALE'
-                       ? "border-orange-500/50 text-orange-400"
-                       : latestUploadedFrame.dataSource === 'CACHED'
-                       ? "border-amber-500/50 text-amber-400"
-                       : "border-emerald-500/50 text-emerald-400"
-                   )}>
-                     <span className={cn(
-                       "w-2 h-2 rounded-full",
-                       latestUploadedFrame.dataSource === 'STALE' ? "bg-orange-500" :
-                       latestUploadedFrame.dataSource === 'CACHED' ? "bg-amber-500 animate-pulse" :
-                       "bg-emerald-500 animate-ping"
-                     )} />
-                     {latestUploadedFrame.dataSource || 'REAL_HARDWARE'} ESP32-CAM · {Math.max(1, Math.round((latestUploadedFrame.sizeBytes || 0) / 1024))} KB
-                   </div>
-                   {latestUploadedFrame.timestamp && (
-                     <div className="absolute bottom-3 left-3 bg-black/80 backdrop-blur-md px-2.5 py-1 rounded-lg text-[9px] font-mono text-gray-300">
-                       Captured: {format(new Date(latestUploadedFrame.timestamp), 'yyyy-MM-dd HH:mm:ss')}
-                       {latestUploadedFrame.ageSeconds !== undefined ? ` (${latestUploadedFrame.ageSeconds}s ago)` : ''}
-                     </div>
-                   )}
-                 </div>
-               ) : camUrl ? (
-                 <img ref={imgRef} src={camUrl} crossOrigin="anonymous" alt="ESP32-CAM Stream" className="w-full h-full object-cover mix-blend-luminosity hover:mix-blend-normal transition-all duration-700" />
-               ) : (
-                 <HardwareSetupGuide variant="custom">
-                   <button className="w-full h-full flex items-center justify-center text-gray-500 font-sans flex-col gap-3 p-6 text-center absolute inset-0 z-10 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#0A0A0A] to-[#000000] hover:bg-[#111] transition-colors cursor-pointer outline-none focus:ring-2 focus:ring-[#14B8A6] focus:ring-inset group border-0">
-                      <div className="w-16 h-16 rounded-3xl bg-[#14B8A6]/5 flex items-center justify-center mb-2 border border-[#14B8A6]/30 relative overflow-hidden shadow-[0_0_30px_rgba(20,184,166,0.15)] group-hover:scale-110 transition-transform duration-500">
-                         <div className="absolute inset-0 bg-[#14B8A6]/20 animate-pulse opacity-50" />
-                         <Camera size={32} className="text-[#14B8A6] relative z-10 opacity-80 drop-shadow-[0_0_5px_rgba(20,184,166,0.5)]" />
-                      </div>
-                      <span className="tracking-widest opacity-100 font-bold text-white uppercase text-sm drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]">No Camera Frame Received Yet</span>
-                      <span className="opacity-60 max-w-sm mb-2 text-xs leading-relaxed">Awaiting ESP32-CAM upload at POST /api/camera/upload, or select a plant photo below for instant AI diagnosis.</span>
-                      <span className="text-[#14B8A6] text-[10px] font-bold uppercase tracking-widest mt-2 border border-[#14B8A6]/30 bg-[#14B8A6]/10 px-3 py-1.5 rounded-full drop-shadow-[0_0_5px_rgba(20,184,166,0.3)]">Click to View Hardware Guide</span>
-                   </button>
-                 </HardwareSetupGuide>
-               )}
-               <div className="absolute inset-0 pointer-events-none bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPgo8cmVjdCB3aWR0aD0iNCIgaGVpZ2h0PSIxIiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMDUpIi8+Cjwvc3ZnPg==')] opacity-40 mix-blend-overlay" />
-             </div>
 
-             {/* Action bar: Diagnose image, Upload Photo, Refresh */}
-             <div className="flex flex-col sm:flex-row gap-3">
-               <Button 
-                 onClick={handleCapture}
-                 disabled={analyzing || (!latestUploadedFrame?.exists && !customImagePreview && !camUrl)}
-                 className="flex-1 bg-[#14B8A6] hover:bg-[#0D9488] text-white font-bold tracking-wide h-13 rounded-2xl shadow-[0_4px_20px_rgba(20,184,166,0.3)] border-0 cursor-pointer transition-all"
-               >
-                 <Camera className="mr-2" size={18} /> 
-                 {analyzing ? `Analyzing plant frame...` : `Diagnose Image in ${activeLanguage.name}`}
-               </Button>
+          <CardContent className="flex-1 space-y-4 p-4 sm:p-6">
+            {/* Connection & Last-Image Timestamp Telemetry Strip */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 px-3 py-2 rounded-xl bg-black/[0.03] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 text-[11px] font-mono">
+              <div className="flex items-center gap-2 min-w-0" title={camera.statusDetail}>
+                <span
+                  className={cn(
+                    "w-2 h-2 rounded-full shrink-0",
+                    camera.connectionBadge === 'CONNECTED'
+                      ? "bg-emerald-500 animate-pulse"
+                      : camera.freshnessBadge === 'STALE'
+                      ? "bg-amber-500"
+                      : camera.connectionBadge === 'RECONNECTING'
+                      ? "bg-sky-400 animate-ping"
+                      : camera.status === 'ERROR'
+                      ? "bg-red-500"
+                      : "bg-zinc-500"
+                  )}
+                />
+                <span className="truncate font-semibold">{camera.statusHeadline}</span>
+              </div>
 
-               <input 
-                 type="file" 
-                 ref={plantImageInputRef}
-                 onChange={handlePlantPhotoUpload}
-                 accept="image/jpeg,image/png,image/webp" 
-                 className="hidden" 
-               />
+              <div className="flex items-center sm:justify-end gap-1.5 text-muted-foreground tabular-nums">
+                <Clock size={12} className="text-[#14B8A6] shrink-0" />
+                <span className="truncate">
+                  Last Capture:{' '}
+                  {camera.lastImageTimestamp
+                    ? `${format(new Date(camera.lastImageTimestamp), 'yyyy-MM-dd HH:mm:ss')} (${formatFrameAge(camera.displayAgeSeconds)})`
+                    : 'None received'}
+                </span>
+              </div>
+            </div>
 
-               <Button 
-                 type="button"
-                 onClick={() => plantImageInputRef.current?.click()}
-                 disabled={analyzing}
-                 variant="outline"
-                 className="h-13 rounded-2xl border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5 font-semibold text-xs px-4"
-               >
-                 <Upload className="mr-1.5" size={16} /> Upload Photo
-               </Button>
+            {/* Viewport */}
+            <div className="w-full aspect-video bg-[#050505] rounded-2xl overflow-hidden relative border border-[#222] shadow-[inset_0_0_50px_rgba(0,0,0,0.8)]">
+              {/* Optional local MJPEG stream when verified on local gateway */}
+              {!customImagePreview && camera.liveStreamCandidateUrl && (
+                <img
+                  src={camera.liveStreamCandidateUrl}
+                  alt="Greenhouse Camera Live Stream"
+                  onLoad={camera.notifyStreamLoaded}
+                  onError={camera.notifyStreamError}
+                  className={cn(
+                    "w-full h-full object-cover transition-opacity duration-300",
+                    camera.isLiveStreamVerified ? "opacity-100" : "opacity-0 pointer-events-none absolute inset-0"
+                  )}
+                />
+              )}
 
-               <Button 
-                 type="button"
-                 onClick={fetchLatestFrame}
-                 title="Check for new ESP32-CAM upload"
-                 variant="outline"
-                 className="h-13 w-13 p-0 rounded-2xl border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5 flex items-center justify-center shrink-0"
-               >
-                 <RefreshCw size={16} />
-               </Button>
-             </div>
+              {customImagePreview ? (
+                <div className="relative w-full h-full">
+                  <img src={customImagePreview} alt="Uploaded Leaf Photo" className="w-full h-full object-contain" />
+                  <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-lg border border-blue-500/50 text-[10px] font-mono text-blue-400 font-bold">
+                    <Leaf size={12} /> MANUAL LEAF PHOTO UPLOAD
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCustomImagePreview(null)}
+                    className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/80 hover:bg-black px-2.5 py-1.5 rounded-lg border border-white/20 text-[10px] font-mono text-white cursor-pointer"
+                  >
+                    <RotateCcw size={11} /> Return to Camera Feed
+                  </button>
+                </div>
+              ) : camera.isLiveStreamVerified && camera.liveStreamCandidateUrl ? (
+                <div className="absolute inset-0 pointer-events-none">
+                  <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/85 backdrop-blur-md px-3 py-1.5 rounded-lg border border-emerald-500/50 text-[10px] font-mono font-bold text-emerald-400">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                    CONNECTED · LIVE MJPEG STREAM
+                  </div>
+                </div>
+              ) : camera.latestFrame ? (
+                <div className="relative w-full h-full">
+                  <img
+                    key={camera.latestFrame.id}
+                    src={camera.latestFrame.url}
+                    alt="ESP32-CAM Greenhouse Snapshot"
+                    className={cn(
+                      "w-full h-full object-cover transition-opacity duration-300",
+                      !camera.latestFrame.isFresh && "opacity-80"
+                    )}
+                  />
+                  <div
+                    className={cn(
+                      "absolute top-2.5 left-2.5 right-2.5 sm:right-auto flex items-center gap-2 bg-black/85 backdrop-blur-md px-2.5 py-1.5 rounded-lg border text-[10px] font-mono tabular-nums font-bold",
+                      camera.latestFrame.isFresh
+                        ? "border-emerald-500/50 text-emerald-400"
+                        : "border-amber-500/50 text-amber-400"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "w-2 h-2 rounded-full shrink-0",
+                        camera.latestFrame.isFresh
+                          ? "bg-emerald-500 animate-pulse"
+                          : "bg-amber-500"
+                      )}
+                    />
+                    <span className="truncate">
+                      {camera.latestFrame.isFresh
+                        ? `FRESH · AUTO-REFRESHING JPEG SNAPSHOT (NOT LIVE VIDEO) · ${Math.max(1, Math.round(camera.latestFrame.sizeBytes / 1024))} KB`
+                        : `STALE · HISTORICAL SNAPSHOT (NOT LIVE) · ${Math.max(1, Math.round(camera.latestFrame.sizeBytes / 1024))} KB`}
+                    </span>
+                  </div>
+
+                  <div className="absolute bottom-2.5 left-2.5 right-2.5 flex flex-wrap items-center justify-between gap-2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-lg text-[10px] font-mono text-gray-200 tabular-nums">
+                    <span>
+                      Captured: {format(new Date(camera.latestFrame.timestamp), 'yyyy-MM-dd HH:mm:ss')} (
+                      {formatFrameAge(camera.displayAgeSeconds)})
+                    </span>
+                    <span className="text-[#14B8A6]">
+                      ESP32-CAM Cloud Snapshot
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-gray-400 font-sans flex-col gap-2.5 p-5 sm:p-6 text-center absolute inset-0 z-10 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#0D1312] to-[#040606]">
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-[#14B8A6]/10 flex items-center justify-center border border-[#14B8A6]/30">
+                    {camera.connectionBadge === 'RECONNECTING' ? (
+                      <RefreshCw size={24} className="text-[#14B8A6] animate-spin" />
+                    ) : (
+                      <Camera size={24} className="text-[#14B8A6]" />
+                    )}
+                  </div>
+                  <span className="tracking-wider font-bold text-white uppercase text-xs">
+                    {camera.status === 'ERROR'
+                      ? 'Camera Feed Configuration Pending'
+                      : camera.connectionBadge === 'RECONNECTING'
+                      ? `Reconnecting to Cloud Feed${camera.nextRetryInSeconds !== null ? ` (${camera.nextRetryInSeconds}s)` : ''}`
+                      : 'Disconnected · No Camera Image Available'}
+                  </span>
+                  <span className="text-gray-400 max-w-md text-[11px] leading-relaxed">
+                    {camera.statusDetail}
+                  </span>
+                  <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
+                    <button
+                      type="button"
+                      onClick={() => void camera.reconnectNow()}
+                      disabled={camera.isRefreshing}
+                      className="text-[#14B8A6] text-[10px] font-mono font-bold uppercase tracking-wider border border-[#14B8A6]/35 bg-[#14B8A6]/10 hover:bg-[#14B8A6]/20 px-3 py-1.5 rounded-lg cursor-pointer"
+                    >
+                      {camera.isRefreshing ? 'Checking...' : 'Check Camera Feed'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="absolute inset-0 pointer-events-none bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPgo8cmVjdCB3aWR0aD0iNCIgaGVpZ2h0PSIxIiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMDUpIi8+Cjwvc3ZnPg==')] opacity-40 mix-blend-overlay" />
+            </div>
+
+            {/* Stale / Reconnect Banner when stored image is old or connection is retrying */}
+            {!customImagePreview && (camera.freshnessBadge === 'STALE' || camera.connectionBadge === 'RECONNECTING' || camera.errorMessage) && (
+              <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs">
+                <div className="flex items-start gap-2 text-amber-600 dark:text-amber-400">
+                  <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                  <span className="text-[11px] leading-relaxed">
+                    {camera.errorMessage || camera.statusDetail}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void camera.reconnectNow()}
+                  className="shrink-0 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-600 dark:text-amber-300 text-[10px] font-mono font-bold uppercase cursor-pointer"
+                >
+                  Refresh
+                </button>
+              </div>
+            )}
+
+            {/* Action bar: User-Triggered AI Diagnosis, Upload Leaf Photo, Refresh */}
+            <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3">
+              <Button
+                onClick={handleCapture}
+                disabled={analyzing}
+                className="flex-1 bg-[#14B8A6] hover:bg-[#0D9488] text-white font-bold tracking-wide min-h-12 h-auto py-2.5 px-4 rounded-2xl shadow-[0_4px_20px_rgba(20,184,166,0.3)] border-0 cursor-pointer transition-all text-xs sm:text-sm"
+              >
+                <Camera className="mr-2 shrink-0" size={18} />
+                <span className="truncate">
+                  {analyzing
+                    ? 'Analyzing plant frame...'
+                    : customImagePreview
+                    ? `Diagnose Uploaded Photo (${activeLanguage.name})`
+                    : camera.latestFrame?.isFresh || camera.status === 'LIVE_STREAM'
+                    ? `Diagnose Fresh Camera Image (${activeLanguage.name})`
+                    : `Diagnose Greenhouse Camera (${activeLanguage.name})`}
+                </span>
+              </Button>
+
+              <div className="flex gap-2.5">
+                <input
+                  type="file"
+                  ref={plantImageInputRef}
+                  onChange={handlePlantPhotoUpload}
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                />
+
+                <Button
+                  type="button"
+                  onClick={() => plantImageInputRef.current?.click()}
+                  disabled={analyzing}
+                  variant="outline"
+                  className="flex-1 sm:flex-initial h-12 rounded-2xl border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5 font-semibold text-xs px-4 cursor-pointer"
+                >
+                  <Upload className="mr-1.5 shrink-0" size={16} /> Upload Leaf Photo
+                </Button>
+
+                <Button
+                  type="button"
+                  onClick={() => void camera.refreshNow(false)}
+                  disabled={camera.isRefreshing}
+                  title="Check for newer greenhouse camera snapshot"
+                  variant="outline"
+                  className="h-12 w-12 p-0 rounded-2xl border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5 flex items-center justify-center shrink-0 cursor-pointer"
+                >
+                  <RefreshCw size={16} className={cn(camera.isRefreshing && "animate-spin text-[#14B8A6]")} />
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -1074,6 +1229,19 @@ export default function AiLab() {
                    animate={{ opacity: 1, y: 0 }}
                    className="space-y-6"
                  >
+                   <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-black/[0.03] dark:bg-white/[0.04] border border-black/5 dark:border-white/10 text-[10px] font-mono tabular-nums">
+                     <span className="font-bold text-[#10B981]">
+                       {result.imageSource === 'ESP32_CAM_FRESH'
+                         ? `PROVENANCE: FRESH ESP32-CAM CLOUD SNAPSHOT (${result.frameId || 'VERIFIED'})`
+                         : 'PROVENANCE: MANUAL LEAF PHOTOGRAPH UPLOAD'}
+                     </span>
+                     {result.frameTimestamp && (
+                       <span className="opacity-75">
+                         Captured {format(new Date(result.frameTimestamp), 'yyyy-MM-dd HH:mm:ss')}
+                       </span>
+                     )}
+                   </div>
+
                    <div className="flex items-start justify-between">
                      <div>
                         <div className="text-[10px] uppercase opacity-50 font-bold tracking-[0.2em] mb-1">

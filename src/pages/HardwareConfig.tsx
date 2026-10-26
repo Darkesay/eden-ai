@@ -512,7 +512,7 @@ export default function HardwareConfigPage() {
                 <Label className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2 block">
                   Camera Feed Preview
                 </Label>
-                <CameraStream showControls={true} />
+                <CameraStream showControls={true} allowAdminTestUpload={true} />
               </div>
             </CardContent>
           </Card>
@@ -574,30 +574,27 @@ export default function HardwareConfigPage() {
               <div className="p-4 rounded-2xl bg-black/20 border border-black/10 dark:border-white/10 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold uppercase tracking-wider text-gray-300 flex items-center gap-2">
-                    <Globe size={14} className="text-emerald-400" /> Network Reachability Architecture
+                    <Globe size={14} className="text-emerald-400" /> Direct Camera-to-Cloud Architecture
                   </span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/10 text-gray-300">
-                    Dual Mode Support
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
+                    Production Standard
                   </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  <div className="p-3 rounded-xl bg-black/30 border border-white/5 space-y-1">
-                    <span className="font-bold text-emerald-400 text-[11px]">Option A: Local Greenhouse Gateway</span>
+                  <div className="p-3 rounded-xl bg-black/30 border border-emerald-500/20 space-y-1">
+                    <span className="font-bold text-emerald-400 text-[11px]">Primary: Direct ESP32-CAM HTTPS Upload</span>
                     <p className="text-[11px] text-gray-400">
-                      Run EDENS AI server on a local Raspberry Pi or mini PC on the greenhouse Wi-Fi:
+                      Include <code className="text-emerald-300">firmware/esp32_cam_cloud_sync/edens_cloud_upload.h</code> in your ESP32-CAM sketch for non-blocking, CA-verified TLS uploads directly to cloud:
                     </p>
                     <code className="block text-[11px] font-mono text-emerald-300 bg-black/50 p-1.5 rounded">
-                      http://192.168.x.x:3000/api/camera/upload
+                      POST https://edens-ai.onrender.com/api/camera/upload
                     </code>
                   </div>
                   <div className="p-3 rounded-xl bg-black/30 border border-white/5 space-y-1">
-                    <span className="font-bold text-blue-400 text-[11px]">Option B: Public Cloud Deployment</span>
+                    <span className="font-bold text-blue-400 text-[11px]">Local Endpoints Preserved on LAN</span>
                     <p className="text-[11px] text-gray-400">
-                      Deploy backend to Cloud Run, Render, or VPS if camera has internet access:
+                      Background FreeRTOS upload copies each JPEG into PSRAM in ~4ms so local <code className="text-blue-300">/photo</code>, <code className="text-blue-300">/status</code>, and <code className="text-blue-300">:81/stream</code> remain responsive without any PC relay.
                     </p>
-                    <code className="block text-[11px] font-mono text-blue-300 bg-black/50 p-1.5 rounded">
-                      https://your-domain.com/api/camera/upload
-                    </code>
                   </div>
                 </div>
               </div>
@@ -608,17 +605,17 @@ export default function HardwareConfigPage() {
                   <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
                     <Activity size={14} /> Intake Status & Metrics
                   </span>
-                  <div className="flex items-center gap-3 text-xs text-gray-300">
+                  <div className="flex items-center gap-3 text-xs text-gray-300 font-mono tabular-nums">
                     <span>
-                      Total Frames: <strong className="text-white font-mono">{uploadInfo?.totalUploadsReceived ?? 0}</strong>
+                      Total Frames: <strong className="text-white">{uploadInfo?.totalUploadsReceived ?? 0}</strong>
                     </span>
                     <span>·</span>
                     <span>
-                      Latest Upload: <strong className="text-white font-mono">{uploadInfo?.latestUploadTimestamp ? new Date(uploadInfo.latestUploadTimestamp).toLocaleTimeString() : 'None'}</strong>
+                      Latest Upload: <strong className="text-white">{uploadInfo?.latestUploadTimestamp ? new Date(uploadInfo.latestUploadTimestamp).toLocaleTimeString() : 'None'}</strong>
                     </span>
                     <span>·</span>
                     <span>
-                      Max Size: <strong className="text-white font-mono">{uploadInfo?.maxSizeMb ?? 10} MB</strong>
+                      Max Size: <strong className="text-white">{uploadInfo?.maxSizeMb ?? 10} MB</strong>
                     </span>
                   </div>
                 </div>
@@ -670,28 +667,18 @@ export default function HardwareConfigPage() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-bold uppercase tracking-wider text-gray-400">
-                    ESP32-CAM Firmware Upload Snippet (C++ / Arduino)
+                    ESP32-CAM Verified HTTPS Cloud Upload Integration (C++ / Arduino)
                   </Label>
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => handleCopySnippet(`// ESP32-CAM HTTP POST Upload
-camera_fb_t *fb = esp_camera_fb_get();
-if (fb) {
-  HTTPClient http;
-  // Replace with your local gateway IP or Render production URL (e.g. https://your-app.onrender.com/api/camera/upload)
-  http.begin("http://<SERVER_IP>:3000/api/camera/upload");
-  http.addHeader("Content-Type", "image/jpeg");
-  http.addHeader("X-Camera-Key", "<YOUR_CAMERA_UPLOAD_KEY>");
-  int httpResponseCode = http.POST(fb->buf, fb->len);
-  if (httpResponseCode == 200) {
-    String response = http.getString();
-    Serial.println("Upload success: " + response);
-  }
-  esp_camera_fb_return(fb);
-  http.end();
-}`)}
+                    onClick={() => handleCopySnippet(`// 1. Copy firmware/esp32_cam_cloud_sync/edens_cloud_upload.h into your sketch folder
+// 2. Create camera_secrets.h (gitignored) with EDENS_CAMERA_UPLOAD_KEY
+#include "edens_cloud_upload.h"
+
+// Inside setup(), right after WiFi connection and startCameraServer():
+edensStartCloudUploadTask(); // Verified Root CA TLS + X-Camera-Key + non-blocking Core 0 task`)}
                     className="h-7 px-2.5 text-xs text-emerald-400 hover:bg-emerald-500/10 cursor-pointer"
                   >
                     {copiedCode ? <CheckCheck size={13} className="mr-1" /> : <Copy size={13} className="mr-1" />}
@@ -700,22 +687,12 @@ if (fb) {
                 </div>
 
                 <div className="p-3.5 rounded-2xl bg-black/70 border border-white/10 font-mono text-[11px] text-gray-300 overflow-x-auto leading-relaxed">
-                  <pre>{`// ESP32-CAM HTTP POST Upload
-camera_fb_t *fb = esp_camera_fb_get();
-if (fb) {
-  HTTPClient http;
-  // Replace with your local gateway IP or Render production URL (e.g. https://your-app.onrender.com/api/camera/upload)
-  http.begin("http://<SERVER_IP>:3000/api/camera/upload");
-  http.addHeader("Content-Type", "image/jpeg");
-  http.addHeader("X-Camera-Key", "<YOUR_CAMERA_UPLOAD_KEY>");
-  int httpResponseCode = http.POST(fb->buf, fb->len);
-  if (httpResponseCode == 200) {
-    String response = http.getString();
-    Serial.println("Upload success: " + response);
-  }
-  esp_camera_fb_return(fb);
-  http.end();
-}`}</pre>
+                  <pre>{`// 1. Copy firmware/esp32_cam_cloud_sync/edens_cloud_upload.h into your sketch folder
+// 2. Create camera_secrets.h (gitignored) with EDENS_CAMERA_UPLOAD_KEY
+#include "edens_cloud_upload.h"
+
+// Inside setup(), right after WiFi connection and startCameraServer():
+edensStartCloudUploadTask(); // Verified Root CA TLS (setCACert + NTP) + X-Camera-Key`}</pre>
                 </div>
               </div>
             </CardContent>

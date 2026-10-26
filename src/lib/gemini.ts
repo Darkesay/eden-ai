@@ -14,6 +14,10 @@ export interface PlantAnalysisResult {
   recommendation: string;
   language?: string;
   audioSummary?: string;
+  imageSource?: 'ESP32_CAM_FRESH' | 'ESP32_CAM_HISTORICAL' | 'MANUAL_UPLOAD';
+  frameId?: string;
+  frameTimestamp?: string;
+  frameAgeSeconds?: number;
 }
 
 export interface HarvestPredictionResult {
@@ -201,6 +205,56 @@ export async function predictHarvest(
   return data.result as HarvestPredictionResult;
 }
 
+export class CameraDiagnosisError extends Error {
+  public readonly code: string;
+  public readonly status: number;
+  public readonly ageSeconds?: number;
+  public readonly frameTimestamp?: string;
+
+  constructor(message: string, code: string, status: number, ageSeconds?: number, frameTimestamp?: string) {
+    super(message);
+    this.name = 'CameraDiagnosisError';
+    this.code = code;
+    this.status = status;
+    this.ageSeconds = ageSeconds;
+    this.frameTimestamp = frameTimestamp;
+  }
+}
+
+/**
+ * Diagnoses the latest genuine, fresh ESP32-CAM photograph stored on the server.
+ * Refuses simulated, missing (404), or stale/cached (409) images so old snapshots
+ * are never treated as live physical camera captures.
+ */
+export async function diagnoseLatestCameraFrame(
+  languageId: string = 'ha'
+): Promise<PlantAnalysisResult> {
+  const res = await fetch('/api/ai/diagnose', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      useLatestCameraFrame: true,
+      requireFresh: true,
+      languageId
+    })
+  });
+
+  if (res.ok) {
+    const data = await res.json();
+    if (data.result) return data.result as PlantAnalysisResult;
+    throw new Error('Diagnosis response missing result data.');
+  }
+
+  const errJson = await res.json().catch(() => ({}));
+  throw new CameraDiagnosisError(
+    errJson.message || `Camera plant diagnosis failed with HTTP ${res.status}`,
+    errJson.error || 'DIAGNOSIS_FAILED',
+    res.status,
+    errJson.ageSeconds,
+    errJson.timestamp
+  );
+}
+
 export async function analyzePlantImage(
   base64Image: string,
   languageId: string = 'pcm'
@@ -208,7 +262,7 @@ export async function analyzePlantImage(
   const res = await fetch('/api/ai/diagnose', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: base64Image, languageId })
+    body: JSON.stringify({ image: base64Image, source: 'MANUAL_UPLOAD', languageId })
   });
 
   if (res.ok) {
