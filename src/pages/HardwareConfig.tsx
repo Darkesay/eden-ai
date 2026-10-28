@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { hardwareService, DEFAULT_CROPS } from '../lib/hardwareService';
 import { HardwareConfig, DataSource, DiagnosticLog } from '../lib/hardwareTypes';
 import { DataSourceBadge } from '../components/DataSourceBadge';
@@ -238,6 +239,26 @@ export default function HardwareConfigPage() {
       {/* Connection Mode & Status Banner */}
       <DataSourceBadge variant="banner" />
 
+      {/* Cloud Multi-Device Enrollment & Hardware Kit Banner */}
+      <div className="p-4 rounded-2xl border border-[#10B981]/30 bg-[#10B981]/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+        <div className="space-y-1">
+          <div className="font-bold text-[#10B981] uppercase tracking-wider font-mono">
+            Production Cloud Onboarding & Collaborator Hardware Kit
+          </div>
+          <p className="opacity-85">
+            Register greenhouses, issue revocable per-device keys (<code className="font-mono">X-Hardware-Key</code> &amp;{' '}
+            <code className="font-mono">X-Camera-Key</code>), and download ready-to-flash headers in{' '}
+            <code className="font-mono">firmware/EDENS_HARDWARE_KIT/</code>.
+          </p>
+        </div>
+        <Link
+          to="/greenhouses"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-black font-bold shrink-0"
+        >
+          Manage Cloud Greenhouses <ExternalLink size={13} />
+        </Link>
+      </div>
+
       {/* Main Grid: Settings & Diagnostics */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
@@ -378,7 +399,7 @@ export default function HardwareConfigPage() {
                   </button>
                 </div>
                 <p className="text-[10px] text-gray-400">
-                  Transmitted securely via <code className="bg-black/10 dark:bg-white/10 px-1 rounded">?auth=TOKEN</code> or <code className="bg-black/10 dark:bg-white/10 px-1 rounded">X-API-Key</code> header to prevent unauthorized actuator commands.
+                  Transmitted strictly via <code className="bg-black/10 dark:bg-white/10 px-1 rounded">X-Hardware-Key</code> / <code className="bg-black/10 dark:bg-white/10 px-1 rounded">X-API-Key</code> HTTP headers only (held in session memory; never saved in browser localStorage or URL query parameters).
                 </p>
               </div>
 

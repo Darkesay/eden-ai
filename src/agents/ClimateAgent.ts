@@ -18,19 +18,36 @@ export function useClimateAgent() {
         const dataSource = hardwareService.getDataSource();
         const freshnessSec = hardwareService.getSensorFreshnessSeconds();
 
-        // Safety Rule: Never evaluate or dispatch actuator commands on disconnected or stale telemetry.
-        if (dataSource === 'DISCONNECTED' || dataSource === 'STALE' || freshnessSec > 35) {
+        // Safety Rule: Never evaluate or dispatch actuator commands on disconnected or stale telemetry (>45s).
+        if (dataSource === 'DISCONNECTED' || dataSource === 'STALE' || freshnessSec > 45) {
           store.setValue('agent_ClimateAgent_lastRun', new Date().toISOString());
           store.setRow('activityLog', Date.now().toString() + 'ca', {
             timestamp: new Date().toISOString(),
             type: 'agent',
-            message: `🤖 Climate Agent: Telemetry ${dataSource.toLowerCase()} (${freshnessSec}s old). Actuator commands suspended for hardware safety.`
+            message: `🤖 Climate Agent: Telemetry ${dataSource.toLowerCase()} (${freshnessSec}s old). Advisory evaluation suspended until fresh packet arrives.`
           });
           return;
         }
 
-        const temp = Number(store.getValue('temperature') ?? 24);
-        const humidity = Number(store.getValue('humidity') ?? 60);
+        const tempAvailable = config.mode === 'simulation' || store.getValue('hardware_temperatureAvailable') !== false;
+        const humAvailable = config.mode === 'simulation' || store.getValue('hardware_humidityAvailable') !== false;
+        const rawTemp = store.getValue('temperature');
+        const rawHum = store.getValue('humidity');
+
+        if (!tempAvailable || rawTemp === undefined || rawTemp === null || !Number.isFinite(Number(rawTemp))) {
+          store.setValue('agent_ClimateAgent_lastRun', new Date().toISOString());
+          store.setRow('activityLog', Date.now().toString() + 'ca', {
+            timestamp: new Date().toISOString(),
+            type: 'agent',
+            message: `🤖 Climate Agent: Temperature sensor unavailable. Refusing to fabricate readings.`
+          });
+          return;
+        }
+
+        const temp = Number(rawTemp);
+        const humidity = humAvailable && rawHum !== undefined && rawHum !== null && Number.isFinite(Number(rawHum))
+          ? Number(rawHum)
+          : null;
         const activeCrop = (store.getValue('cropType') as string) || 'Tomato';
         const thermalLocked = store.getValue('hardware_thermalLocked') === true || temp > 32;
 
@@ -49,8 +66,9 @@ export function useClimateAgent() {
             result.reason += ' (Heater forced OFF by hardware thermal interlock)';
           }
 
-          // Only dispatch to physical hardware if user explicitly enabled auto-approve for ClimateAgent
-          const canAutoDispatch = config.mode === 'simulation' || store.getValue('auto_approve_agent_ClimateAgent') === true;
+          // Phase 8 Safety: Physical hardware operates strictly in Read-Only / Advisory Only mode.
+          // Autonomous actuation only runs inside explicitly labeled Simulation Mode.
+          const canAutoDispatch = config.mode === 'simulation';
           if (canAutoDispatch) {
             if (result.fan) {
               await hardwareService.setOverride('fan', result.fan === 'ON' ? 'on' : 'off');
@@ -64,7 +82,7 @@ export function useClimateAgent() {
           store.setRow('activityLog', Date.now().toString() + 'ca', {
             timestamp: new Date().toISOString(),
             type: 'agent',
-            message: `🤖 Climate Agent (${dataSource}${canAutoDispatch ? '' : ' · Advisory Only'}): Fan ${result.fan}, Heater ${targetHeater} — ${result.reason}`
+            message: `🤖 Climate Agent (${dataSource}${canAutoDispatch ? '' : ' · Advisory Only — No Physical Actuation'}): Fan ${result.fan}, Heater ${targetHeater} — ${result.reason}`
           });
         }
       } catch (err: any) {

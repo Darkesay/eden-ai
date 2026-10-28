@@ -3,16 +3,20 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import initSqlJs, { type Database as SqlJsDatabase, type SqlJsStatic } from 'sql.js';
 import {
+  DEVICE_STATE_THRESHOLDS,
   type DeviceProvisioningStatus,
   type EnrollmentTokenPurpose,
+  type ExplicitDeviceConnectionState,
   type GreenhouseDeviceType,
   type GreenhouseMemberRole,
   type ValidatedControllerTelemetry,
   type WifiProvisioningMethod,
   type WifiProvisioningState,
+  computeExplicitDeviceState,
   extractRawEnrollmentCode,
   generateSecureId,
   hashPasswordScrypt,
+  redactSecretsFromText,
   sha256Hex,
   verifyPasswordScrypt
 } from './telemetryContract.ts';
@@ -59,8 +63,18 @@ export interface DeviceRecord {
   credentialPrefix: string | null;
   hasCredentialIssued: boolean;
   provisioningStatus: DeviceProvisioningStatus;
+  explicitState: ExplicitDeviceConnectionState;
+  ageSeconds: number | null;
+  onlineMaxAgeSeconds: number;
+  staleMaxAgeSeconds: number;
   firmwareVersion: string | null;
   lastSeenAt: string | null;
+  lastTelemetryAt: string | null;
+  lastUploadAt: string | null;
+  lastErrorCategory: 'AUTH' | 'CONNECTION' | null;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+  lastErrorAt: string | null;
   revokedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -88,6 +102,17 @@ export interface AuditEventRecord {
   eventType: string;
   summary: string;
   metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ObservationRecord {
+  id: string;
+  greenhouseId: string;
+  actorUserId: string | null;
+  category: 'vision_diagnosis' | 'agronomy_chat' | 'agent_advisory' | 'harvest_prediction';
+  dataSource: string;
+  summary: string;
+  payload: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -173,6 +198,12 @@ CREATE TABLE IF NOT EXISTS devices (
   provisioning_status TEXT NOT NULL,
   firmware_version TEXT,
   last_seen_at TEXT,
+  last_telemetry_at TEXT,
+  last_upload_at TEXT,
+  last_error_category TEXT,
+  last_error_code TEXT,
+  last_error_message TEXT,
+  last_error_at TEXT,
   last_ip TEXT,
   revoked_at TEXT,
   created_at TEXT NOT NULL,
@@ -185,14 +216,14 @@ CREATE TABLE IF NOT EXISTS telemetry_readings (
   device_id TEXT NOT NULL,
   recorded_at TEXT NOT NULL,
   received_at_ms INTEGER NOT NULL,
-  temperature REAL NOT NULL,
-  humidity REAL NOT NULL,
-  soil_moisture REAL NOT NULL,
+  temperature REAL,
+  humidity REAL,
+  soil_moisture REAL,
   sunlight REAL,
   grow_light REAL,
   water_level REAL,
   battery_voltage REAL,
-  rain_detected INTEGER NOT NULL,
+  rain_detected INTEGER,
   rain_gauge_level REAL,
   sensor_health_json TEXT NOT NULL,
   actuators_json TEXT NOT NULL,
@@ -209,6 +240,17 @@ CREATE TABLE IF NOT EXISTS audit_events (
   summary TEXT NOT NULL,
   metadata_json TEXT NOT NULL,
   ip_address TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_observations (
+  id TEXT PRIMARY KEY,
+  greenhouse_id TEXT NOT NULL,
+  actor_user_id TEXT,
+  category TEXT NOT NULL,
+  data_source TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 `;
@@ -276,15 +318,84 @@ export class PlatformDatabase {
   private runMigrations(): void {
     const db = this.ensureDb();
     db.run(MIGRATION_V1_SQL);
-    const existing = this.queryOne<{ version: string }>(
+    let mutated = false;
+
+    const existingV1 = this.queryOne<{ version: string }>(
       'SELECT version FROM schema_migrations WHERE version = ?',
       ['v1_self_service_greenhouse_platform']
     );
-    if (!existing) {
+    if (!existingV1) {
       db.run('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)', [
         'v1_self_service_greenhouse_platform',
         new Date().toISOString()
       ]);
+      mutated = true;
+    }
+
+    const existingV2 = this.queryOne<{ version: string }>(
+      'SELECT version FROM schema_migrations WHERE version = ?',
+      ['v2_hardware_states_and_nullable_sensors']
+    );
+    if (!existingV2) {
+      const deviceCols = new Set(
+        this.queryAll<{ name: string }>('PRAGMA table_info(devices)').map((c) => String(c.name))
+      );
+      const addDeviceCols: [string, string][] = [
+        ['last_telemetry_at', 'TEXT'],
+        ['last_upload_at', 'TEXT'],
+        ['last_error_category', 'TEXT'],
+        ['last_error_code', 'TEXT'],
+        ['last_error_message', 'TEXT'],
+        ['last_error_at', 'TEXT']
+      ];
+      for (const [colName, colType] of addDeviceCols) {
+        if (!deviceCols.has(colName)) {
+          db.run(`ALTER TABLE devices ADD COLUMN ${colName} ${colType}`);
+        }
+      }
+
+      const telCols = this.queryAll<{ name: string; notnull: number }>('PRAGMA table_info(telemetry_readings)');
+      const needsNullableUpgrade = telCols.some(
+        (c) =>
+          ['temperature', 'humidity', 'soil_moisture', 'rain_detected'].includes(String(c.name)) &&
+          Number(c.notnull) === 1
+      );
+      if (needsNullableUpgrade) {
+        db.run(`
+          ALTER TABLE telemetry_readings RENAME TO telemetry_readings_legacy;
+          CREATE TABLE telemetry_readings (
+            id TEXT PRIMARY KEY,
+            greenhouse_id TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            received_at_ms INTEGER NOT NULL,
+            temperature REAL,
+            humidity REAL,
+            soil_moisture REAL,
+            sunlight REAL,
+            grow_light REAL,
+            water_level REAL,
+            battery_voltage REAL,
+            rain_detected INTEGER,
+            rain_gauge_level REAL,
+            sensor_health_json TEXT NOT NULL,
+            actuators_json TEXT NOT NULL,
+            interlocks_json TEXT NOT NULL,
+            device_health_json TEXT NOT NULL
+          );
+          INSERT INTO telemetry_readings SELECT * FROM telemetry_readings_legacy;
+          DROP TABLE telemetry_readings_legacy;
+        `);
+      }
+
+      db.run('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)', [
+        'v2_hardware_states_and_nullable_sensors',
+        new Date().toISOString()
+      ]);
+      mutated = true;
+    }
+
+    if (mutated) {
       this.persistToDisk();
     }
   }
@@ -340,6 +451,8 @@ export class PlatformDatabase {
     metadata?: Record<string, unknown>;
     ipAddress?: string | null;
   }): void {
+    const sanitizedSummary = redactSecretsFromText(params.summary);
+    const sanitizedMetaStr = redactSecretsFromText(JSON.stringify(params.metadata || {}));
     this.runStmt(
       `INSERT INTO audit_events (id, greenhouse_id, actor_user_id, actor_device_id, event_type, summary, metadata_json, ip_address, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -349,12 +462,89 @@ export class PlatformDatabase {
         params.actorUserId || null,
         params.actorDeviceId || null,
         params.eventType,
-        params.summary,
-        JSON.stringify(params.metadata || {}),
+        sanitizedSummary,
+        sanitizedMetaStr,
         params.ipAddress || null,
         new Date().toISOString()
       ]
     );
+  }
+
+  public recordAiObservation(params: {
+    greenhouseId: string;
+    actorUserId?: string | null;
+    category: 'vision_diagnosis' | 'agronomy_chat' | 'agent_advisory' | 'harvest_prediction';
+    dataSource: string;
+    summary: string;
+    payload: Record<string, unknown>;
+  }): ObservationRecord {
+    const id = generateSecureId('obs', 8);
+    const createdAt = new Date().toISOString();
+    const safeSummary = redactSecretsFromText(params.summary).slice(0, 320);
+    const safePayloadJson = redactSecretsFromText(JSON.stringify(params.payload || {}));
+
+    this.runStmt(
+      `INSERT INTO ai_observations (id, greenhouse_id, actor_user_id, category, data_source, summary, payload_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        params.greenhouseId,
+        params.actorUserId || null,
+        params.category,
+        params.dataSource,
+        safeSummary,
+        safePayloadJson,
+        createdAt
+      ],
+      false
+    );
+
+    // Keep latest 50 observations per greenhouse
+    this.runStmt(
+      `DELETE FROM ai_observations
+       WHERE greenhouse_id = ? AND id NOT IN (
+         SELECT id FROM ai_observations WHERE greenhouse_id = ? ORDER BY created_at DESC LIMIT 50
+       )`,
+      [params.greenhouseId, params.greenhouseId]
+    );
+
+    return {
+      id,
+      greenhouseId: params.greenhouseId,
+      actorUserId: params.actorUserId || null,
+      category: params.category,
+      dataSource: params.dataSource,
+      summary: safeSummary,
+      payload: params.payload,
+      createdAt
+    };
+  }
+
+  public listAiObservationsForGreenhouse(greenhouseId: string, limit: number = 20): ObservationRecord[] {
+    const rows = this.queryAll<any>(
+      `SELECT id, greenhouse_id, actor_user_id, category, data_source, summary, payload_json, created_at
+       FROM ai_observations
+       WHERE greenhouse_id = ?
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [greenhouseId, Math.max(1, Math.min(100, limit))]
+    );
+    return rows.map((r) => ({
+      id: String(r.id),
+      greenhouseId: String(r.greenhouse_id),
+      actorUserId: r.actor_user_id ? String(r.actor_user_id) : null,
+      category: String(r.category) as ObservationRecord['category'],
+      dataSource: String(r.data_source),
+      summary: String(r.summary),
+      payload: (() => {
+        try {
+          return JSON.parse(String(r.payload_json || '{}'));
+        } catch {
+          return {};
+        }
+      })(),
+      createdAt: String(r.created_at)
+    }));
   }
 
   public listAuditEventsForGreenhouse(greenhouseId: string, limit: number = 30): AuditEventRecord[] {
@@ -999,29 +1189,180 @@ export class PlatformDatabase {
   // PER-DEVICE CREDENTIALS, REVOCATION & HARDWARE CHECK-IN
   // ------------------------------------------------------------------
 
-  public listDevicesForGreenhouse(greenhouseId: string): DeviceRecord[] {
+  public listDevicesForGreenhouse(greenhouseId: string, nowMs: number = Date.now()): DeviceRecord[] {
     const rows = this.queryAll<any>(
       `SELECT * FROM devices WHERE greenhouse_id = ? ORDER BY device_type ASC`,
       [greenhouseId]
     );
-    return rows.map((r) => this.mapDeviceRow(r));
+    return rows.map((r) => this.mapDeviceRow(r, nowMs));
   }
 
-  private mapDeviceRow(r: any): DeviceRecord {
+  private mapDeviceRow(r: any, nowMs: number = Date.now()): DeviceRecord {
+    const deviceType = String(r.device_type) as GreenhouseDeviceType;
+    const hasCredentialIssued = Boolean(r.credential_hash && !r.revoked_at);
+    const revokedAt = r.revoked_at ? String(r.revoked_at) : null;
+    const lastSeenAt = r.last_seen_at ? String(r.last_seen_at) : null;
+    const lastTelemetryAt = r.last_telemetry_at ? String(r.last_telemetry_at) : null;
+    const lastUploadAt = r.last_upload_at ? String(r.last_upload_at) : null;
+    const lastErrorCategory =
+      r.last_error_category === 'AUTH' || r.last_error_category === 'CONNECTION'
+        ? r.last_error_category
+        : null;
+    const lastErrorCode = r.last_error_code ? String(r.last_error_code) : null;
+    const lastErrorMessage = r.last_error_message ? String(r.last_error_message) : null;
+    const lastErrorAt = r.last_error_at ? String(r.last_error_at) : null;
+
+    const computed = computeExplicitDeviceState({
+      deviceType,
+      hasCredentialIssued,
+      revokedAt,
+      lastSeenAt,
+      lastDataTimestamp: deviceType === 'esp32_cam' ? lastUploadAt : lastTelemetryAt,
+      lastErrorCategory,
+      lastErrorAt,
+      nowMs
+    });
+
     return {
       id: String(r.id),
       greenhouseId: String(r.greenhouse_id),
-      deviceType: String(r.device_type) as GreenhouseDeviceType,
+      deviceType,
       label: String(r.label),
       credentialPrefix: r.credential_prefix ? String(r.credential_prefix) : null,
-      hasCredentialIssued: Boolean(r.credential_hash && !r.revoked_at),
+      hasCredentialIssued,
       provisioningStatus: String(r.provisioning_status) as DeviceProvisioningStatus,
+      explicitState: computed.explicitState,
+      ageSeconds: computed.ageSeconds,
+      onlineMaxAgeSeconds: computed.onlineMaxAgeSeconds,
+      staleMaxAgeSeconds: computed.staleMaxAgeSeconds,
       firmwareVersion: r.firmware_version ? String(r.firmware_version) : null,
-      lastSeenAt: r.last_seen_at ? String(r.last_seen_at) : null,
-      revokedAt: r.revoked_at ? String(r.revoked_at) : null,
+      lastSeenAt,
+      lastTelemetryAt,
+      lastUploadAt,
+      lastErrorCategory,
+      lastErrorCode,
+      lastErrorMessage,
+      lastErrorAt,
+      revokedAt,
       createdAt: String(r.created_at),
       updatedAt: String(r.updated_at)
     };
+  }
+
+  public registerOrUpdateDevice(params: {
+    greenhouseId: string;
+    actorUserId: string;
+    deviceType: GreenhouseDeviceType;
+    label?: string;
+    ipAddress?: string;
+  }):
+    | { ok: true; device: DeviceRecord; created: boolean }
+    | { ok: false; statusCode: number; errorCode: string; message: string } {
+    const role = this.getMemberRole(params.greenhouseId, params.actorUserId);
+    if (role !== 'owner' && role !== 'operator') {
+      return {
+        ok: false,
+        statusCode: 403,
+        errorCode: 'FORBIDDEN',
+        message: 'Only greenhouse owners or operators can register or update devices.'
+      };
+    }
+
+    const defaultLabel =
+      params.deviceType === 'esp32_cam' ? 'ESP32-CAM Crop Camera' : 'Main ESP32 Greenhouse Controller';
+    const nextLabel = String(params.label || '').trim().slice(0, 80) || defaultLabel;
+    const nowIso = new Date().toISOString();
+
+    const existing = this.queryOne<any>(
+      'SELECT * FROM devices WHERE greenhouse_id = ? AND device_type = ?',
+      [params.greenhouseId, params.deviceType]
+    );
+
+    if (existing) {
+      this.runStmt(
+        `UPDATE devices SET label = ?, updated_at = ? WHERE id = ?`,
+        [nextLabel, nowIso, String(existing.id)]
+      );
+      this.recordAuditEvent({
+        greenhouseId: params.greenhouseId,
+        actorUserId: params.actorUserId,
+        actorDeviceId: String(existing.id),
+        eventType: 'DEVICE_UPDATED',
+        summary: `Updated ${params.deviceType} registration label to "${nextLabel}".`,
+        ipAddress: params.ipAddress
+      });
+      const updated = this.queryOne<any>('SELECT * FROM devices WHERE id = ?', [String(existing.id)])!;
+      return { ok: true, device: this.mapDeviceRow(updated), created: false };
+    }
+
+    const devId = generateSecureId(params.deviceType === 'esp32_cam' ? 'dev_cam' : 'dev_ctrl', 6);
+    this.runStmt(
+      `INSERT INTO devices (
+         id, greenhouse_id, device_type, label, credential_hash, credential_prefix,
+         provisioning_status, firmware_version, last_seen_at, last_ip, revoked_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, NULL, NULL, 'pending_setup', NULL, NULL, NULL, NULL, ?, ?)`,
+      [devId, params.greenhouseId, params.deviceType, nextLabel, nowIso, nowIso]
+    );
+    this.recordAuditEvent({
+      greenhouseId: params.greenhouseId,
+      actorUserId: params.actorUserId,
+      actorDeviceId: devId,
+      eventType: 'DEVICE_REGISTERED',
+      summary: `Registered ${nextLabel} (${devId}) in pending_setup (CONFIGURATION_REQUIRED) state.`,
+      ipAddress: params.ipAddress
+    });
+    const inserted = this.queryOne<any>('SELECT * FROM devices WHERE id = ?', [devId])!;
+    return { ok: true, device: this.mapDeviceRow(inserted), created: true };
+  }
+
+  public recordDeviceError(params: {
+    greenhouseId?: string | null;
+    deviceId?: string | null;
+    expectedType?: GreenhouseDeviceType;
+    category: 'AUTH' | 'CONNECTION';
+    errorCode: string;
+    message: string;
+    ipAddress?: string | null;
+  }): void {
+    let targetRow: any = null;
+    if (params.deviceId) {
+      targetRow = params.greenhouseId
+        ? this.queryOne<any>('SELECT * FROM devices WHERE id = ? AND greenhouse_id = ?', [
+            params.deviceId,
+            params.greenhouseId
+          ])
+        : this.queryOne<any>('SELECT * FROM devices WHERE id = ?', [params.deviceId]);
+    }
+    if (!targetRow && params.greenhouseId && params.expectedType) {
+      targetRow = this.queryOne<any>(
+        'SELECT * FROM devices WHERE greenhouse_id = ? AND device_type = ?',
+        [params.greenhouseId, params.expectedType]
+      );
+    }
+    if (!targetRow) return;
+
+    const nowIso = new Date().toISOString();
+    const safeMsg = redactSecretsFromText(params.message).slice(0, 240);
+    const safeCode = String(params.errorCode || 'HARDWARE_ERROR').slice(0, 64);
+
+    this.runStmt(
+      `UPDATE devices
+       SET last_error_category = ?,
+           last_error_code = ?,
+           last_error_message = ?,
+           last_error_at = ?,
+           updated_at = ?
+       WHERE id = ?`,
+      [params.category, safeCode, safeMsg, nowIso, nowIso, String(targetRow.id)]
+    );
+
+    this.recordAuditEvent({
+      greenhouseId: String(targetRow.greenhouse_id),
+      actorDeviceId: String(targetRow.id),
+      eventType: params.category === 'AUTH' ? 'DEVICE_AUTH_ERROR' : 'DEVICE_CONNECTION_ERROR',
+      summary: `${targetRow.label}: [${safeCode}] ${safeMsg}`,
+      ipAddress: params.ipAddress || null
+    });
   }
 
   public issueDeviceCredential(params: {
@@ -1058,7 +1399,15 @@ export class PlatformDatabase {
 
     this.runStmt(
       `UPDATE devices
-       SET credential_hash = ?, credential_prefix = ?, provisioning_status = 'awaiting_first_checkin', revoked_at = NULL, updated_at = ?
+       SET credential_hash = ?,
+           credential_prefix = ?,
+           provisioning_status = 'awaiting_first_checkin',
+           revoked_at = NULL,
+           last_error_category = NULL,
+           last_error_code = NULL,
+           last_error_message = NULL,
+           last_error_at = NULL,
+           updated_at = ?
        WHERE id = ?`,
       [keyHash, keyPrefix, nowIso, params.deviceId]
     );
@@ -1124,7 +1473,16 @@ export class PlatformDatabase {
     );
     this.runStmt(
       `UPDATE devices
-       SET credential_hash = ?, credential_prefix = ?, provisioning_status = 'awaiting_first_checkin', firmware_version = COALESCE(?, firmware_version), revoked_at = NULL, updated_at = ?
+       SET credential_hash = ?,
+           credential_prefix = ?,
+           provisioning_status = 'awaiting_first_checkin',
+           firmware_version = COALESCE(?, firmware_version),
+           revoked_at = NULL,
+           last_error_category = NULL,
+           last_error_code = NULL,
+           last_error_message = NULL,
+           last_error_at = NULL,
+           updated_at = ?
        WHERE id = ?`,
       [sha256Hex(rawKey), rawKey.slice(0, 12), params.firmwareVersion || null, nowIso, String(devRow.id)]
     );
@@ -1264,21 +1622,44 @@ export class PlatformDatabase {
     greenhouseId: string;
     firmwareVersion?: string;
     ipAddress?: string;
+    checkInKind?: 'camera_upload' | 'telemetry_upload';
+    dataTimestamp?: string;
   }): void {
-    const prev = this.queryOne<any>('SELECT provisioning_status, label FROM devices WHERE id = ?', [
-      params.deviceId
-    ]);
+    const prev = this.queryOne<any>(
+      'SELECT provisioning_status, label, device_type FROM devices WHERE id = ?',
+      [params.deviceId]
+    );
     const nowIso = new Date().toISOString();
+    const resolvedKind =
+      params.checkInKind ||
+      (prev && String(prev.device_type) === 'esp32_cam' ? 'camera_upload' : 'telemetry_upload');
+    const dataIso = params.dataTimestamp || nowIso;
 
     this.runStmt(
       `UPDATE devices
        SET provisioning_status = 'connected',
            last_seen_at = ?,
+           last_upload_at = CASE WHEN ? = 'camera_upload' THEN ? ELSE last_upload_at END,
+           last_telemetry_at = CASE WHEN ? = 'telemetry_upload' THEN ? ELSE last_telemetry_at END,
+           last_error_category = NULL,
+           last_error_code = NULL,
+           last_error_message = NULL,
+           last_error_at = NULL,
            last_ip = COALESCE(?, last_ip),
            firmware_version = COALESCE(?, firmware_version),
            updated_at = ?
        WHERE id = ?`,
-      [nowIso, params.ipAddress || null, params.firmwareVersion || null, nowIso, params.deviceId],
+      [
+        nowIso,
+        resolvedKind,
+        dataIso,
+        resolvedKind,
+        dataIso,
+        params.ipAddress || null,
+        params.firmwareVersion || null,
+        nowIso,
+        params.deviceId
+      ],
       false
     );
 
@@ -1312,6 +1693,7 @@ export class PlatformDatabase {
   }): { readingId: string; recordedAt: string } {
     const readingId = generateSecureId('tel', 8);
     const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
 
     this.runStmt(
       `INSERT INTO telemetry_readings (
@@ -1333,7 +1715,7 @@ export class PlatformDatabase {
         params.telemetry.growLight,
         params.telemetry.waterLevel,
         params.telemetry.batteryVoltage,
-        params.telemetry.rain ? 1 : 0,
+        params.telemetry.rain === null ? null : params.telemetry.rain ? 1 : 0,
         params.telemetry.rainGaugeLevel,
         JSON.stringify(params.telemetry.sensorHealth),
         JSON.stringify(params.telemetry.actuators),
@@ -1347,7 +1729,9 @@ export class PlatformDatabase {
       deviceId: params.deviceId,
       greenhouseId: params.greenhouseId,
       firmwareVersion: params.telemetry.deviceHealth.firmwareVersion,
-      ipAddress: params.ipAddress
+      ipAddress: params.ipAddress,
+      checkInKind: 'telemetry_upload',
+      dataTimestamp: nowIso
     });
 
     // Keep latest 100 readings per greenhouse so SQLite file stays compact
@@ -1362,6 +1746,28 @@ export class PlatformDatabase {
     return { readingId, recordedAt: params.telemetry.timestamp };
   }
 
+  /**
+   * Test helper to deterministically age stored telemetry & device heartbeat timestamps.
+   */
+  public setLatestTelemetryReceivedAtForTesting(greenhouseId: string, receivedAtMs: number): void {
+    const iso = new Date(receivedAtMs).toISOString();
+    const latest = this.queryOne<{ id: string; device_id: string }>(
+      'SELECT id, device_id FROM telemetry_readings WHERE greenhouse_id = ? ORDER BY received_at_ms DESC LIMIT 1',
+      [greenhouseId]
+    );
+    if (latest) {
+      this.runStmt(
+        'UPDATE telemetry_readings SET received_at_ms = ?, recorded_at = ? WHERE id = ?',
+        [receivedAtMs, iso, String(latest.id)],
+        false
+      );
+      this.runStmt(
+        'UPDATE devices SET last_seen_at = ?, last_telemetry_at = ? WHERE id = ?',
+        [iso, iso, String(latest.device_id)]
+      );
+    }
+  }
+
   public getLatestTelemetryForGreenhouse(
     greenhouseId: string,
     nowMs: number = Date.now()
@@ -1369,69 +1775,94 @@ export class PlatformDatabase {
     exists: boolean;
     dataSource: 'REAL_HARDWARE' | 'CACHED' | 'STALE' | 'DISCONNECTED';
     connectionState: 'CONNECTED' | 'STALE' | 'DISCONNECTED';
+    explicitState: ExplicitDeviceConnectionState;
     isStale: boolean;
     ageSeconds: number | null;
     timestamp: string | null;
     deviceId: string | null;
     readings: {
-      temperature: number;
-      humidity: number;
-      soilMoisture: number;
+      temperature: number | null;
+      humidity: number | null;
+      soilMoisture: number | null;
       sunlight: number | null;
       growLight: number | null;
       waterLevel: number | null;
       batteryVoltage: number | null;
-      rain: boolean;
+      rain: boolean | null;
       rainGaugeLevel: number | null;
     } | null;
     sensorHealth: Record<string, string> | null;
     actuators: Record<string, boolean> | null;
     interlocks: Record<string, boolean> | null;
     deviceHealth: Record<string, unknown> | null;
+    thresholds: typeof DEVICE_STATE_THRESHOLDS.esp32_controller;
   } {
+    const ctrlDev = this.queryOne<any>(
+      "SELECT * FROM devices WHERE greenhouse_id = ? AND device_type = 'esp32_controller'",
+      [greenhouseId]
+    );
     const row = this.queryOne<any>(
       `SELECT * FROM telemetry_readings WHERE greenhouse_id = ? ORDER BY received_at_ms DESC LIMIT 1`,
       [greenhouseId]
     );
 
+    const thresholds = DEVICE_STATE_THRESHOLDS.esp32_controller;
+
     if (!row) {
+      const devState = ctrlDev
+        ? this.mapDeviceRow(ctrlDev, nowMs).explicitState
+        : 'CONFIGURATION_REQUIRED';
       return {
         exists: false,
         dataSource: 'DISCONNECTED',
         connectionState: 'DISCONNECTED',
+        explicitState: devState,
         isStale: true,
         ageSeconds: null,
         timestamp: null,
-        deviceId: null,
+        deviceId: ctrlDev ? String(ctrlDev.id) : null,
         readings: null,
         sensorHealth: null,
         actuators: null,
         interlocks: null,
-        deviceHealth: null
+        deviceHealth: null,
+        thresholds
       };
     }
 
     const ageSeconds = Math.max(0, Math.round((nowMs - Number(row.received_at_ms)) / 1000));
     let dataSource: 'REAL_HARDWARE' | 'CACHED' | 'STALE' | 'DISCONNECTED' = 'DISCONNECTED';
     let connectionState: 'CONNECTED' | 'STALE' | 'DISCONNECTED' = 'DISCONNECTED';
+    let explicitState: ExplicitDeviceConnectionState = 'OFFLINE';
     let isStale = true;
 
-    if (ageSeconds <= 30) {
+    if (ageSeconds <= thresholds.onlineMaxAgeSeconds) {
       dataSource = 'REAL_HARDWARE';
       connectionState = 'CONNECTED';
+      explicitState = 'ONLINE';
       isStale = false;
-    } else if (ageSeconds <= 120) {
-      dataSource = 'CACHED';
-      connectionState = 'CONNECTED';
-      isStale = false;
-    } else if (ageSeconds <= 300) {
+    } else if (ageSeconds <= thresholds.staleMaxAgeSeconds) {
       dataSource = 'STALE';
       connectionState = 'STALE';
+      explicitState = 'STALE';
       isStale = true;
     } else {
       dataSource = 'DISCONNECTED';
       connectionState = 'DISCONNECTED';
+      explicitState = 'OFFLINE';
       isStale = true;
+    }
+
+    // Surface recent auth/connection error if newer than last successful telemetry
+    if (ctrlDev) {
+      const mapped = this.mapDeviceRow(ctrlDev, nowMs);
+      if (
+        mapped.explicitState === 'AUTHENTICATION_ERROR' ||
+        mapped.explicitState === 'CONNECTION_ERROR' ||
+        mapped.explicitState === 'CONFIGURATION_REQUIRED'
+      ) {
+        explicitState = mapped.explicitState;
+      }
     }
 
     const safeJson = (val: any) => {
@@ -1442,31 +1873,37 @@ export class PlatformDatabase {
       }
     };
 
+    const toNullableNum = (val: unknown): number | null =>
+      val === null || val === undefined ? null : Number(val);
+
     return {
       exists: true,
       dataSource,
       connectionState,
+      explicitState,
       isStale,
       ageSeconds,
       timestamp: String(row.recorded_at),
       deviceId: String(row.device_id),
       readings: {
-        temperature: Number(row.temperature),
-        humidity: Number(row.humidity),
-        soilMoisture: Number(row.soil_moisture),
-        sunlight: row.sunlight !== null && row.sunlight !== undefined ? Number(row.sunlight) : null,
-        growLight: row.grow_light !== null && row.grow_light !== undefined ? Number(row.grow_light) : null,
-        waterLevel: row.water_level !== null && row.water_level !== undefined ? Number(row.water_level) : null,
-        batteryVoltage:
-          row.battery_voltage !== null && row.battery_voltage !== undefined ? Number(row.battery_voltage) : null,
-        rain: Number(row.rain_detected) === 1,
-        rainGaugeLevel:
-          row.rain_gauge_level !== null && row.rain_gauge_level !== undefined ? Number(row.rain_gauge_level) : null
+        temperature: toNullableNum(row.temperature),
+        humidity: toNullableNum(row.humidity),
+        soilMoisture: toNullableNum(row.soil_moisture),
+        sunlight: toNullableNum(row.sunlight),
+        growLight: toNullableNum(row.grow_light),
+        waterLevel: toNullableNum(row.water_level),
+        batteryVoltage: toNullableNum(row.battery_voltage),
+        rain:
+          row.rain_detected === null || row.rain_detected === undefined
+            ? null
+            : Number(row.rain_detected) === 1,
+        rainGaugeLevel: toNullableNum(row.rain_gauge_level)
       },
       sensorHealth: safeJson(row.sensor_health_json),
       actuators: safeJson(row.actuators_json),
       interlocks: safeJson(row.interlocks_json),
-      deviceHealth: safeJson(row.device_health_json)
+      deviceHealth: safeJson(row.device_health_json),
+      thresholds
     };
   }
 }

@@ -1,8 +1,16 @@
-import crypto from 'node:crypto';
 import path from 'node:path';
 import express from 'express';
 import { Readable } from 'node:stream';
 import { CameraImageStore } from './cameraStorage.ts';
+import {
+  DEVICE_STATE_THRESHOLDS,
+  SlidingWindowRateLimiter,
+  computeExplicitDeviceState,
+  constantTimeSecretMatch,
+  hasDisallowedQuerySecret,
+  isPlaceholderOrEmptySecret,
+  redactSecretsFromText
+} from './telemetryContract.ts';
 
 export interface CameraAuthCheckResult {
   authorized: boolean;
@@ -84,60 +92,57 @@ export interface RegisterCameraRoutesOptions {
   allowLoopbackLanTargets?: boolean;
   getUploadSecret?: () => string;
   isCloudHosted?: () => boolean;
+  maxUploadsPerMinute?: number;
   resolvePerDeviceUpload?: (req: express.Request, providedKey: string) => PerDeviceCameraAuthResolution | null;
+  onUploadRejected?: (info: {
+    req: express.Request;
+    category: 'AUTH' | 'CONNECTION';
+    errorCode: string;
+    message: string;
+    greenhouseId?: string;
+    deviceId?: string;
+  }) => void;
 }
 
 export const DEFAULT_ESP32_CAM_LAN_HOST = '';
 export const DEFAULT_ESP32_CAM_HTTP_PORT = 80;
 export const DEFAULT_ESP32_CAM_STREAM_PORT = 81;
 
+/**
+ * Returns ONLY the dedicated CAMERA_UPLOAD_KEY (never falls back to HARDWARE_API_KEY,
+ * ensuring camera and controller authentication remain strictly independent).
+ */
 export function getConfiguredCameraUploadSecret(): string {
-  return (process.env.CAMERA_UPLOAD_KEY || process.env.HARDWARE_API_KEY || '').trim();
-}
-
-function constantTimeStringMatch(provided: string, expected: string): boolean {
-  const a = Buffer.from(provided, 'utf8');
-  const b = Buffer.from(expected, 'utf8');
-  if (a.length !== b.length) {
-    // Compare equal-size digests so length mismatch does not leak secret length
-    const ha = crypto.createHash('sha256').update(a).digest();
-    const hb = crypto.createHash('sha256').update(b).digest();
-    crypto.timingSafeEqual(ha, hb);
-    return false;
-  }
-  return crypto.timingSafeEqual(a, b);
+  const raw = (process.env.CAMERA_UPLOAD_KEY || '').trim();
+  return isPlaceholderOrEmptySecret(raw) ? '' : raw;
 }
 
 /**
  * Authenticates camera upload requests using X-Camera-Key (or X-API-Key / Bearer header).
- * Rejects URL query-parameter secrets so keys are never leaked in URLs or server access logs.
+ * Unconditionally rejects URL query-parameter secrets even if headers are also supplied.
  */
 export function verifyCameraUploadAuth(
   req: express.Request,
   getSecret: () => string = getConfiguredCameraUploadSecret
 ): CameraAuthCheckResult {
+  const disallowedParam = hasDisallowedQuerySecret(req.query as Record<string, unknown>);
+  if (disallowedParam) {
+    return {
+      authorized: false,
+      status: 401,
+      error: 'QUERY_AUTH_DISALLOWED',
+      message: `Passing camera credentials in URL query parameter "${disallowedParam}" is disabled. Send the secret in the X-Camera-Key HTTP header.`
+    };
+  }
+
   const configuredKey = getSecret();
-  if (!configuredKey) {
+  if (isPlaceholderOrEmptySecret(configuredKey)) {
     return {
       authorized: false,
       status: 503,
       error: 'SERVER_MISCONFIGURED',
       message: 'CAMERA_UPLOAD_KEY is not configured on the server. Camera uploads are rejected.'
     };
-  }
-
-  if (req.query.token || req.query.key || req.query.auth) {
-    const hasHeader = Boolean(
-      req.headers['x-camera-key'] || req.headers['x-api-key'] || req.headers['authorization']
-    );
-    if (!hasHeader) {
-      return {
-        authorized: false,
-        status: 401,
-        error: 'QUERY_AUTH_DISALLOWED',
-        message: 'Passing camera credentials in URL query parameters is disabled. Send the secret in the X-Camera-Key HTTP header.'
-      };
-    }
   }
 
   const xCameraKey = req.headers['x-camera-key'];
@@ -163,7 +168,7 @@ export function verifyCameraUploadAuth(
     };
   }
 
-  if (!constantTimeStringMatch(provided, configuredKey)) {
+  if (!constantTimeSecretMatch(provided, configuredKey)) {
     return {
       authorized: false,
       status: 401,
@@ -520,6 +525,10 @@ export function registerCameraRoutes(
     (() => Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.FLY_APP_NAME));
 
   const maxUploadMb = Math.max(1, Math.ceil(imageStore.getMaxUploadMb()));
+  const uploadLimiter = new SlidingWindowRateLimiter({
+    windowMs: 60_000,
+    maxRequests: options.maxUploadsPerMinute ?? 90
+  });
 
   // Raw binary body parser exclusively for POST /api/camera/upload
   const rawUploadMiddleware = express.raw({
@@ -530,18 +539,37 @@ export function registerCameraRoutes(
   app.post(
     '/api/camera/upload',
     (req, res, next) => {
-      if (req.query.token || req.query.key || req.query.auth) {
-        const hasHeader = Boolean(
-          req.headers['x-camera-key'] || req.headers['x-api-key'] || req.headers['authorization']
-        );
-        if (!hasHeader) {
-          return res.status(401).json({
-            error: 'QUERY_AUTH_DISALLOWED',
-            message:
-              'Passing camera credentials in URL query parameters is disabled. Send the secret in the X-Camera-Key HTTP header.',
-            requiredHeader: 'X-Camera-Key'
-          });
-        }
+      const clientIp =
+        (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+        req.socket.remoteAddress ||
+        'unknown';
+      const rate = uploadLimiter.check(`cam:${clientIp}`);
+      if (!rate.allowed) {
+        return res.status(429).json({
+          error: 'RATE_LIMITED',
+          message: `Camera upload rate limit exceeded. Retry in ${rate.retryAfterSeconds}s.`
+        });
+      }
+
+      const claimedGhId = (req.headers['x-greenhouse-id'] as string | undefined)?.trim();
+      const claimedDevId = (req.headers['x-device-id'] as string | undefined)?.trim();
+
+      const disallowedParam = hasDisallowedQuerySecret(req.query as Record<string, unknown>);
+      if (disallowedParam) {
+        options.onUploadRejected?.({
+          req,
+          category: 'AUTH',
+          errorCode: 'QUERY_AUTH_DISALLOWED',
+          message: `Rejected camera upload containing query parameter "${disallowedParam}".`,
+          greenhouseId: claimedGhId,
+          deviceId: claimedDevId
+        });
+        return res.status(401).json({
+          error: 'QUERY_AUTH_DISALLOWED',
+          message:
+            'Passing camera credentials in URL query parameters is disabled. Send the secret in the X-Camera-Key HTTP header.',
+          requiredHeader: 'X-Camera-Key'
+        });
       }
 
       const xCameraKey = req.headers['x-camera-key'];
@@ -561,6 +589,14 @@ export function registerCameraRoutes(
         const perDevice = options.resolvePerDeviceUpload(req, providedKey);
         if (perDevice) {
           if ('error' in perDevice) {
+            options.onUploadRejected?.({
+              req,
+              category: 'AUTH',
+              errorCode: perDevice.error,
+              message: perDevice.message,
+              greenhouseId: claimedGhId,
+              deviceId: claimedDevId
+            });
             return res.status(perDevice.status).json({
               error: perDevice.error,
               message: perDevice.message,
@@ -571,14 +607,30 @@ export function registerCameraRoutes(
           return rawUploadMiddleware(req, res, (err: any) => {
             if (err) {
               if (err.type === 'entity.too.large' || err.status === 413) {
+                options.onUploadRejected?.({
+                  req,
+                  category: 'CONNECTION',
+                  errorCode: 'PAYLOAD_TOO_LARGE',
+                  message: `Uploaded camera image exceeds maximum size limit of ${maxUploadMb} MB.`,
+                  greenhouseId: perDevice.greenhouseId,
+                  deviceId: perDevice.deviceId
+                });
                 return res.status(413).json({
                   error: 'PAYLOAD_TOO_LARGE',
                   message: `Uploaded camera image exceeds maximum size limit of ${maxUploadMb} MB.`
                 });
               }
+              options.onUploadRejected?.({
+                req,
+                category: 'CONNECTION',
+                errorCode: 'UPLOAD_READ_ERROR',
+                message: redactSecretsFromText(err.message || 'Failed reading uploaded image stream.'),
+                greenhouseId: perDevice.greenhouseId,
+                deviceId: perDevice.deviceId
+              });
               return res.status(400).json({
                 error: 'UPLOAD_READ_ERROR',
-                message: err.message || 'Failed reading uploaded image stream.'
+                message: redactSecretsFromText(err.message || 'Failed reading uploaded image stream.')
               });
             }
             next();
@@ -586,7 +638,7 @@ export function registerCameraRoutes(
         }
       }
 
-      // Authenticate BEFORE buffering or processing untrusted camera payloads where possible
+      // Authenticate BEFORE buffering or processing untrusted camera payloads
       const auth = verifyCameraUploadAuth(req, getSecret);
       if (!auth.authorized) {
         return res.status(auth.status).json({
@@ -605,14 +657,28 @@ export function registerCameraRoutes(
           }
           return res.status(400).json({
             error: 'UPLOAD_READ_ERROR',
-            message: err.message || 'Failed reading uploaded image stream.'
+            message: redactSecretsFromText(err.message || 'Failed reading uploaded image stream.')
           });
         }
         next();
       });
     },
     (req, res) => {
+      const perDeviceCtx = (req as any).__perDeviceCameraUpload as
+        | Extract<PerDeviceCameraAuthResolution, { authorized: true }>
+        | undefined;
+
       if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        if (perDeviceCtx) {
+          options.onUploadRejected?.({
+            req,
+            category: 'CONNECTION',
+            errorCode: 'INVALID_BODY',
+            message: 'Request body must be a non-empty binary JPEG image buffer.',
+            greenhouseId: perDeviceCtx.greenhouseId,
+            deviceId: perDeviceCtx.deviceId
+          });
+        }
         return res.status(400).json({
           error: 'INVALID_BODY',
           message: 'Request body must be a non-empty binary JPEG image buffer.'
@@ -626,9 +692,6 @@ export function registerCameraRoutes(
       const cameraAddrHeader = (req.headers['x-camera-address'] as string | undefined)?.trim();
       const capturedAtHeader = (req.headers['x-captured-at'] as string | undefined)?.trim();
 
-      const perDeviceCtx = (req as any).__perDeviceCameraUpload as
-        | Extract<PerDeviceCameraAuthResolution, { authorized: true }>
-        | undefined;
       const targetStore = perDeviceCtx ? perDeviceCtx.targetStore : imageStore;
 
       const stored = targetStore.validateAndStoreJpeg(req.body, {
@@ -639,6 +702,16 @@ export function registerCameraRoutes(
       });
 
       if ('errorCode' in stored) {
+        if (perDeviceCtx) {
+          options.onUploadRejected?.({
+            req,
+            category: 'CONNECTION',
+            errorCode: stored.errorCode,
+            message: stored.message,
+            greenhouseId: perDeviceCtx.greenhouseId,
+            deviceId: perDeviceCtx.deviceId
+          });
+        }
         return res.status(stored.statusCode).json({
           error: stored.errorCode,
           message: stored.message
@@ -717,10 +790,12 @@ export function registerCameraRoutes(
 
   app.get('/api/camera/latest', (_req, res) => {
     const latest = imageStore.getLatest();
+    const hasConfiguredSecret = !isPlaceholderOrEmptySecret(getSecret());
     if (!latest) {
       return res.status(200).json({
         exists: false,
         connectionState: 'DISCONNECTED',
+        explicitState: hasConfiguredSecret ? 'WAITING_FOR_FIRST_CONNECTION' : 'CONFIGURATION_REQUIRED',
         status: 'WAITING_FOR_UPLOAD',
         freshness: 'NONE',
         freshnessState: 'NONE',
@@ -731,15 +806,22 @@ export function registerCameraRoutes(
         uploadEndpoint: '/api/camera/upload',
         dataSource: 'DISCONNECTED',
         totalUploadsCount: imageStore.getTotalFramesStored(),
-        freshMaxSeconds: imageStore.getFreshMaxSeconds()
+        freshMaxSeconds: imageStore.getFreshMaxSeconds(),
+        thresholds: DEVICE_STATE_THRESHOLDS.esp32_cam
       });
     }
 
     const { frame, state } = latest;
+    const explicit = computeExplicitDeviceState({
+      deviceType: 'esp32_cam',
+      hasCredentialIssued: true,
+      lastDataTimestamp: frame.timestamp
+    });
     // Never expose internal camera LAN IPs/URLs or client IPs in public browser responses
     return res.status(200).json({
       exists: true,
       connectionState: state.isFresh ? 'CONNECTED' : 'DISCONNECTED',
+      explicitState: explicit.explicitState,
       status: state.status,
       freshness: state.freshness,
       freshnessState: state.isFresh ? 'FRESH' : 'STALE',
@@ -760,12 +842,13 @@ export function registerCameraRoutes(
       analysis: frame.analysis,
       dataSource: state.dataSource,
       totalUploadsCount: imageStore.getTotalFramesStored(),
-      freshMaxSeconds: imageStore.getFreshMaxSeconds()
+      freshMaxSeconds: imageStore.getFreshMaxSeconds(),
+      thresholds: DEVICE_STATE_THRESHOLDS.esp32_cam
     });
   });
 
   app.get('/api/camera/upload-info', (_req, res) => {
-    const hasKey = Boolean(getSecret());
+    const hasKey = !isPlaceholderOrEmptySecret(getSecret());
     const latest = imageStore.getLatest();
     const lanConfigured = Boolean((process.env.HARDWARE_CAMERA_HOST || '').trim());
 
@@ -1113,15 +1196,13 @@ export function registerCameraRoutes(
   });
 
   app.delete('/api/camera/latest', (req, res) => {
-    if (getSecret()) {
-      const auth = verifyCameraUploadAuth(req, getSecret);
-      if (!auth.authorized) {
-        return res.status(auth.status).json({
-          error: auth.error,
-          message: auth.message,
-          requiredHeader: 'X-Camera-Key'
-        });
-      }
+    const auth = verifyCameraUploadAuth(req, getSecret);
+    if (!auth.authorized) {
+      return res.status(auth.status).json({
+        error: auth.error,
+        message: auth.message,
+        requiredHeader: 'X-Camera-Key'
+      });
     }
     imageStore.clear();
     return res.json({ success: true, message: 'Latest camera frame cache cleared.' });

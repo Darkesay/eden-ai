@@ -10,6 +10,22 @@ export interface AuthUser {
   createdAt: string;
 }
 
+export type ExplicitDeviceConnectionState =
+  | 'CONFIGURATION_REQUIRED'
+  | 'WAITING_FOR_FIRST_CONNECTION'
+  | 'ONLINE'
+  | 'STALE'
+  | 'OFFLINE'
+  | 'AUTHENTICATION_ERROR'
+  | 'CONNECTION_ERROR';
+
+export interface DeviceErrorInfo {
+  category: 'auth' | 'connection';
+  code: string;
+  message: string;
+  timestamp: string;
+}
+
 export interface GreenhouseSummary {
   id: string;
   name: string;
@@ -27,32 +43,38 @@ export interface GreenhouseSummary {
     deviceId: string | null;
     provisioningStatus: string;
     hasCredentialIssued: boolean;
+    explicitState?: ExplicitDeviceConnectionState;
     connectionStatus: 'CONNECTED' | 'STALE' | 'DISCONNECTED' | 'AWAITING_FIRST_CHECKIN' | 'PENDING_SETUP' | 'REVOKED';
     freshness: 'FRESH' | 'CACHED' | 'STALE' | 'NONE';
     isFresh: boolean;
     isLiveStream: false;
     lastCaptureAt: string | null;
+    lastUploadAt?: string | null;
     ageSeconds: number | null;
     lastSeenAt: string | null;
+    lastError?: DeviceErrorInfo | null;
   };
   controller: {
     deviceId: string | null;
     provisioningStatus: string;
     hasCredentialIssued: boolean;
+    explicitState?: ExplicitDeviceConnectionState;
     connectionStatus: 'CONNECTED' | 'STALE' | 'DISCONNECTED' | 'AWAITING_FIRST_CHECKIN' | 'PENDING_SETUP' | 'REVOKED';
     dataSource: 'REAL_HARDWARE' | 'CACHED' | 'STALE' | 'DISCONNECTED';
     lastTelemetryAt: string | null;
+    lastUploadAt?: string | null;
     ageSeconds: number | null;
     lastSeenAt: string | null;
+    lastError?: DeviceErrorInfo | null;
     readings: {
-      temperature: number;
-      humidity: number;
-      soilMoisture: number;
+      temperature: number | null;
+      humidity: number | null;
+      soilMoisture: number | null;
       sunlight: number | null;
       growLight: number | null;
       waterLevel: number | null;
       batteryVoltage: number | null;
-      rain: boolean;
+      rain: boolean | null;
       rainGaugeLevel: number | null;
     } | null;
   };

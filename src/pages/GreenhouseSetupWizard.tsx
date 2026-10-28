@@ -544,7 +544,7 @@ export default function GreenhouseSetupWizard() {
                         <div className="text-[11px] font-mono opacity-65 mt-0.5">ID: {dev.id}</div>
                       </div>
                       <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
-                        {dev.provisioningStatus}
+                        {dev.explicitState || dev.provisioningStatus}
                       </span>
                     </div>
 
@@ -639,26 +639,29 @@ export default function GreenhouseSetupWizard() {
           <CardContent className="space-y-4">
             <div className="text-xs opacity-75">
               Zero actuator commands are ever sent during verification (`actuationCommandsSent: 0`). Your greenhouse
-              turns green only after genuine authenticated uploads arrive from your ESP32 boards.
+              turns `ONLINE` only after genuine authenticated uploads arrive from your ESP32 boards (`&le;45s` controller,
+              `&le;90s` camera).
             </div>
 
             {connectionCheck && (
               <div className="space-y-3">
-                {connectionCheck.checks.map((chk) => (
+                {connectionCheck.checks.map((chk: any) => (
                   <div
                     key={chk.id}
                     className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3.5 flex items-start gap-3"
                   >
                     {chk.status === 'PASS' ? (
                       <CheckCircle2 size={18} className="text-[#10B981] shrink-0 mt-0.5" />
+                    ) : chk.status === 'FAIL' ? (
+                      <AlertTriangle size={18} className="text-red-400 shrink-0 mt-0.5" />
                     ) : (
                       <Clock size={18} className="text-amber-400 shrink-0 mt-0.5" />
                     )}
                     <div className="space-y-0.5">
-                      <div className="text-sm font-semibold flex items-center gap-2">
+                      <div className="text-sm font-semibold flex flex-wrap items-center gap-2">
                         {chk.label}
                         <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
-                          {chk.status}
+                          {chk.explicitState || chk.status}
                         </span>
                       </div>
                       <p className="text-xs opacity-75">{chk.detail}</p>

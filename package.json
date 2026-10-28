@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test": "tsx test/hardware.test.ts && tsx test/camera_upload.test.ts && tsx test/voice_system.test.ts && tsx test/self_service_greenhouse.test.ts",
+    "test": "tsx test/hardware.test.ts && tsx test/camera_upload.test.ts && tsx test/voice_system.test.ts && tsx test/self_service_greenhouse.test.ts && tsx test/hardware_gateway_security.test.ts",
     "camera:relay": "node scripts/camera-lan-relay.mjs"
   },
   "dependencies": {

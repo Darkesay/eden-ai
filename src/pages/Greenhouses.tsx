@@ -251,20 +251,24 @@ export default function Greenhouses() {
                 <CardContent className="p-5 space-y-4">
                   <div className="grid grid-cols-2 gap-3 text-xs">
                     <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3 space-y-1">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-1">
                         <span className="opacity-70 flex items-center gap-1.5 font-medium">
                           <Camera size={13} className="text-[#14B8A6]" /> ESP32-CAM
                         </span>
                         <span
                           className={`font-mono text-[10px] font-bold ${
+                            (gh.camera.explicitState || gh.camera.connectionStatus) === 'ONLINE' ||
                             gh.camera.connectionStatus === 'CONNECTED'
                               ? 'text-[#10B981]'
-                              : gh.camera.connectionStatus === 'STALE'
+                              : (gh.camera.explicitState || gh.camera.connectionStatus) === 'STALE'
                                 ? 'text-amber-400'
-                                : 'opacity-60'
+                                : gh.camera.explicitState === 'AUTHENTICATION_ERROR' ||
+                                    gh.camera.explicitState === 'CONNECTION_ERROR'
+                                  ? 'text-red-400'
+                                  : 'opacity-65'
                           }`}
                         >
-                          {gh.camera.connectionStatus}
+                          {gh.camera.explicitState || gh.camera.connectionStatus}
                         </span>
                       </div>
                       <div className="text-[11px] opacity-75">
@@ -272,23 +276,32 @@ export default function Greenhouses() {
                           ? `Snapshot (${gh.camera.freshness}) • ${gh.camera.ageSeconds ?? 0}s ago`
                           : 'No snapshot uploaded yet'}
                       </div>
+                      {gh.camera.lastError && (
+                        <div className="text-[10px] text-red-400 font-mono truncate">
+                          {gh.camera.lastError.code}: {gh.camera.lastError.message}
+                        </div>
+                      )}
                     </div>
 
                     <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3 space-y-1">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-1">
                         <span className="opacity-70 flex items-center gap-1.5 font-medium">
                           <Cpu size={13} className="text-[#10B981]" /> Main ESP32
                         </span>
                         <span
                           className={`font-mono text-[10px] font-bold ${
+                            (gh.controller.explicitState || gh.controller.connectionStatus) === 'ONLINE' ||
                             gh.controller.connectionStatus === 'CONNECTED'
                               ? 'text-[#10B981]'
-                              : gh.controller.connectionStatus === 'STALE'
+                              : (gh.controller.explicitState || gh.controller.connectionStatus) === 'STALE'
                                 ? 'text-amber-400'
-                                : 'opacity-60'
+                                : gh.controller.explicitState === 'AUTHENTICATION_ERROR' ||
+                                    gh.controller.explicitState === 'CONNECTION_ERROR'
+                                  ? 'text-red-400'
+                                  : 'opacity-65'
                           }`}
                         >
-                          {gh.controller.connectionStatus}
+                          {gh.controller.explicitState || gh.controller.connectionStatus}
                         </span>
                       </div>
                       <div className="text-[11px] opacity-75">
@@ -296,6 +309,11 @@ export default function Greenhouses() {
                           ? `Source: ${gh.controller.dataSource} • ${gh.controller.ageSeconds ?? 0}s ago`
                           : 'No controller check-in yet'}
                       </div>
+                      {gh.controller.lastError && (
+                        <div className="text-[10px] text-red-400 font-mono truncate">
+                          {gh.controller.lastError.code}: {gh.controller.lastError.message}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -305,17 +323,29 @@ export default function Greenhouses() {
                         <div className="text-[10px] uppercase opacity-60 flex items-center justify-center gap-1">
                           <Thermometer size={11} /> Temp
                         </div>
-                        <div className="font-mono font-bold text-sm mt-0.5">{readings.temperature.toFixed(1)}°C</div>
+                        <div className="font-mono font-bold text-sm mt-0.5">
+                          {readings.temperature !== null && readings.temperature !== undefined
+                            ? `${readings.temperature.toFixed(1)}°C`
+                            : 'Unavailable'}
+                        </div>
                       </div>
                       <div>
                         <div className="text-[10px] uppercase opacity-60 flex items-center justify-center gap-1">
                           <Droplets size={11} /> Humidity
                         </div>
-                        <div className="font-mono font-bold text-sm mt-0.5">{readings.humidity.toFixed(0)}%</div>
+                        <div className="font-mono font-bold text-sm mt-0.5">
+                          {readings.humidity !== null && readings.humidity !== undefined
+                            ? `${readings.humidity.toFixed(0)}%`
+                            : 'Unavailable'}
+                        </div>
                       </div>
                       <div>
                         <div className="text-[10px] uppercase opacity-60">Soil</div>
-                        <div className="font-mono font-bold text-sm mt-0.5">{readings.soilMoisture.toFixed(0)}%</div>
+                        <div className="font-mono font-bold text-sm mt-0.5">
+                          {readings.soilMoisture !== null && readings.soilMoisture !== undefined
+                            ? `${readings.soilMoisture.toFixed(0)}%`
+                            : 'Unavailable'}
+                        </div>
                       </div>
                     </div>
                   ) : (

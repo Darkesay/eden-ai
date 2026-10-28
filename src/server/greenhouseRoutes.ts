@@ -8,10 +8,14 @@ import {
   PlatformDatabase
 } from './database.ts';
 import {
+  DEVICE_STATE_THRESHOLDS,
   type EnrollmentTokenPurpose,
+  type ExplicitDeviceConnectionState,
   type GreenhouseDeviceType,
   type GreenhouseMemberRole,
-  SlidingWindowRateLimiter
+  SlidingWindowRateLimiter,
+  computeExplicitDeviceState,
+  hasDisallowedQuerySecret
 } from './telemetryContract.ts';
 
 const SESSION_COOKIE_NAME = 'edens_session';
@@ -143,6 +147,22 @@ export function buildGreenhouseSummary(
   const latestCam = camStore.getLatest();
   const latestTel = platformDb.getLatestTelemetryForGreenhouse(gh.id);
 
+  const camExplicit = computeExplicitDeviceState({
+    deviceType: 'esp32_cam',
+    hasCredentialIssued: Boolean(camDev?.hasCredentialIssued),
+    revokedAt: camDev?.revokedAt,
+    lastSeenAt: camDev?.lastSeenAt,
+    lastDataTimestamp: latestCam ? latestCam.frame.timestamp : camDev?.lastUploadAt,
+    lastErrorCategory: camDev?.lastErrorCategory,
+    lastErrorAt: camDev?.lastErrorAt
+  });
+
+  const ctrlExplicit: ExplicitDeviceConnectionState = latestTel.exists
+    ? latestTel.explicitState
+    : ctrlDev
+      ? ctrlDev.explicitState
+      : 'CONFIGURATION_REQUIRED';
+
   const deriveDeviceStatus = (
     dev: DeviceRecord | null,
     hasData: boolean,
@@ -160,14 +180,14 @@ export function buildGreenhouseSummary(
   const cameraStatus = deriveDeviceStatus(
     camDev,
     Boolean(latestCam),
-    Boolean(latestCam && (latestCam.state.freshness === 'FRESH' || latestCam.state.freshness === 'CACHED')),
-    Boolean(latestCam && latestCam.state.freshness === 'STALE')
+    Boolean(latestCam && latestCam.state.isFresh),
+    Boolean(latestCam && (latestCam.state.freshness === 'CACHED' || latestCam.state.freshness === 'STALE'))
   );
 
   const controllerStatus = deriveDeviceStatus(
     ctrlDev,
     latestTel.exists,
-    latestTel.dataSource === 'REAL_HARDWARE' || latestTel.dataSource === 'CACHED',
+    latestTel.dataSource === 'REAL_HARDWARE',
     latestTel.dataSource === 'STALE'
   );
 
@@ -190,28 +210,57 @@ export function buildGreenhouseSummary(
   return {
     ...gh,
     overallStatus,
+    stateThresholds: DEVICE_STATE_THRESHOLDS,
     camera: {
       deviceId: camDev?.id || null,
+      label: camDev?.label || 'ESP32-CAM Crop Camera',
       provisioningStatus: camDev?.provisioningStatus || 'pending_setup',
       hasCredentialIssued: camDev?.hasCredentialIssued || false,
       connectionStatus: cameraStatus,
+      explicitState: camExplicit.explicitState,
       freshness: latestCam ? latestCam.state.freshness : 'NONE',
       isFresh: latestCam ? latestCam.state.isFresh : false,
       isLiveStream: false as const,
       lastCaptureAt: latestCam ? latestCam.frame.timestamp : null,
-      ageSeconds: latestCam ? latestCam.state.ageSeconds : null,
-      lastSeenAt: camDev?.lastSeenAt || null
+      lastUploadAt: latestCam ? latestCam.frame.timestamp : camDev?.lastUploadAt || null,
+      ageSeconds: latestCam ? latestCam.state.ageSeconds : camExplicit.ageSeconds,
+      lastSeenAt: camDev?.lastSeenAt || null,
+      lastError: camDev?.lastErrorCode
+        ? {
+            category: camDev.lastErrorCategory,
+            code: camDev.lastErrorCode,
+            message: camDev.lastErrorMessage,
+            at: camDev.lastErrorAt
+          }
+        : null,
+      thresholds: DEVICE_STATE_THRESHOLDS.esp32_cam
     },
     controller: {
       deviceId: ctrlDev?.id || null,
+      label: ctrlDev?.label || 'Main ESP32 Greenhouse Controller',
       provisioningStatus: ctrlDev?.provisioningStatus || 'pending_setup',
       hasCredentialIssued: ctrlDev?.hasCredentialIssued || false,
       connectionStatus: controllerStatus,
+      explicitState: ctrlExplicit,
       dataSource: latestTel.dataSource,
-      lastTelemetryAt: latestTel.timestamp,
+      lastTelemetryAt: latestTel.timestamp || ctrlDev?.lastTelemetryAt || null,
       ageSeconds: latestTel.ageSeconds,
       lastSeenAt: ctrlDev?.lastSeenAt || null,
-      readings: latestTel.readings
+      firmwareVersion: ctrlDev?.firmwareVersion || null,
+      readings: latestTel.readings,
+      sensorHealth: latestTel.sensorHealth,
+      actuators: latestTel.actuators,
+      interlocks: latestTel.interlocks,
+      deviceHealth: latestTel.deviceHealth,
+      lastError: ctrlDev?.lastErrorCode
+        ? {
+            category: ctrlDev.lastErrorCategory,
+            code: ctrlDev.lastErrorCode,
+            message: ctrlDev.lastErrorMessage,
+            at: ctrlDev.lastErrorAt
+          }
+        : null,
+      thresholds: DEVICE_STATE_THRESHOLDS.esp32_controller
     }
   };
 }
@@ -239,10 +288,11 @@ export function registerSelfServiceGreenhouseRoutes(
     req: express.Request,
     res: express.Response
   ): AuthenticatedUser | null => {
-    if (req.query.sessionToken || req.query.token) {
+    const disallowedQuery = hasDisallowedQuerySecret(req.query as Record<string, unknown>);
+    if (disallowedQuery) {
       res.status(401).json({
         error: 'QUERY_SESSION_DISALLOWED',
-        message: 'Session tokens must not be passed in URL query strings.'
+        message: `Authentication credentials or session tokens must not be passed in URL query string ("${disallowedQuery}").`
       });
       return null;
     }
@@ -417,11 +467,13 @@ export function registerSelfServiceGreenhouseRoutes(
         ? platformDb.listTokensForGreenhouse(gh.id)
         : [];
     const auditEvents = platformDb.listAuditEventsForGreenhouse(gh.id, 25);
+    const observations = platformDb.listAiObservationsForGreenhouse(gh.id, 20);
 
     return res.json({
       success: true,
       greenhouse: summary,
       devices,
+      stateThresholds: DEVICE_STATE_THRESHOLDS,
       latestCamera: latestCam
         ? {
             exists: true,
@@ -430,6 +482,7 @@ export function registerSelfServiceGreenhouseRoutes(
             capturedAt: latestCam.frame.capturedAt,
             ageSeconds: latestCam.state.ageSeconds,
             freshness: latestCam.state.freshness,
+            explicitState: summary.camera.explicitState,
             isFresh: latestCam.state.isFresh,
             isStale: latestCam.state.isStale,
             isLiveStream: false,
@@ -442,6 +495,7 @@ export function registerSelfServiceGreenhouseRoutes(
           }
         : {
             exists: false,
+            explicitState: summary.camera.explicitState,
             freshness: 'NONE',
             isFresh: false,
             isStale: true,
@@ -450,7 +504,8 @@ export function registerSelfServiceGreenhouseRoutes(
           },
       latestTelemetry,
       enrollmentTokens: tokens,
-      auditEvents
+      auditEvents,
+      observations
     });
   });
 
@@ -667,8 +722,44 @@ export function registerSelfServiceGreenhouseRoutes(
   });
 
   // ------------------------------------------------------------------
-  // DEVICE CREDENTIAL ISSUANCE, BOOTSTRAP & REVOCATION
+  // DEVICE REGISTRATION, CREDENTIAL ISSUANCE, BOOTSTRAP & REVOCATION
   // ------------------------------------------------------------------
+
+  app.post('/api/greenhouses/:greenhouseId/devices', async (req, res) => {
+    await platformDb.init();
+    const user = ensureAuth(req, res);
+    if (!user) return;
+
+    const rawType = String(req.body?.deviceType || '').trim();
+    if (rawType !== 'esp32_controller' && rawType !== 'esp32_cam') {
+      return res.status(400).json({
+        error: 'INVALID_DEVICE_TYPE',
+        message: 'deviceType must be "esp32_controller" or "esp32_cam".'
+      });
+    }
+
+    const result = platformDb.registerOrUpdateDevice({
+      greenhouseId: req.params.greenhouseId,
+      actorUserId: user.id,
+      deviceType: rawType,
+      label: req.body?.label,
+      ipAddress: extractClientIp(req)
+    });
+
+    if ('errorCode' in result) {
+      return res.status(result.statusCode).json({
+        error: result.errorCode,
+        message: result.message
+      });
+    }
+
+    return res.status(result.created ? 201 : 200).json({
+      success: true,
+      created: result.created,
+      device: result.device,
+      note: 'Device registration never marks hardware ONLINE; device must complete an authenticated HTTPS check-in.'
+    });
+  });
 
   app.post('/api/greenhouses/:greenhouseId/devices/:deviceId/issue-credentials', async (req, res) => {
     await platformDb.init();
@@ -882,11 +973,14 @@ export function registerSelfServiceGreenhouseRoutes(
     const latestCam = cameraRegistry.getStore(gh.id).getLatest();
     const latestTel = platformDb.getLatestTelemetryForGreenhouse(gh.id);
 
+    const summary = buildGreenhouseSummary(gh, platformDb, cameraRegistry);
+
     const checks = [
       {
         id: 'account_rbac',
         label: 'Account & Greenhouse Authorization',
         status: 'PASS' as const,
+        explicitState: 'ONLINE' as const,
         detail: `Signed in as ${user.email} (${gh.role} access on ${gh.id}).`
       },
       {
@@ -895,17 +989,27 @@ export function registerSelfServiceGreenhouseRoutes(
         status:
           latestCam && latestCam.state.isFresh
             ? ('PASS' as const)
-            : camDev?.hasCredentialIssued
-              ? ('WAITING' as const)
-              : ('PENDING_SETUP' as const),
+            : summary.camera.explicitState === 'AUTHENTICATION_ERROR' ||
+                summary.camera.explicitState === 'CONNECTION_ERROR'
+              ? ('ERROR' as const)
+              : camDev?.hasCredentialIssued
+                ? ('WAITING' as const)
+                : ('PENDING_SETUP' as const),
+        explicitState: summary.camera.explicitState,
+        lastSeenAt: summary.camera.lastSeenAt,
+        lastUploadAt: summary.camera.lastUploadAt,
+        lastError: summary.camera.lastError,
+        thresholds: DEVICE_STATE_THRESHOLDS.esp32_cam,
         detail:
           latestCam && latestCam.state.isFresh
             ? `Verified fresh JPEG snapshot (${latestCam.state.ageSeconds}s old, ${latestCam.frame.sizeBytes} bytes). Periodic snapshot upload — not live video.`
-            : latestCam
-              ? `Last JPEG snapshot is ${latestCam.state.freshness} (${latestCam.state.ageSeconds}s old). Waiting for next upload.`
-              : camDev?.hasCredentialIssued
-                ? 'Camera credential issued, but no authenticated JPEG upload has reached POST /api/camera/upload yet.'
-                : 'Issue a unique ESP32-CAM credential in the Setup Wizard and flash camera_secrets.h.'
+            : summary.camera.lastError
+              ? `Last upload error [${summary.camera.lastError.code}]: ${summary.camera.lastError.message}`
+              : latestCam
+                ? `Last JPEG snapshot is ${latestCam.state.freshness} (${latestCam.state.ageSeconds}s old). Waiting for next upload.`
+                : camDev?.hasCredentialIssued
+                  ? 'Camera credential issued (WAITING_FOR_FIRST_CONNECTION), but no authenticated JPEG upload has reached POST /api/camera/upload yet.'
+                  : 'CONFIGURATION_REQUIRED: Issue a unique ESP32-CAM credential in the Setup Wizard and flash camera_secrets.h.'
       },
       {
         id: 'esp32_controller_telemetry',
@@ -913,19 +1017,29 @@ export function registerSelfServiceGreenhouseRoutes(
         status:
           latestTel.dataSource === 'REAL_HARDWARE'
             ? ('PASS' as const)
-            : latestTel.exists
-              ? ('STALE' as const)
-              : ctrlDev?.hasCredentialIssued
-                ? ('WAITING' as const)
-                : ('PENDING_SETUP' as const),
+            : summary.controller.explicitState === 'AUTHENTICATION_ERROR' ||
+                summary.controller.explicitState === 'CONNECTION_ERROR'
+              ? ('ERROR' as const)
+              : latestTel.exists
+                ? ('STALE' as const)
+                : ctrlDev?.hasCredentialIssued
+                  ? ('WAITING' as const)
+                  : ('PENDING_SETUP' as const),
+        explicitState: summary.controller.explicitState,
+        lastSeenAt: summary.controller.lastSeenAt,
+        lastTelemetryAt: summary.controller.lastTelemetryAt,
+        lastError: summary.controller.lastError,
+        thresholds: DEVICE_STATE_THRESHOLDS.esp32_controller,
         detail:
           latestTel.dataSource === 'REAL_HARDWARE' && latestTel.readings
-            ? `Verified live telemetry (${latestTel.ageSeconds}s old): ${latestTel.readings.temperature}°C, ${latestTel.readings.humidity}% RH, ${latestTel.readings.soilMoisture}% soil.`
-            : latestTel.exists
-              ? `Controller reading is ${latestTel.dataSource} (${latestTel.ageSeconds}s old).`
-              : ctrlDev?.hasCredentialIssued
-                ? 'Controller credential issued, but no authenticated JSON payload has reached POST /api/telemetry/upload yet.'
-                : 'Issue a unique Main ESP32 credential in the Setup Wizard and flash controller_secrets.h.'
+            ? `Verified live telemetry (${latestTel.ageSeconds}s old): Temp=${latestTel.readings.temperature ?? 'UNREPORTED'}°C, RH=${latestTel.readings.humidity ?? 'UNREPORTED'}%, Soil=${latestTel.readings.soilMoisture ?? 'UNREPORTED'}%.`
+            : summary.controller.lastError
+              ? `Last telemetry error [${summary.controller.lastError.code}]: ${summary.controller.lastError.message}`
+              : latestTel.exists
+                ? `Controller reading is ${latestTel.explicitState} (${latestTel.ageSeconds}s old).`
+                : ctrlDev?.hasCredentialIssued
+                  ? 'Controller credential issued (WAITING_FOR_FIRST_CONNECTION), but no authenticated JSON payload has reached POST /api/telemetry/upload yet.'
+                  : 'CONFIGURATION_REQUIRED: Issue a unique Main ESP32 credential in the Setup Wizard and flash controller_secrets.h.'
       }
     ];
 
@@ -937,8 +1051,25 @@ export function registerSelfServiceGreenhouseRoutes(
       safeReadOnlyVerification: true,
       actuationCommandsSent: 0,
       allHardwareVerifiedOnline: allOnline,
+      stateThresholds: DEVICE_STATE_THRESHOLDS,
       checkedAt: new Date().toISOString(),
       checks
+    });
+  });
+
+  app.get('/api/greenhouses/:greenhouseId/observations', async (req, res) => {
+    await platformDb.init();
+    const user = ensureAuth(req, res);
+    if (!user) return;
+
+    const gh = platformDb.getGreenhouseForUser(req.params.greenhouseId, user.id);
+    if (!gh) {
+      return res.status(403).json({ error: 'FORBIDDEN_GREENHOUSE', message: 'Access denied.' });
+    }
+
+    return res.json({
+      success: true,
+      observations: platformDb.listAiObservationsForGreenhouse(gh.id, 30)
     });
   });
 

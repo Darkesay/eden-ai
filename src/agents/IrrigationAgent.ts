@@ -18,31 +18,54 @@ export function useIrrigationAgent() {
         const dataSource = hardwareService.getDataSource();
         const freshnessSec = hardwareService.getSensorFreshnessSeconds();
 
-        // Safety Rule 1: Never send automated actuator commands on stale or disconnected telemetry.
-        if (dataSource === 'DISCONNECTED' || dataSource === 'STALE' || freshnessSec > 35) {
+        // Safety Rule 1: Never evaluate on stale (>45s) or disconnected telemetry.
+        if (dataSource === 'DISCONNECTED' || dataSource === 'STALE' || freshnessSec > 45) {
           store.setValue('agent_IrrigationAgent_lastRun', new Date().toISOString());
           store.setRow('activityLog', Date.now().toString() + 'ia', {
             timestamp: new Date().toISOString(),
             type: 'agent',
-            message: `🤖 Irrigation Agent: Telemetry ${dataSource.toLowerCase()} (${freshnessSec}s old). Irrigation decisions suspended for crop safety.`
+            message: `🤖 Irrigation Agent: Telemetry ${dataSource.toLowerCase()} (${freshnessSec}s old). Irrigation advisory suspended for crop safety.`
           });
           return;
         }
 
-        const soilMoisture = Number(store.getValue('soilMoisture') ?? 50);
-        const rain = store.getValue('rain') === true;
-        const temp = Number(store.getValue('temperature') ?? 24);
-        const waterLevel = Number(store.getValue('waterLevel') ?? 70);
-        const activeCrop = (store.getValue('cropType') as string) || 'Tomato';
-        const waterLowLocked = waterLevel < 10;
+        const soilAvailable = config.mode === 'simulation' || store.getValue('hardware_soilMoistureAvailable') !== false;
+        const rawSoil = store.getValue('soilMoisture');
+        if (!soilAvailable || rawSoil === undefined || rawSoil === null || !Number.isFinite(Number(rawSoil))) {
+          store.setValue('agent_IrrigationAgent_lastRun', new Date().toISOString());
+          store.setRow('activityLog', Date.now().toString() + 'ia', {
+            timestamp: new Date().toISOString(),
+            type: 'agent',
+            message: `🤖 Irrigation Agent: Soil moisture sensor unavailable. Refusing to fabricate irrigation decision.`
+          });
+          return;
+        }
 
-        // Safety Rule 2: Physical Reservoir Interlock
+        const soilMoisture = Number(rawSoil);
+        const rain = store.getValue('rain') === true;
+        const tempAvailable = config.mode === 'simulation' || store.getValue('hardware_temperatureAvailable') !== false;
+        const rawTemp = store.getValue('temperature');
+        const temp = tempAvailable && rawTemp !== undefined && rawTemp !== null && Number.isFinite(Number(rawTemp))
+          ? Number(rawTemp)
+          : null;
+
+        const waterAvailable = config.mode === 'simulation' || store.getValue('hardware_waterLevelAvailable') !== false;
+        const rawWater = store.getValue('waterLevel');
+        const waterLevel = waterAvailable && rawWater !== undefined && rawWater !== null && Number.isFinite(Number(rawWater))
+          ? Number(rawWater)
+          : null;
+
+        const activeCrop = (store.getValue('cropType') as string) || 'Tomato';
+        const waterLowLocked =
+          store.getValue('hardware_waterLowLocked') === true || (waterLevel !== null && waterLevel < 10);
+
+        // Safety Rule 2: Physical Reservoir Interlock (including exact 0% reservoir reading)
         if (waterLowLocked) {
           store.setValue('agent_IrrigationAgent_lastRun', new Date().toISOString());
           store.setRow('activityLog', Date.now().toString() + 'ia', {
             timestamp: new Date().toISOString(),
             type: 'alert',
-            message: `🚨 Irrigation Agent: Reservoir level critically low (${waterLevel}%). Pump activation locked by safety interlock.`
+            message: `🚨 Irrigation Agent: Reservoir level critically low (${waterLevel !== null ? `${waterLevel}%` : '<10%'}). Pump activation locked by safety interlock.`
           });
           return;
         }
@@ -81,8 +104,8 @@ export function useIrrigationAgent() {
             result.reason += ' (Blocked: rain detected)';
           }
 
-          // Only dispatch to physical hardware if user explicitly enabled auto-approve for IrrigationAgent
-          const canAutoDispatch = config.mode === 'simulation' || store.getValue('auto_approve_agent_IrrigationAgent') === true;
+          // Phase 8 Safety: Physical hardware operates strictly in Read-Only / Advisory Only mode.
+          const canAutoDispatch = config.mode === 'simulation';
           if (canAutoDispatch) {
             if (targetPump === 'ON') {
               await hardwareService.setOverride('pump', 'on', safeDuration);
@@ -95,7 +118,7 @@ export function useIrrigationAgent() {
           store.setRow('activityLog', Date.now().toString() + 'ia', {
             timestamp: new Date().toISOString(),
             type: 'agent',
-            message: `💧 Irrigation Agent (${dataSource}${canAutoDispatch ? '' : ' · Advisory Only'}): Pump ${targetPump} (${safeDuration}s) — ${result.reason}`
+            message: `💧 Irrigation Agent (${dataSource}${canAutoDispatch ? '' : ' · Advisory Only — No Physical Actuation'}): Pump ${targetPump} (${safeDuration}s) — ${result.reason}`
           });
         }
       } catch (err: any) {

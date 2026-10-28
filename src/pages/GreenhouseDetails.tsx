@@ -302,7 +302,7 @@ export default function GreenhouseDetails() {
                         : 'bg-red-500/20 text-red-400'
                   }`}
                 >
-                  {cam?.exists ? cam.freshness : 'DISCONNECTED'}
+                  {gh.camera?.explicitState || (cam?.exists ? cam.freshness : 'OFFLINE')}
                 </span>
               </div>
             </div>
@@ -405,30 +405,47 @@ export default function GreenhouseDetails() {
               <CardTitle className="text-base font-bold flex items-center gap-2">
                 <Activity size={17} className="text-[#10B981]" /> Main ESP32 Sensor Telemetry
               </CardTitle>
-              <span
-                className={`text-[10px] font-mono font-bold px-2.5 py-0.5 rounded ${
-                  tel?.dataSource === 'REAL_HARDWARE'
-                    ? 'bg-[#10B981]/20 text-[#10B981]'
-                    : tel?.dataSource === 'CACHED' || tel?.dataSource === 'STALE'
-                      ? 'bg-amber-500/20 text-amber-400'
-                      : 'bg-red-500/20 text-red-400'
-                }`}
-              >
-                {tel?.dataSource || 'DISCONNECTED'}
-              </span>
+              <div className="flex items-center gap-1.5 text-[10px] font-mono">
+                {gh.controller?.explicitState && (
+                  <span className="px-2 py-0.5 rounded bg-black/5 dark:bg-white/10">
+                    {gh.controller.explicitState}
+                  </span>
+                )}
+                <span
+                  className={`font-bold px-2.5 py-0.5 rounded ${
+                    tel?.dataSource === 'REAL_HARDWARE'
+                      ? 'bg-[#10B981]/20 text-[#10B981]'
+                      : tel?.dataSource === 'CACHED' || tel?.dataSource === 'STALE'
+                        ? 'bg-amber-500/20 text-amber-400'
+                        : 'bg-red-500/20 text-red-400'
+                  }`}
+                >
+                  {tel?.dataSource || 'DISCONNECTED'}
+                </span>
+              </div>
             </div>
           </CardHeader>
 
           <CardContent className="p-5 space-y-4">
             {tel?.exists && tel.readings ? (
               <>
+                <div className="flex flex-wrap items-center justify-between text-[11px] font-mono opacity-75">
+                  <span>
+                    Latest Telemetry:{' '}
+                    {tel.receivedAt ? new Date(tel.receivedAt).toLocaleTimeString() : 'Unknown'}
+                  </span>
+                  <span>Age: {tel.ageSeconds ?? 0}s (Fresh &le;45s · Stale 46–180s)</span>
+                </div>
+
                 <div className="grid grid-cols-3 gap-3">
                   <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3">
                     <div className="text-[11px] opacity-70 flex items-center gap-1">
                       <Thermometer size={12} className="text-[#10B981]" /> Air Temp
                     </div>
                     <div className="text-xl font-mono font-bold mt-1">
-                      {tel.readings.temperature.toFixed(1)}°C
+                      {tel.readings.temperature !== null && tel.readings.temperature !== undefined
+                        ? `${tel.readings.temperature.toFixed(1)}°C`
+                        : 'Unavailable'}
                     </div>
                   </div>
                   <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3">
@@ -436,13 +453,17 @@ export default function GreenhouseDetails() {
                       <Droplets size={12} className="text-sky-400" /> Humidity
                     </div>
                     <div className="text-xl font-mono font-bold mt-1">
-                      {tel.readings.humidity.toFixed(0)}%
+                      {tel.readings.humidity !== null && tel.readings.humidity !== undefined
+                        ? `${tel.readings.humidity.toFixed(0)}%`
+                        : 'Unavailable'}
                     </div>
                   </div>
                   <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3">
                     <div className="text-[11px] opacity-70">Soil Moisture</div>
                     <div className="text-xl font-mono font-bold mt-1">
-                      {tel.readings.soilMoisture.toFixed(0)}%
+                      {tel.readings.soilMoisture !== null && tel.readings.soilMoisture !== undefined
+                        ? `${tel.readings.soilMoisture.toFixed(0)}%`
+                        : 'Unavailable'}
                     </div>
                   </div>
                 </div>
@@ -451,7 +472,9 @@ export default function GreenhouseDetails() {
                   <div className="rounded-xl bg-black/5 dark:bg-white/5 p-2.5">
                     <span className="opacity-65 block">Reservoir</span>
                     <span className="font-mono font-semibold">
-                      {tel.readings.waterLevel !== null ? `${tel.readings.waterLevel}%` : 'Unreported'}
+                      {tel.readings.waterLevel !== null && tel.readings.waterLevel !== undefined
+                        ? `${tel.readings.waterLevel}%`
+                        : 'Unavailable'}
                     </span>
                   </div>
                   <div className="rounded-xl bg-black/5 dark:bg-white/5 p-2.5">
@@ -459,13 +482,17 @@ export default function GreenhouseDetails() {
                       <Sun size={11} /> Sunlight
                     </span>
                     <span className="font-mono font-semibold">
-                      {tel.readings.sunlight !== null ? `${tel.readings.sunlight} lx` : 'Unreported'}
+                      {tel.readings.sunlight !== null && tel.readings.sunlight !== undefined
+                        ? `${tel.readings.sunlight} lx`
+                        : 'Unavailable'}
                     </span>
                   </div>
                   <div className="rounded-xl bg-black/5 dark:bg-white/5 p-2.5">
                     <span className="opacity-65 block">Battery</span>
                     <span className="font-mono font-semibold">
-                      {tel.readings.batteryVoltage !== null ? `${tel.readings.batteryVoltage}V` : 'Unreported'}
+                      {tel.readings.batteryVoltage !== null && tel.readings.batteryVoltage !== undefined
+                        ? `${tel.readings.batteryVoltage}V`
+                        : 'Unavailable'}
                     </span>
                   </div>
                 </div>
@@ -508,24 +535,61 @@ export default function GreenhouseDetails() {
       {/* Enrolled Hardware Devices & Audit Trail */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <CardTitle className="text-base font-bold">Enrolled Hardware Identities</CardTitle>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-bold">Enrolled Hardware Identities & Connection States</CardTitle>
+            <p className="text-[11px] font-mono opacity-65">
+              Controller: &le;45s ONLINE · 46–180s STALE · &gt;180s OFFLINE | Camera: &le;90s ONLINE · 91–300s STALE · &gt;300s OFFLINE
+            </p>
           </CardHeader>
           <CardContent className="space-y-3">
             {(detail.devices || []).map((dev: any) => (
               <div
                 key={dev.id}
-                className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3.5 flex items-center justify-between gap-3 text-xs"
+                className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3.5 flex items-start justify-between gap-3 text-xs"
               >
-                <div className="space-y-0.5">
-                  <div className="font-bold text-sm">{dev.label}</div>
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-bold text-sm">{dev.label}</span>
+                    <span
+                      className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                        dev.explicitState === 'ONLINE'
+                          ? 'bg-[#10B981]/20 text-[#10B981]'
+                          : dev.explicitState === 'STALE'
+                            ? 'bg-amber-500/20 text-amber-400'
+                            : dev.explicitState === 'AUTHENTICATION_ERROR' || dev.explicitState === 'CONNECTION_ERROR'
+                              ? 'bg-red-500/20 text-red-400'
+                              : 'bg-black/5 dark:bg-white/10 opacity-80'
+                      }`}
+                    >
+                      {dev.explicitState || dev.provisioningStatus}
+                    </span>
+                  </div>
                   <div className="font-mono opacity-65">
                     {dev.id} {dev.credentialPrefix ? `• Key ${dev.credentialPrefix}...` : '• No key issued'}
                   </div>
-                  <div className="opacity-70">
-                    Status: <span className="font-mono uppercase">{dev.provisioningStatus}</span>
-                    {dev.lastSeenAt ? ` • Last seen ${new Date(dev.lastSeenAt).toLocaleTimeString()}` : ''}
+                  <div className="opacity-75 space-x-2">
+                    <span>
+                      Last seen: {dev.lastSeenAt ? new Date(dev.lastSeenAt).toLocaleTimeString() : 'Never'}
+                    </span>
+                    {dev.deviceType === 'esp32_controller' && (
+                      <span>
+                        • Latest telemetry:{' '}
+                        {dev.lastTelemetryAt ? new Date(dev.lastTelemetryAt).toLocaleTimeString() : 'None'}
+                      </span>
+                    )}
+                    {dev.deviceType === 'esp32_cam' && (
+                      <span>
+                        • Latest upload:{' '}
+                        {dev.lastUploadAt ? new Date(dev.lastUploadAt).toLocaleTimeString() : 'None'}
+                      </span>
+                    )}
                   </div>
+                  {dev.lastError && (
+                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-400 font-mono">
+                      [{dev.lastError.code}] {dev.lastError.message} (at{' '}
+                      {new Date(dev.lastError.timestamp).toLocaleTimeString()})
+                    </div>
+                  )}
                 </div>
                 {canManage && dev.provisioningStatus !== 'revoked' && dev.hasCredentialIssued && (
                   <Button
@@ -545,9 +609,22 @@ export default function GreenhouseDetails() {
 
         <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
           <CardHeader>
-            <CardTitle className="text-base font-bold">Security & Onboarding Audit Log</CardTitle>
+            <CardTitle className="text-base font-bold">Security Audit & Historical AI Observations</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2.5 max-h-72 overflow-y-auto text-xs">
+          <CardContent className="space-y-2.5 max-h-80 overflow-y-auto text-xs">
+            {(detail.observations || []).map((obs: any) => (
+              <div
+                key={obs.id}
+                className="rounded-xl border border-[#14B8A6]/30 bg-[#14B8A6]/5 p-2.5 space-y-1"
+              >
+                <div className="flex items-center justify-between font-mono text-[10px] text-[#14B8A6]">
+                  <span>AI · {obs.observationType.toUpperCase()} · {obs.dataSource}</span>
+                  <span>{new Date(obs.createdAt).toLocaleString()}</span>
+                </div>
+                <div className="font-medium">{obs.summary}</div>
+              </div>
+            ))}
+
             {(detail.enrollmentTokens || [])
               .filter((t: any) => !t.usedAt && !t.revokedAt)
               .map((tok: any) => (

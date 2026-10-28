@@ -5,11 +5,26 @@ import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { CameraImageStore } from './src/server/cameraStorage.ts';
-import { GreenhouseCameraStoreRegistry, registerCameraRoutes } from './src/server/cameraAcquisition.ts';
+import {
+  GreenhouseCameraStoreRegistry,
+  isPrivateRfc1918Ipv4,
+  registerCameraRoutes
+} from './src/server/cameraAcquisition.ts';
 import { createVisionDiagnosisHandler } from './src/server/visionDiagnosis.ts';
 import { PlatformDatabase } from './src/server/database.ts';
 import { extractClientIp, registerSelfServiceGreenhouseRoutes } from './src/server/greenhouseRoutes.ts';
-import { validateControllerTelemetryPayload } from './src/server/telemetryContract.ts';
+import {
+  DEVICE_STATE_THRESHOLDS,
+  type ExplicitDeviceConnectionState,
+  SlidingWindowRateLimiter,
+  type ValidatedControllerTelemetry,
+  computeExplicitDeviceState,
+  constantTimeSecretMatch,
+  hasDisallowedQuerySecret,
+  isPlaceholderOrEmptySecret,
+  redactSecretsFromText,
+  validateControllerTelemetryPayload
+} from './src/server/telemetryContract.ts';
 
 dotenv.config();
 
@@ -96,17 +111,75 @@ app.use('/api/ai/transcribe', (req, res, next) => {
   return next();
 });
 
-// 2. Standard JSON & URL-encoded parsers (bypassed for binary /api/camera/upload)
-const jsonParser = express.json({ limit: `${MAX_AUDIO_MB + 5}mb` });
-const urlencodedParser = express.urlencoded({ extended: true, limit: `${MAX_AUDIO_MB + 5}mb` });
+// 2. Scoped JSON & URL-encoded parsers:
+//    - Strict 64KB cap on hardware telemetry, gateway, auth, and greenhouse configuration routes
+//    - Multimodal limit ONLY on /api/ai/transcribe, /api/ai/diagnose, and /api/ai/chat
+const strictJsonParser = express.json({ limit: '64kb' });
+const aiMultimodalJsonParser = express.json({ limit: `${MAX_AUDIO_MB + 5}mb` });
+const strictUrlencodedParser = express.urlencoded({ extended: true, limit: '64kb' });
+
+function handleBodyParserError(
+  err: any,
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  if (!err) return next();
+  const claimedGhId = (req.headers['x-greenhouse-id'] as string | undefined)?.trim();
+  const claimedDevId = (req.headers['x-device-id'] as string | undefined)?.trim();
+
+  if (err.type === 'entity.too.large' || err.status === 413) {
+    if (req.path === '/api/telemetry/upload' && (claimedGhId || claimedDevId)) {
+      platformDb.recordDeviceError({
+        greenhouseId: claimedGhId,
+        deviceId: claimedDevId,
+        expectedType: 'esp32_controller',
+        category: 'CONNECTION',
+        errorCode: 'PAYLOAD_TOO_LARGE',
+        message: 'Controller telemetry payload exceeded 64 KB gateway limit.',
+        ipAddress: extractClientIp(req)
+      });
+    }
+    return res.status(413).json({
+      error: 'PAYLOAD_TOO_LARGE',
+      message: 'Request body exceeds the maximum allowed payload size for this endpoint.'
+    });
+  }
+
+  if (err instanceof SyntaxError && 'body' in err) {
+    if (req.path === '/api/telemetry/upload' && (claimedGhId || claimedDevId)) {
+      platformDb.recordDeviceError({
+        greenhouseId: claimedGhId,
+        deviceId: claimedDevId,
+        expectedType: 'esp32_controller',
+        category: 'CONNECTION',
+        errorCode: 'MALFORMED_JSON',
+        message: 'Controller uploaded malformed JSON syntax.',
+        ipAddress: extractClientIp(req)
+      });
+    }
+    return res.status(400).json({
+      error: 'MALFORMED_JSON',
+      message: 'Request body contains invalid JSON syntax.'
+    });
+  }
+
+  return next(err);
+}
 
 app.use((req, res, next) => {
   if (req.path === '/api/camera/upload') return next();
-  return jsonParser(req, res, next);
+  const isMultimodalAiRoute =
+    req.path === '/api/ai/transcribe' ||
+    req.path === '/api/ai/diagnose' ||
+    req.path === '/api/ai/chat';
+  const parser = isMultimodalAiRoute ? aiMultimodalJsonParser : strictJsonParser;
+  return parser(req, res, (err) => handleBodyParserError(err, req, res, next));
 });
+
 app.use((req, res, next) => {
   if (req.path === '/api/camera/upload') return next();
-  return urlencodedParser(req, res, next);
+  return strictUrlencodedParser(req, res, (err) => handleBodyParserError(err, req, res, next));
 });
 
 // 3. Register Self-Service Greenhouse Auth, Onboarding, QR & RBAC Routes
@@ -146,16 +219,31 @@ registerCameraRoutes(app, cameraImageStore, {
         targetStore: cameraStoreRegistry.getStore(authRes.device.greenhouseId),
         greenhouseId: authRes.device.greenhouseId,
         deviceId: authRes.device.id,
-        onFrameStored: ({ clientIp }) => {
+        onFrameStored: ({ timestamp, clientIp }) => {
           platformDb.recordDeviceCheckIn({
             deviceId: authRes.device.id,
             greenhouseId: authRes.device.greenhouseId,
-            ipAddress: clientIp
+            ipAddress: clientIp,
+            checkInKind: 'camera_upload',
+            dataTimestamp: timestamp
           });
         }
       };
     }
     return null;
+  },
+  onUploadRejected: ({ req, category, errorCode, message, greenhouseId, deviceId }) => {
+    if (greenhouseId || deviceId) {
+      platformDb.recordDeviceError({
+        greenhouseId,
+        deviceId,
+        expectedType: 'esp32_cam',
+        category,
+        errorCode,
+        message,
+        ipAddress: extractClientIp(req)
+      });
+    }
   }
 });
 
@@ -163,22 +251,92 @@ registerCameraRoutes(app, cameraImageStore, {
 // SECURE HARDWARE INTEGRATION GATEWAY (CONTROLLER)
 // --------------------------------------------------------------------
 
-function getControllerBaseUrl(overrideHost?: string, overridePort?: number) {
-  let host = (overrideHost || process.env.HARDWARE_CONTROLLER_HOST || '').trim();
-  if (!host) return null;
-  if (!host.startsWith('http://') && !host.startsWith('https://')) {
-    host = `http://${host}`;
+function validateLanControllerTarget(
+  overrideHost?: string,
+  overridePort?: number
+):
+  | { valid: true; baseUrl: string; usesCallerOverride: boolean }
+  | { valid: false; statusCode: number; errorCode: string; message: string } {
+  const callerSupplied = Boolean(overrideHost && overrideHost.trim());
+  const rawHost = (callerSupplied ? overrideHost! : process.env.HARDWARE_CONTROLLER_HOST || '').trim();
+
+  if (!rawHost || rawHost.includes('placeholder-ip')) {
+    return {
+      valid: false,
+      statusCode: 503,
+      errorCode: 'HARDWARE_GATEWAY_NOT_CONFIGURED',
+      message:
+        'Controller host is not configured on server and no active pushed telemetry exists. Configure outbound ESP32 HTTPS upload to POST /api/telemetry/upload.'
+    };
   }
-  const port = overridePort || parseInt(process.env.HARDWARE_CONTROLLER_PORT || '80', 10);
-  if (port && port !== 80) {
-    const u = new URL(host);
-    u.port = port.toString();
-    return u.origin;
+
+  let parsed: URL;
+  try {
+    const candidate =
+      rawHost.startsWith('http://') || rawHost.startsWith('https://') ? rawHost : `http://${rawHost}`;
+    parsed = new URL(candidate);
+  } catch {
+    return {
+      valid: false,
+      statusCode: 400,
+      errorCode: 'INVALID_CONTROLLER_HOST',
+      message: 'Controller host is not a valid LAN IPv4 or .local mDNS address.'
+    };
   }
-  return host.replace(/\/$/, '');
+
+  if (parsed.username || parsed.password || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
+    return {
+      valid: false,
+      statusCode: 400,
+      errorCode: 'INVALID_CONTROLLER_PROTOCOL',
+      message: 'Controller gateway target must not embed credentials or unsupported URL schemes.'
+    };
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  const isPrivate = isPrivateRfc1918Ipv4(hostname);
+  const isMdns = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.local$/i.test(hostname);
+  const allowLoopback = process.env.EDENS_ALLOW_LOOPBACK_CONTROLLER === '1' || !isCloudRuntime;
+  const isLoopback = allowLoopback && (hostname === '127.0.0.1' || hostname === 'localhost');
+
+  if (!isPrivate && !isMdns && !isLoopback) {
+    return {
+      valid: false,
+      statusCode: 403,
+      errorCode: 'NON_PRIVATE_CONTROLLER_HOST_REJECTED',
+      message: `Controller target "${hostname}" is rejected: gateway only permits RFC1918 private LAN IPs or .local mDNS hosts (SSRF protection).`
+    };
+  }
+
+  if (isCloudRuntime && (isPrivate || isMdns || callerSupplied)) {
+    return {
+      valid: false,
+      statusCode: 503,
+      errorCode: 'PRIVATE_LAN_UNREACHABLE_FROM_CLOUD',
+      message:
+        'Cloud deployment cannot connect inbound to private greenhouse LAN addresses. Flash the ESP32 controller to push telemetry via HTTPS POST /api/telemetry/upload.'
+    };
+  }
+
+  const resolvedPort =
+    overridePort ??
+    (parsed.port ? parseInt(parsed.port, 10) : parseInt(process.env.HARDWARE_CONTROLLER_PORT || '80', 10));
+  if (!Number.isInteger(resolvedPort) || resolvedPort < 1 || resolvedPort > 65535) {
+    return {
+      valid: false,
+      statusCode: 400,
+      errorCode: 'INVALID_CONTROLLER_PORT',
+      message: 'Controller TCP port must be between 1 and 65535.'
+    };
+  }
+
+  parsed.port = resolvedPort === 80 && parsed.protocol === 'http:' ? '' : String(resolvedPort);
+  return {
+    valid: true,
+    baseUrl: parsed.origin,
+    usesCallerOverride: callerSupplied
+  };
 }
-
-
 
 // --------------------------------------------------------------------
 // MAIN ESP32 TELEMETRY PUSH INTAKE & CONTROLLER PROXY ROUTES
@@ -187,47 +345,74 @@ function getControllerBaseUrl(overrideHost?: string, overridePort?: number) {
 interface PushedControllerTelemetry {
   timestamp: string;
   receivedAtMs: number;
+  validated: ValidatedControllerTelemetry;
   payload: Record<string, any>;
 }
 
 let latestPushedTelemetry: PushedControllerTelemetry | null = null;
 let totalTelemetryUploadsCount = 0;
 
+const telemetryUploadLimiter = new SlidingWindowRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 120
+});
+
+export function setGlobalTelemetryReceivedAtForTesting(receivedAtMs: number): void {
+  if (latestPushedTelemetry) {
+    latestPushedTelemetry.receivedAtMs = receivedAtMs;
+    latestPushedTelemetry.timestamp = new Date(receivedAtMs).toISOString();
+  }
+}
+
 function classifyControllerTelemetryState(receivedAtMs: number): {
   ageSeconds: number;
   dataSource: 'REAL_HARDWARE' | 'CACHED' | 'STALE' | 'DISCONNECTED';
+  explicitState: ExplicitDeviceConnectionState;
   isStale: boolean;
 } {
+  const thresholds = DEVICE_STATE_THRESHOLDS.esp32_controller;
   const ageSeconds = Math.max(0, Math.round((Date.now() - receivedAtMs) / 1000));
-  if (ageSeconds <= 15) {
-    return { ageSeconds, dataSource: 'REAL_HARDWARE', isStale: false };
+  if (ageSeconds <= thresholds.onlineMaxAgeSeconds) {
+    return { ageSeconds, dataSource: 'REAL_HARDWARE', explicitState: 'ONLINE', isStale: false };
   }
-  if (ageSeconds <= 60) {
-    return { ageSeconds, dataSource: 'CACHED', isStale: false };
+  if (ageSeconds <= thresholds.staleMaxAgeSeconds) {
+    return { ageSeconds, dataSource: 'STALE', explicitState: 'STALE', isStale: true };
   }
-  if (ageSeconds <= 180) {
-    return { ageSeconds, dataSource: 'STALE', isStale: true };
-  }
-  return { ageSeconds, dataSource: 'DISCONNECTED', isStale: true };
+  return { ageSeconds, dataSource: 'DISCONNECTED', explicitState: 'OFFLINE', isStale: true };
 }
 
-function hasValidCoreTelemetryFields(raw: any): boolean {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
-  const src = raw.telemetry && typeof raw.telemetry === 'object' ? raw.telemetry : raw;
-  const candidates = [src.temperature, src.humidity, src.soilMoisture];
-  return candidates.some((v) => v !== undefined && v !== null && v !== '' && Number.isFinite(Number(v)));
+function getConfiguredHardwareSecret(): string {
+  const raw = (process.env.HARDWARE_API_KEY || '').trim();
+  return isPlaceholderOrEmptySecret(raw) ? '' : raw;
 }
 
-function isHardwareAuthorized(req: express.Request): { authorized: boolean; status: number; error: string; message: string } {
-  const configuredKey = (process.env.HARDWARE_API_KEY || '').trim();
+function isHardwareAuthorized(req: express.Request): {
+  authorized: boolean;
+  status: number;
+  error: string;
+  message: string;
+} {
+  const disallowedParam = hasDisallowedQuerySecret(req.query as Record<string, unknown>);
+  if (disallowedParam) {
+    return {
+      authorized: false,
+      status: 401,
+      error: 'QUERY_AUTH_DISALLOWED',
+      message: `Passing controller credentials in URL query parameter "${disallowedParam}" is disabled. Use X-Hardware-Key header.`
+    };
+  }
+
+  const configuredKey = getConfiguredHardwareSecret();
   if (!configuredKey) {
     return {
       authorized: false,
       status: 503,
       error: 'SERVER_MISCONFIGURED',
-      message: 'HARDWARE_API_KEY is not configured on the server. Telemetry push uploads are rejected for security.'
+      message:
+        'HARDWARE_API_KEY is not configured on the server. Global telemetry uploads are rejected (fail-closed).'
     };
   }
+
   const headerKey = (req.headers['x-hardware-key'] || req.headers['x-api-key']) as string | undefined;
   const authHeader = req.headers['authorization'];
   const bearerKey = authHeader ? (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) : undefined;
@@ -237,10 +422,10 @@ function isHardwareAuthorized(req: express.Request): { authorized: boolean; stat
       authorized: false,
       status: 401,
       error: 'UNAUTHORIZED_CONTROLLER',
-      message: 'Authentication failed. Provide valid credential via X-Hardware-Key or X-API-Key header.'
+      message: 'Authentication failed. Provide valid credential via X-Hardware-Key header.'
     };
   }
-  if (provided !== configuredKey) {
+  if (!constantTimeSecretMatch(provided, configuredKey)) {
     return {
       authorized: false,
       status: 401,
@@ -253,29 +438,47 @@ function isHardwareAuthorized(req: express.Request): { authorized: boolean; stat
 
 /**
  * POST /api/telemetry/upload
- * Authenticated push intake allowing the Main ESP32 controller or a local LAN relay
- * to forward physical /status telemetry to cloud deployments without exposing private LAN ports.
+ * Authenticated outbound HTTPS intake for the physical ESP32 greenhouse controller.
+ * Enforces independent controller auth, rejects URL query secrets unconditionally,
+ * distinguishes null (UNREPORTED) from 0 readings, and records device state transitions.
  */
 app.post('/api/telemetry/upload', (req, res) => {
-  if (req.query.token || req.query.key || req.query.auth) {
-    const hasHeader = Boolean(
-      req.headers['x-hardware-key'] || req.headers['x-api-key'] || req.headers['authorization']
-    );
-    if (!hasHeader) {
-      return res.status(401).json({
-        error: 'QUERY_AUTH_DISALLOWED',
-        message: 'Passing controller credentials in URL query parameters is disabled. Use X-Hardware-Key header.',
-        requiredHeader: 'X-Hardware-Key'
+  const ip = extractClientIp(req);
+  const rate = telemetryUploadLimiter.check(`tel:${ip}`);
+  if (!rate.allowed) {
+    return res.status(429).json({
+      error: 'RATE_LIMITED',
+      message: `Telemetry upload rate limit exceeded. Retry in ${rate.retryAfterSeconds}s.`
+    });
+  }
+
+  const claimedGhId = (req.headers['x-greenhouse-id'] as string | undefined)?.trim();
+  const claimedDevId = (req.headers['x-device-id'] as string | undefined)?.trim();
+
+  const disallowedParam = hasDisallowedQuerySecret(req.query as Record<string, unknown>);
+  if (disallowedParam) {
+    if (claimedGhId || claimedDevId) {
+      platformDb.recordDeviceError({
+        greenhouseId: claimedGhId,
+        deviceId: claimedDevId,
+        expectedType: 'esp32_controller',
+        category: 'AUTH',
+        errorCode: 'QUERY_AUTH_DISALLOWED',
+        message: `Rejected telemetry request passing credential in query parameter "${disallowedParam}".`,
+        ipAddress: ip
       });
     }
+    return res.status(401).json({
+      error: 'QUERY_AUTH_DISALLOWED',
+      message: 'Passing controller credentials in URL query parameters is disabled. Use X-Hardware-Key header.',
+      requiredHeader: 'X-Hardware-Key'
+    });
   }
 
   const headerKey = (req.headers['x-hardware-key'] || req.headers['x-api-key']) as string | undefined;
   const authHeader = req.headers['authorization'];
   const bearerKey = authHeader ? (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) : undefined;
   const providedKey = (headerKey || bearerKey || '').trim();
-  const claimedGhId = (req.headers['x-greenhouse-id'] as string | undefined)?.trim();
-  const claimedDevId = (req.headers['x-device-id'] as string | undefined)?.trim();
 
   // Per-device authenticated greenhouse telemetry path
   if (
@@ -291,6 +494,15 @@ app.post('/api/telemetry/upload', (req, res) => {
       claimedDeviceId: claimedDevId
     });
     if ('errorCode' in devAuth) {
+      platformDb.recordDeviceError({
+        greenhouseId: claimedGhId,
+        deviceId: claimedDevId,
+        expectedType: 'esp32_controller',
+        category: 'AUTH',
+        errorCode: devAuth.errorCode,
+        message: devAuth.message,
+        ipAddress: ip
+      });
       return res.status(devAuth.statusCode).json({
         error: devAuth.errorCode,
         message: devAuth.message,
@@ -300,6 +512,15 @@ app.post('/api/telemetry/upload', (req, res) => {
 
     const validated = validateControllerTelemetryPayload(req.body);
     if ('errorCode' in validated) {
+      platformDb.recordDeviceError({
+        greenhouseId: devAuth.device.greenhouseId,
+        deviceId: devAuth.device.id,
+        expectedType: 'esp32_controller',
+        category: 'CONNECTION',
+        errorCode: validated.errorCode,
+        message: validated.message,
+        ipAddress: ip
+      });
       return res.status(validated.statusCode).json({
         error: validated.errorCode,
         message: validated.message
@@ -310,7 +531,7 @@ app.post('/api/telemetry/upload', (req, res) => {
       greenhouseId: devAuth.device.greenhouseId,
       deviceId: devAuth.device.id,
       telemetry: validated,
-      ipAddress: extractClientIp(req)
+      ipAddress: ip
     });
 
     return res.status(200).json({
@@ -320,11 +541,14 @@ app.post('/api/telemetry/upload', (req, res) => {
       deviceId: devAuth.device.id,
       readingId: stored.readingId,
       timestamp: stored.recordedAt,
-      dataSource: 'REAL_HARDWARE'
+      explicitState: 'ONLINE',
+      dataSource: 'REAL_HARDWARE',
+      sensorHealth: validated.sensorHealth,
+      interlocks: validated.interlocks
     });
   }
 
-  // Backward-compatible global HARDWARE_API_KEY intake
+  // Backward-compatible global HARDWARE_API_KEY intake (strictly independent from CAMERA_UPLOAD_KEY)
   const auth = isHardwareAuthorized(req);
   if (!auth.authorized) {
     return res.status(auth.status).json({
@@ -334,48 +558,63 @@ app.post('/api/telemetry/upload', (req, res) => {
     });
   }
 
-  if (!hasValidCoreTelemetryFields(req.body)) {
-    return res.status(400).json({
-      error: 'INVALID_TELEMETRY_PAYLOAD',
-      message: 'Telemetry JSON must contain at least one numeric environmental reading (temperature, humidity, or soilMoisture).'
+  const validated = validateControllerTelemetryPayload(req.body);
+  if ('errorCode' in validated) {
+    return res.status(validated.statusCode).json({
+      error: validated.errorCode,
+      message: validated.message
     });
   }
 
-  if (req.body?.dataSource === 'SIMULATED') {
-    return res.status(400).json({
-      error: 'SIMULATED_DATA_REJECTED',
-      message: 'Simulated payloads cannot be uploaded to the physical hardware telemetry intake.'
-    });
-  }
-
-  const timestamp = new Date().toISOString();
+  const nowMs = Date.now();
   totalTelemetryUploadsCount++;
   latestPushedTelemetry = {
-    timestamp,
-    receivedAtMs: Date.now(),
-    payload: req.body
+    timestamp: validated.timestamp,
+    receivedAtMs: nowMs,
+    validated,
+    payload: {
+      temperature: validated.temperature,
+      humidity: validated.humidity,
+      soilMoisture: validated.soilMoisture,
+      sunlight: validated.sunlight,
+      growLight: validated.growLight,
+      waterLevel: validated.waterLevel,
+      batteryVoltage: validated.batteryVoltage,
+      rain: validated.rain,
+      rainGaugeLevel: validated.rainGaugeLevel,
+      sensorHealth: validated.sensorHealth,
+      actuators: validated.actuators,
+      interlocks: validated.interlocks,
+      deviceHealth: validated.deviceHealth
+    }
   };
 
   return res.status(200).json({
     success: true,
     message: 'Physical ESP32 telemetry accepted.',
-    timestamp,
+    timestamp: validated.timestamp,
+    explicitState: 'ONLINE',
     dataSource: 'REAL_HARDWARE',
+    sensorHealth: validated.sensorHealth,
+    interlocks: validated.interlocks,
     totalUploadsReceived: totalTelemetryUploadsCount
   });
 });
 
 /**
  * GET /api/telemetry/latest
- * Returns latest pushed Main ESP32 telemetry with accurate freshness classification.
+ * Returns latest pushed Main ESP32 telemetry with explicit 7-state & freshness classification.
  */
-app.get('/api/telemetry/latest', (req, res) => {
+app.get('/api/telemetry/latest', (_req, res) => {
+  const hasSecret = Boolean(getConfiguredHardwareSecret());
   if (!latestPushedTelemetry) {
     return res.status(200).json({
       exists: false,
+      explicitState: hasSecret ? 'WAITING_FOR_FIRST_CONNECTION' : 'CONFIGURATION_REQUIRED',
       dataSource: 'DISCONNECTED',
       isStale: true,
       totalUploadsCount: totalTelemetryUploadsCount,
+      thresholds: DEVICE_STATE_THRESHOLDS.esp32_controller,
       message: 'No physical controller telemetry uploaded yet.'
     });
   }
@@ -384,41 +623,171 @@ app.get('/api/telemetry/latest', (req, res) => {
   if (state.dataSource === 'DISCONNECTED') {
     return res.status(200).json({
       exists: false,
+      explicitState: 'OFFLINE',
       dataSource: 'DISCONNECTED',
       isStale: true,
       lastTimestamp: latestPushedTelemetry.timestamp,
       ageSeconds: state.ageSeconds,
       totalUploadsCount: totalTelemetryUploadsCount,
-      message: `Last controller reading expired (${state.ageSeconds}s ago).`
+      thresholds: DEVICE_STATE_THRESHOLDS.esp32_controller,
+      message: `Last controller reading expired (${state.ageSeconds}s ago; OFFLINE > ${DEVICE_STATE_THRESHOLDS.esp32_controller.staleMaxAgeSeconds}s).`
     });
   }
 
   return res.status(200).json({
     exists: true,
+    explicitState: state.explicitState,
     timestamp: latestPushedTelemetry.timestamp,
     ageSeconds: state.ageSeconds,
     isStale: state.isStale,
     dataSource: state.dataSource,
     totalUploadsCount: totalTelemetryUploadsCount,
+    thresholds: DEVICE_STATE_THRESHOLDS.esp32_controller,
+    readings: {
+      temperature: latestPushedTelemetry.validated.temperature,
+      humidity: latestPushedTelemetry.validated.humidity,
+      soilMoisture: latestPushedTelemetry.validated.soilMoisture,
+      sunlight: latestPushedTelemetry.validated.sunlight,
+      growLight: latestPushedTelemetry.validated.growLight,
+      waterLevel: latestPushedTelemetry.validated.waterLevel,
+      batteryVoltage: latestPushedTelemetry.validated.batteryVoltage,
+      rain: latestPushedTelemetry.validated.rain,
+      rainGaugeLevel: latestPushedTelemetry.validated.rainGaugeLevel
+    },
+    sensorHealth: latestPushedTelemetry.validated.sensorHealth,
+    actuators: latestPushedTelemetry.validated.actuators,
+    interlocks: latestPushedTelemetry.validated.interlocks,
+    deviceHealth: latestPushedTelemetry.validated.deviceHealth,
     payload: latestPushedTelemetry.payload
   });
 });
 
-// Unified Gateway Proxy: /api/hardware
+// Unified Local Hardware Gateway Proxy: /api/hardware
+// Hardened against SSRF, query-string secret leaks, unauthenticated control commands, and unconfirmed actuation.
 app.all('/api/hardware', async (req, res) => {
-  const endpoint = (req.query.endpoint as string) || '/status';
+  const disallowedQuery = hasDisallowedQuerySecret(req.query as Record<string, unknown>);
+  if (disallowedQuery) {
+    return res.status(401).json({
+      error: 'QUERY_AUTH_DISALLOWED',
+      message: `Passing hardware credentials in URL query parameter "${disallowedQuery}" is forbidden.`
+    });
+  }
+
+  const rawEndpoint = String(req.query.endpoint || '/status').trim();
+  const endpoint = rawEndpoint.startsWith('/') ? rawEndpoint : `/${rawEndpoint}`;
+  if (endpoint.includes('..') || endpoint.includes('//') || /\s/.test(endpoint)) {
+    return res.status(400).json({
+      error: 'INVALID_HARDWARE_ENDPOINT',
+      message: 'Malformed hardware endpoint path.'
+    });
+  }
+
+  const isReadOnlyQuery = req.method === 'GET' && (endpoint === '/status' || endpoint === '/crops');
+
+  // Protect ALL configuration & actuator control routes against unauthorized access
+  if (!isReadOnlyQuery) {
+    const user = requireAuthenticatedUser(req);
+    const hwAuth = getConfiguredHardwareSecret() ? isHardwareAuthorized(req).authorized : false;
+    if (!user && !hwAuth) {
+      return res.status(401).json({
+        error: 'UNAUTHORIZED_HARDWARE_COMMAND',
+        message: 'Sign in or provide valid X-Hardware-Key header to issue hardware configuration or actuator commands.'
+      });
+    }
+    const ghId = String(req.query.greenhouseId || req.body?.greenhouseId || '').trim();
+    if (user && ghId) {
+      const role = platformDb.getMemberRole(ghId, user.id);
+      if (role !== 'owner' && role !== 'operator') {
+        return res.status(403).json({
+          error: 'FORBIDDEN_HARDWARE_COMMAND',
+          message: 'Only greenhouse owners or operators may issue actuator commands.'
+        });
+      }
+    }
+  }
+
+  // Enforce server-side safety interlocks BEFORE attempting any network contact (preserving 0 vs null!)
+  if (endpoint.startsWith('/roof')) {
+    const state = String(req.query.state ?? req.body?.state ?? '').toLowerCase();
+    const latestRain = latestPushedTelemetry?.validated.rain === true;
+    const isRaining =
+      req.query.rain === 'true' || req.body?.rain === true || (req.query.rain === undefined && req.body?.rain === undefined && latestRain);
+    const emergencyOverride = req.query.override === 'true' || req.body?.override === true;
+
+    if (state === 'open' && isRaining && !emergencyOverride) {
+      return res.status(403).json({
+        error: 'SAFETY_INTERLOCK_BLOCKED',
+        message: 'GREENHOUSE ROOF SAFETY INTERLOCK: Cannot open roof while rain sensor is active.',
+        interlock: 'rainLocked',
+        interlockTriggered: true,
+        confirmedByController: false
+      });
+    }
+  }
+
+  if (endpoint.startsWith('/override')) {
+    const device = String(req.query.device ?? req.body?.device ?? '').toLowerCase();
+    const state = String(req.query.state ?? req.body?.state ?? '').toLowerCase();
+
+    const rawWater = req.query.waterLevel ?? req.body?.waterLevel ?? latestPushedTelemetry?.validated.waterLevel;
+    const parsedWater =
+      rawWater === undefined || rawWater === null || rawWater === '' ? null : Number(rawWater);
+
+    if (device === 'pump' && state === 'on') {
+      if (parsedWater !== null && Number.isFinite(parsedWater) && parsedWater < 10) {
+        return res.status(403).json({
+          error: 'SAFETY_INTERLOCK_BLOCKED',
+          message: `WATER PUMP SAFETY INTERLOCK: Reservoir critically low (${parsedWater}% < 10%). Dry run prevented.`,
+          interlock: 'waterLowLocked',
+          interlockTriggered: true,
+          confirmedByController: false
+        });
+      }
+      const rawDuration = req.query.duration ?? req.body?.duration;
+      if (rawDuration !== undefined && rawDuration !== null && Number(rawDuration) > 120) {
+        return res.status(403).json({
+          error: 'SAFETY_INTERLOCK_BLOCKED',
+          message: 'IRRIGATION DURATION INTERLOCK: Single pump cycle cannot exceed 120 seconds.',
+          interlock: 'overIrrigationLocked',
+          interlockTriggered: true,
+          confirmedByController: false
+        });
+      }
+    }
+
+    const rawTemp = req.query.temperature ?? req.body?.temperature ?? latestPushedTelemetry?.validated.temperature;
+    const parsedTemp =
+      rawTemp === undefined || rawTemp === null || rawTemp === '' ? null : Number(rawTemp);
+    if (device === 'heater' && state === 'on' && parsedTemp !== null && Number.isFinite(parsedTemp) && parsedTemp > 32) {
+      return res.status(403).json({
+        error: 'SAFETY_INTERLOCK_BLOCKED',
+        message: `THERMAL SAFETY INTERLOCK: Ambient temperature (${parsedTemp}°C) exceeds 32°C. Heater activation blocked.`,
+        interlock: 'thermalLocked',
+        interlockTriggered: true,
+        confirmedByController: false
+      });
+    }
+  }
+
   const overrideHost = req.query.host as string | undefined;
   const overridePort = req.query.port ? parseInt(req.query.port as string, 10) : undefined;
-  
-  const baseUrl = getControllerBaseUrl(overrideHost, overridePort);
-  if (!baseUrl) {
-    // Read-only /status fallback to pushed physical telemetry if recently uploaded via LAN relay
-    if (req.method === 'GET' && endpoint === '/status' && latestPushedTelemetry) {
+  const targetValidation = validateLanControllerTarget(overrideHost, overridePort);
+
+  if ('errorCode' in targetValidation) {
+    // Read-only /status fallback to pushed physical telemetry if recently uploaded
+    if (
+      req.method === 'GET' &&
+      endpoint === '/status' &&
+      !overrideHost &&
+      targetValidation.errorCode === 'HARDWARE_GATEWAY_NOT_CONFIGURED' &&
+      latestPushedTelemetry
+    ) {
       const state = classifyControllerTelemetryState(latestPushedTelemetry.receivedAtMs);
       if (state.dataSource !== 'DISCONNECTED') {
         return res.status(200).json({
           ...latestPushedTelemetry.payload,
           connected: state.dataSource === 'REAL_HARDWARE',
+          explicitState: state.explicitState,
           timestamp: latestPushedTelemetry.timestamp,
           ageSeconds: state.ageSeconds,
           isStale: state.isStale,
@@ -426,72 +795,47 @@ app.all('/api/hardware', async (req, res) => {
         });
       }
     }
-    return res.status(503).json({
-      error: 'HARDWARE_GATEWAY_NOT_CONFIGURED',
-      message: 'Controller host is not configured on server and no active pushed telemetry exists. Provide HARDWARE_CONTROLLER_HOST or push via POST /api/telemetry/upload.'
+    return res.status(targetValidation.statusCode).json({
+      error: targetValidation.errorCode,
+      message: targetValidation.message,
+      confirmedByController: false
     });
   }
 
-  // Firmware Safety Interlocks Enforced at Server Gateway
-  if (endpoint.startsWith('/roof')) {
-    const state = req.query.state || req.body?.state;
-    const isRaining = req.query.rain === 'true' || req.body?.rain === true;
-    const emergencyOverride = req.query.override === 'true' || req.body?.override === true;
-
-    if (state === 'open' && isRaining && !emergencyOverride) {
-      return res.status(403).json({
-        error: 'SAFETY_INTERLOCK_BLOCKED',
-        message: 'GREENHOUSE ROOF SAFETY INTERLOCK: Cannot open roof while rain sensor is active.',
-        interlock: 'rainLocked'
-      });
-    }
-  }
-
-  if (endpoint.startsWith('/override')) {
-    const device = req.query.device || req.body?.device;
-    const state = req.query.state || req.body?.state;
-    const waterLevel = req.query.waterLevel ? parseFloat(req.query.waterLevel as string) : 50;
-
-    if (device === 'pump' && state === 'on' && waterLevel < 10) {
-      return res.status(403).json({
-        error: 'SAFETY_INTERLOCK_BLOCKED',
-        message: 'WATER PUMP SAFETY INTERLOCK: Reservoir critically low (<10%). Dry run prevented.',
-        interlock: 'waterLowLocked'
-      });
-    }
-  }
-
   try {
-    const targetUrl = new URL(`${baseUrl}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`);
-    
-    // Copy query parameters (except control params)
+    const targetUrl = new URL(`${targetValidation.baseUrl}${endpoint}`);
+
+    // Copy safe non-secret query parameters (never inject secrets into URLs)
     Object.entries(req.query).forEach(([k, v]) => {
-      if (!['endpoint', 'host', 'port'].includes(k)) {
+      if (!['endpoint', 'host', 'port', 'greenhouseId'].includes(k)) {
         targetUrl.searchParams.set(k, String(v));
       }
     });
 
-    // Injected server-side secret API key (NEVER exposed to frontend bundle)
-    const apiKey = process.env.HARDWARE_API_KEY || (req.headers['x-api-key'] as string);
-    if (apiKey) {
-      targetUrl.searchParams.set('auth', apiKey);
-    }
-
     const headers: Record<string, string> = {
-      'Accept': 'application/json',
-      'User-Agent': 'EDENS-AI-Gateway/2.4'
+      Accept: 'application/json',
+      'User-Agent': 'EDENS-AI-Gateway/2.5'
     };
-    if (apiKey) {
-      headers['X-API-Key'] = apiKey;
+
+    // Never forward server's configured HARDWARE_API_KEY to a caller-overridden host (prevents key exfiltration)
+    const serverHardwareKey = !targetValidation.usesCallerOverride ? getConfiguredHardwareSecret() : '';
+    const callerHeaderKey = ((req.headers['x-hardware-key'] || req.headers['x-api-key']) as string | undefined)?.trim();
+    const outboundKey = serverHardwareKey || callerHeaderKey || '';
+    if (outboundKey) {
+      headers['X-Hardware-Key'] = outboundKey;
+      headers['X-API-Key'] = outboundKey;
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), 5000);
 
     const response = await fetch(targetUrl.toString(), {
       method: req.method,
       headers,
-      body: req.method !== 'GET' && req.method !== 'HEAD' ? JSON.stringify(req.body) : undefined,
+      body:
+        req.method !== 'GET' && req.method !== 'HEAD'
+          ? ((headers['Content-Type'] = 'application/json'), JSON.stringify(req.body || {}))
+          : undefined,
       signal: controller.signal
     });
 
@@ -500,18 +844,25 @@ app.all('/api/hardware', async (req, res) => {
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
       const data = await response.json();
+      if (!isReadOnlyQuery && data && typeof data === 'object' && !Array.isArray(data)) {
+        return res.status(response.status).json({
+          ...data,
+          confirmedByController: response.ok
+        });
+      }
       return res.status(response.status).json(data);
     } else {
       const text = await response.text();
-      return res.status(response.status).send(text);
+      return res.status(response.status).send(redactSecretsFromText(text));
     }
   } catch (err: any) {
-    const isTimeout = err.name === 'AbortError';
+    const isTimeout = err?.name === 'AbortError';
     return res.status(isTimeout ? 504 : 502).json({
       error: isTimeout ? 'HARDWARE_TIMEOUT' : 'HARDWARE_UNREACHABLE',
-      message: isTimeout 
-        ? 'ESP32 controller did not respond within 6000ms.'
-        : `Failed to connect to ESP32: ${err.message}`
+      message: isTimeout
+        ? 'ESP32 controller did not respond within 5000ms.'
+        : `Failed to connect to ESP32: ${redactSecretsFromText(err?.message || 'unreachable')}`,
+      confirmedByController: false
     });
   }
 });
@@ -797,16 +1148,122 @@ Return ONLY the exact transcribed words as plain text. Do not provide translatio
   }
 });
 
+function formatNullableReading(val: number | null | undefined, unit: string): string {
+  if (val === null || val === undefined || !Number.isFinite(Number(val))) {
+    return 'UNAVAILABLE (sensor not reported by hardware)';
+  }
+  return `${Number(val)}${unit}`;
+}
+
+function resolveGreenhouseAiContext(req: express.Request):
+  | {
+      ok: true;
+      greenhouseId?: string;
+      actorUserId?: string;
+      cropType?: string;
+      telemetrySource?: {
+        dataSource: string;
+        explicitState: string;
+        timestamp: string | null;
+        ageSeconds: number | null;
+        isStale: boolean;
+        readings: Record<string, any> | null;
+        actuators: Record<string, boolean> | null;
+        interlocks: Record<string, boolean> | null;
+      };
+      cameraSource?: {
+        exists: boolean;
+        freshness: string;
+        timestamp: string | null;
+        ageSeconds: number | null;
+      };
+    }
+  | { ok: false; statusCode: number; errorCode: string; message: string } {
+  const ghId = String(req.body?.greenhouseId || req.query?.greenhouseId || '').trim();
+  if (!ghId) {
+    if (latestPushedTelemetry) {
+      const st = classifyControllerTelemetryState(latestPushedTelemetry.receivedAtMs);
+      return {
+        ok: true,
+        telemetrySource: {
+          dataSource: st.dataSource,
+          explicitState: st.explicitState,
+          timestamp: latestPushedTelemetry.timestamp,
+          ageSeconds: st.ageSeconds,
+          isStale: st.isStale,
+          readings: latestPushedTelemetry.payload,
+          actuators: latestPushedTelemetry.validated.actuators,
+          interlocks: latestPushedTelemetry.validated.interlocks
+        }
+      };
+    }
+    return { ok: true };
+  }
+
+  const user = requireAuthenticatedUser(req);
+  if (!user) {
+    return {
+      ok: false,
+      statusCode: 401,
+      errorCode: 'UNAUTHENTICATED',
+      message: 'Sign in required to access greenhouse-bound AI intelligence.'
+    };
+  }
+  const gh = platformDb.getGreenhouseForUser(ghId, user.id);
+  if (!gh) {
+    return {
+      ok: false,
+      statusCode: 403,
+      errorCode: 'FORBIDDEN_GREENHOUSE',
+      message: 'You do not have permission to access this greenhouse.'
+    };
+  }
+
+  const latestTel = platformDb.getLatestTelemetryForGreenhouse(gh.id);
+  const latestCam = cameraStoreRegistry.getStore(gh.id).getLatest();
+
+  return {
+    ok: true,
+    greenhouseId: gh.id,
+    actorUserId: user.id,
+    cropType: gh.cropType,
+    telemetrySource: {
+      dataSource: latestTel.dataSource,
+      explicitState: latestTel.explicitState,
+      timestamp: latestTel.timestamp,
+      ageSeconds: latestTel.ageSeconds,
+      isStale: latestTel.isStale,
+      readings: latestTel.readings,
+      actuators: latestTel.actuators,
+      interlocks: latestTel.interlocks
+    },
+    cameraSource: latestCam
+      ? {
+          exists: true,
+          freshness: latestCam.state.freshness,
+          timestamp: latestCam.frame.timestamp,
+          ageSeconds: latestCam.state.ageSeconds
+        }
+      : { exists: false, freshness: 'NONE', timestamp: null, ageSeconds: null }
+  };
+}
+
 /**
  * POST /api/ai/chat
- * Multi-turn agronomist chat reasoning in native Nigerian languages.
+ * Multi-turn agronomist chat reasoning in native Nigerian languages, bound to verified greenhouse telemetry.
  */
 app.post('/api/ai/chat', async (req, res) => {
+  const ghCtx = resolveGreenhouseAiContext(req);
+  if ('errorCode' in ghCtx) {
+    return res.status(ghCtx.statusCode).json({ error: ghCtx.errorCode, message: ghCtx.message });
+  }
+
   const ai = getGeminiClient();
   if (!ai) {
     return res.status(503).json({
       error: 'AI_SERVICE_UNCONFIGURED',
-      message: 'GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY in your Render dashboard under Environment Variables.'
+      message:
+        'GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY in your Render dashboard under Environment Variables.'
     });
   }
 
@@ -817,61 +1274,97 @@ app.post('/api/ai/chat', async (req, res) => {
 
   const langInfo = NIGERIAN_LANG_NAMES[languageId] || NIGERIAN_LANG_NAMES['pcm'];
 
-  const sourceState = String(contextData?.dataSource || 'DISCONNECTED').toUpperCase();
+  // Prefer server-verified greenhouse telemetry when greenhouseId is supplied; otherwise inspect caller contextData
+  const effectiveCtx = ghCtx.greenhouseId && ghCtx.telemetrySource
+    ? {
+        dataSource: ghCtx.telemetrySource.dataSource,
+        explicitState: ghCtx.telemetrySource.explicitState,
+        timestamp: ghCtx.telemetrySource.timestamp,
+        ageSeconds: ghCtx.telemetrySource.ageSeconds,
+        isStale: ghCtx.telemetrySource.isStale,
+        cropType: ghCtx.cropType || contextData?.cropType || 'Greenhouse Crops',
+        temperature: ghCtx.telemetrySource.readings?.temperature ?? null,
+        humidity: ghCtx.telemetrySource.readings?.humidity ?? null,
+        soilMoisture: ghCtx.telemetrySource.readings?.soilMoisture ?? null,
+        waterLevel: ghCtx.telemetrySource.readings?.waterLevel ?? null,
+        actuators: ghCtx.telemetrySource.actuators,
+        interlocks: ghCtx.telemetrySource.interlocks
+      }
+    : contextData || (ghCtx.telemetrySource
+        ? {
+            dataSource: ghCtx.telemetrySource.dataSource,
+            explicitState: ghCtx.telemetrySource.explicitState,
+            timestamp: ghCtx.telemetrySource.timestamp,
+            ageSeconds: ghCtx.telemetrySource.ageSeconds,
+            isStale: ghCtx.telemetrySource.isStale,
+            cropType: 'Greenhouse Crops',
+            temperature: ghCtx.telemetrySource.readings?.temperature ?? null,
+            humidity: ghCtx.telemetrySource.readings?.humidity ?? null,
+            soilMoisture: ghCtx.telemetrySource.readings?.soilMoisture ?? null,
+            waterLevel: ghCtx.telemetrySource.readings?.waterLevel ?? null,
+            actuators: ghCtx.telemetrySource.actuators,
+            interlocks: ghCtx.telemetrySource.interlocks
+          }
+        : null);
+
+  const sourceState = String(effectiveCtx?.dataSource || 'DISCONNECTED').toUpperCase();
+  const telemetryTimestamp = effectiveCtx?.timestamp || effectiveCtx?.lastSeen || null;
+
   const telemetryContextBlock = (() => {
-    if (!contextData || sourceState === 'DISCONNECTED') {
+    if (!effectiveCtx || sourceState === 'DISCONNECTED') {
       return `GREENHOUSE TELEMETRY CONTEXT:
-- Connection State: DISCONNECTED (No live signal from physical Main ESP32 controller)
-- Monitored Crop: ${contextData?.cropType || 'Greenhouse Crops'}
+- Connection State: DISCONNECTED / OFFLINE (No live signal from physical Main ESP32 controller)
+- Monitored Crop: ${effectiveCtx?.cropType || 'Greenhouse Crops'}
 - IMPORTANT: Do NOT claim live physical sensor readings exist right now. State honestly that the physical ESP32 controller is currently disconnected while still giving helpful agricultural advice.`;
     }
     if (sourceState === 'SIMULATED') {
       return `GREENHOUSE TELEMETRY CONTEXT:
 - Data Source: SIMULATED (Synthetic simulation values for testing — NOT live physical sensor hardware)
-- Monitored Crop: ${contextData.cropType || 'Greenhouse Crops'}
-- Simulated Temperature: ${contextData.temperature ?? 24}°C
-- Simulated Relative Humidity: ${contextData.humidity ?? 65}%
-- Simulated Soil Moisture: ${contextData.soilMoisture ?? 50}%
+- Monitored Crop: ${effectiveCtx.cropType || 'Greenhouse Crops'}
+- Simulated Temperature: ${formatNullableReading(effectiveCtx.temperature, '°C')}
+- Simulated Relative Humidity: ${formatNullableReading(effectiveCtx.humidity, '%')}
+- Simulated Soil Moisture: ${formatNullableReading(effectiveCtx.soilMoisture, '%')}
+- Simulated Water Level: ${formatNullableReading(effectiveCtx.waterLevel, '%')}
 - IMPORTANT: Never label these simulated readings as live physical greenhouse sensor data.`;
     }
-    if (sourceState === 'CACHED' || sourceState === 'STALE' || contextData.isStale) {
+    if (sourceState === 'CACHED' || sourceState === 'STALE' || effectiveCtx.isStale) {
       return `GREENHOUSE TELEMETRY CONTEXT:
-- Data Source: ${sourceState} (Historical/expired controller reading — NOT live real-time data; last seen: ${contextData.lastSeen || 'earlier'})
-- Monitored Crop: ${contextData.cropType || 'Greenhouse Crops'}
-- Last Recorded Temperature: ${contextData.temperature ?? 'N/A'}°C
-- Last Recorded Relative Humidity: ${contextData.humidity ?? 'N/A'}%
-- Last Recorded Soil Moisture: ${contextData.soilMoisture ?? 'N/A'}%
-- IMPORTANT: Clearly note that these readings are ${sourceState.toLowerCase()} rather than live real-time measurements.`;
+- Data Source: ${sourceState} (Historical/expired controller reading — NOT live real-time data; recorded at: ${telemetryTimestamp || 'earlier'})
+- Monitored Crop: ${effectiveCtx.cropType || 'Greenhouse Crops'}
+- Last Recorded Temperature: ${formatNullableReading(effectiveCtx.temperature, '°C')}
+- Last Recorded Relative Humidity: ${formatNullableReading(effectiveCtx.humidity, '%')}
+- Last Recorded Soil Moisture: ${formatNullableReading(effectiveCtx.soilMoisture, '%')}
+- Last Recorded Water Level: ${formatNullableReading(effectiveCtx.waterLevel, '%')}
+- IMPORTANT: Clearly note that these readings are ${sourceState.toLowerCase()} rather than live real-time measurements, and never claim unavailable sensors have numeric values.`;
     }
     return `LIVE GREENHOUSE TELEMETRY CONTEXT:
-- Data Source: REAL_HARDWARE (Verified fresh reading from physical Main ESP32 controller)
-- Monitored Crop: ${contextData.cropType || 'Greenhouse Crops'}
-- Temperature: ${contextData.temperature}°C
-- Relative Humidity: ${contextData.humidity}%
-- Soil Moisture: ${contextData.soilMoisture}%
-${contextData.actuators ? `- Active Actuators: ${JSON.stringify(contextData.actuators)}` : ''}
-${contextData.interlocks ? `- Safety Interlocks: ${JSON.stringify(contextData.interlocks)}` : ''}`;
+- Data Source: REAL_HARDWARE (Verified fresh reading from physical Main ESP32 controller at ${telemetryTimestamp || 'just now'})
+- Monitored Crop: ${effectiveCtx.cropType || 'Greenhouse Crops'}
+- Temperature: ${formatNullableReading(effectiveCtx.temperature, '°C')}
+- Relative Humidity: ${formatNullableReading(effectiveCtx.humidity, '%')}
+- Soil Moisture: ${formatNullableReading(effectiveCtx.soilMoisture, '%')}
+- Reservoir Water Level: ${formatNullableReading(effectiveCtx.waterLevel, '%')}
+${effectiveCtx.actuators ? `- Reported Actuator State: ${JSON.stringify(effectiveCtx.actuators)}` : ''}
+${effectiveCtx.interlocks ? `- Hardware Safety Interlocks: ${JSON.stringify(effectiveCtx.interlocks)}` : ''}
+${ghCtx.cameraSource?.exists ? `- Latest ESP32-CAM Snapshot: ${ghCtx.cameraSource.freshness} (${ghCtx.cameraSource.ageSeconds}s old at ${ghCtx.cameraSource.timestamp})` : ''}`;
   })();
 
-  const systemInstruction = `You are EDENS AI, the dedicated autonomous agricultural intelligence engine and expert agronomist for the EDENS smart greenhouse system, powered by RA.
+  const systemInstruction = `You are EDENS AI, the dedicated agricultural intelligence engine and expert agronomist for the EDENS smart greenhouse system, powered by RA.
 You have fluent mastery of Nigerian languages: Hausa, Igbo, Yoruba, Nigerian Pidgin, Fulfulde, Tiv, Efik, and English.
 
 COMMUNICATION REQUIREMENTS:
 The farmer wants to communicate with you in: ${langInfo.name} (${langInfo.native}) [Region: ${langInfo.region}].
 - ALWAYS reply directly, warmly, and thoroughly in ${langInfo.name}.
-- If the user speaks in Nigerian Pidgin, respond in cheerful, knowledgeable Nigerian Pidgin.
-- If the user speaks in Hausa, respond in respectful, accurate Harshen Hausa.
-- If the user speaks in Yoruba, respond in respectful, rich Èdè Yorùbá.
-- If the user speaks in Igbo, respond in clear, supportive Asụsụ Igbo.
 - Provide practical advice with local Nigerian agricultural realities: organic pest remedies (Dongoyaro/Neem extract, wood ash, garlic spray), soil care, watering schedules, greenhouse ventilation, solar power, and harvest readiness.
 
-HARDWARE & TELEMETRY HONESTY RULES:
-- You are part of the EDENS AI greenhouse platform (Main ESP32 environmental controller, ESP32-CAM push intake at POST /api/camera/upload, and firmware safety interlocks: Rain vs Roof Lock, Dry-Run Pump Lock <10% water, Thermal Heater Lock >32°C).
-- Current telemetry source state is: ${sourceState}.
-- NEVER label SIMULATED, CACHED, STALE, or DISCONNECTED readings as live physical sensor data. Report the exact connection/data-source state honestly if asked about hardware status or sensor readings.
+HARDWARE, SENSOR & ACTUATION HONESTY RULES:
+- Current telemetry source state is: ${sourceState}${telemetryTimestamp ? ` (timestamp: ${telemetryTimestamp})` : ''}.
+- NEVER label SIMULATED, CACHED, STALE, or DISCONNECTED readings as live physical sensor data.
+- Distinguish strictly between a sensor reading of 0 (a real zero measurement) and UNAVAILABLE (sensor disconnected or not reported). Never invent values for unavailable sensors.
+- ADVISORY ONLY: You operate in advisory mode and NEVER directly toggle physical relays without verified ESP32 controller confirmation. Never claim you turned on a pump, fan, heater, or roof vent yourself.
 
 CONVERSATION & CONTINUATION HANDLING:
-- If the farmer's prompt is a brief continuation request such as "go on", "continue", "tell me more", "explain further", or "what next", DO NOT restart with a generic greeting or welcome message. Look at the previous turns in the conversation history and continue providing detailed, actionable agricultural advice on the topic previously being discussed.
+- If the farmer's prompt is a brief continuation request ("go on", "continue", "tell me more"), continue the previous agricultural topic directly without restarting with a greeting.
 
 ${telemetryContextBlock}`;
 
@@ -894,13 +1387,11 @@ ${telemetryContextBlock}`;
     }
   }
 
-  // Ensure history ends with 'model' so appending userTurn alternates correctly
   if (validHistory.length > 0 && validHistory[validHistory.length - 1].role === 'user') {
     validHistory.pop();
   }
 
-  // Take the most recent turns ensuring first item is 'user'
-  let slicedHistory = validHistory.slice(-6);
+  const slicedHistory = validHistory.slice(-6);
   while (slicedHistory.length > 0 && slicedHistory[0].role !== 'user') {
     slicedHistory.shift();
   }
@@ -926,19 +1417,33 @@ ${telemetryContextBlock}`;
       throw new Error('Gemini model did not return any text.');
     }
 
+    if (ghCtx.greenhouseId) {
+      platformDb.recordAiObservation({
+        greenhouseId: ghCtx.greenhouseId,
+        actorUserId: ghCtx.actorUserId,
+        category: 'agronomy_chat',
+        dataSource: sourceState,
+        summary: replyText.slice(0, 240),
+        payload: { languageId, telemetryTimestamp, modelUsed }
+      });
+    }
+
     return res.json({
       success: true,
       reply: replyText,
       languageId,
       languageName: langInfo.name,
       modelUsed,
-      dataSource: sourceState
+      dataSource: sourceState,
+      telemetryTimestamp,
+      advisoryOnly: true,
+      actuationExecuted: false
     });
   } catch (err: any) {
-    console.error('Gemini chat error on server:', err.message);
+    console.error('Gemini chat error on server:', redactSecretsFromText(err.message));
     return res.status(502).json({
       error: 'AI_REASONING_FAILED',
-      message: `EDENS AI consultation failed: ${err.message}`
+      message: `EDENS AI consultation failed: ${redactSecretsFromText(err.message)}`
     });
   }
 });
@@ -946,8 +1451,8 @@ ${telemetryContextBlock}`;
 /**
  * POST /api/ai/diagnose
  * Dedicated AI Vision Analysis Layer decoupled from camera acquisition & storage.
- * Enforces genuine raster image bytes and refuses simulated or stale camera snapshots
- * when diagnosing live ESP32-CAM captures.
+ * Enforces genuine raster image bytes, refuses simulated or stale camera snapshots,
+ * and persists historical observations per greenhouse.
  */
 app.post(
   '/api/ai/diagnose',
@@ -981,8 +1486,21 @@ app.post(
       return {
         ok: true,
         store: cameraStoreRegistry.getStore(gh.id),
-        greenhouseId: gh.id
+        greenhouseId: gh.id,
+        actorUserId: user.id
       };
+    },
+    onDiagnosisComplete: ({ greenhouseId, actorUserId, imageSource, frameId, frameTimestamp, result }) => {
+      if (greenhouseId) {
+        platformDb.recordAiObservation({
+          greenhouseId,
+          actorUserId,
+          category: 'vision_diagnosis',
+          dataSource: imageSource,
+          summary: `${result.species || 'Crop'}: ${result.healthStatus || 'Analyzed'}`,
+          payload: { ...result, frameId, frameTimestamp }
+        });
+      }
     },
     runVisionModel: async ({ base64Data, mimeType, promptText, responseSchema }) => {
       const ai = getGeminiClient();
@@ -1017,8 +1535,26 @@ app.post(
 /**
  * POST /api/ai/predict-harvest
  * Server-side harvest date & growth factor calculation via Gemini.
+ * Supports real greenhouse telemetry binding and stale-telemetry rejection.
  */
 app.post('/api/ai/predict-harvest', async (req, res) => {
+  const ghCtx = resolveGreenhouseAiContext(req);
+  if ('errorCode' in ghCtx) {
+    return res.status(ghCtx.statusCode).json({ error: ghCtx.errorCode, message: ghCtx.message });
+  }
+
+  if (ghCtx.greenhouseId && req.body?.requireFresh !== false) {
+    if (!ghCtx.telemetrySource || ghCtx.telemetrySource.dataSource !== 'REAL_HARDWARE') {
+      return res.status(409).json({
+        error: 'STALE_TELEMETRY',
+        dataSource: ghCtx.telemetrySource?.dataSource || 'DISCONNECTED',
+        timestamp: ghCtx.telemetrySource?.timestamp || null,
+        message:
+          'Fresh verified ESP32 telemetry is required for live harvest prediction. Wait for an ONLINE controller check-in.'
+      });
+    }
+  }
+
   const ai = getGeminiClient();
   if (!ai) {
     return res.status(503).json({
@@ -1027,19 +1563,22 @@ app.post('/api/ai/predict-harvest', async (req, res) => {
     });
   }
 
-  const {
-    cropType = 'Tomato',
-    plantingDate = new Date().toISOString().split('T')[0],
-    standardDays = 70,
-    avgTemp = 24.5,
-    avgHumidity = 62,
-    lightHours = 14,
-    soilMoisture = 50
-  } = req.body || {};
+  const liveReadings = ghCtx.greenhouseId ? ghCtx.telemetrySource?.readings : null;
+  const resolvedSource = ghCtx.greenhouseId
+    ? ghCtx.telemetrySource?.dataSource || 'DISCONNECTED'
+    : String(req.body?.dataSource || 'SIMULATED').toUpperCase();
 
-  const prompt = `You are an expert agronomist and greenhouse scientist in EDENS AI (powered by RA). Based on the following growing conditions, calculate the estimated harvest date for ${cropType} planted on ${plantingDate}.
+  const cropType = String(req.body?.cropType || ghCtx.cropType || 'Tomato');
+  const plantingDate = String(req.body?.plantingDate || new Date().toISOString().split('T')[0]);
+  const standardDays = Number(req.body?.standardDays ?? 70);
+  const avgTemp = liveReadings ? liveReadings.temperature : (req.body?.avgTemp ?? 24.5);
+  const avgHumidity = liveReadings ? liveReadings.humidity : (req.body?.avgHumidity ?? 62);
+  const lightHours = Number(req.body?.lightHours ?? 14);
+  const soilMoisture = liveReadings ? liveReadings.soilMoisture : (req.body?.soilMoisture ?? 50);
+
+  const prompt = `You are an expert agronomist and greenhouse scientist in EDENS AI (powered by RA). Based on the following growing conditions (Data Source: ${resolvedSource}), calculate the estimated harvest date for ${cropType} planted on ${plantingDate}.
 Standard growing period: ${standardDays} days.
-Current conditions: Average temp: ${avgTemp}°C, Humidity stability: ${avgHumidity}%, Light hours/day: ${lightHours}h, Soil moisture stability: ${soilMoisture}%.
+Current conditions: Average temp: ${formatNullableReading(avgTemp, '°C')}, Humidity: ${formatNullableReading(avgHumidity, '%')}, Light hours/day: ${lightHours}h, Soil moisture: ${formatNullableReading(soilMoisture, '%')}.
 Ideal conditions: Temp 22-26°C, Humidity 60-70%, Light 14-16h/day, Moisture stable at 40-60%.
 Calculate how much faster (or slower) the crop will mature compared to standard outdoor growing. Return JSON.`;
 
@@ -1078,26 +1617,99 @@ Calculate how much faster (or slower) the crop will mature compared to standard 
       throw new Error('No text returned from Gemini harvest model.');
     }
 
+    const parsed = JSON.parse(response.text.trim());
+    if (ghCtx.greenhouseId) {
+      platformDb.recordAiObservation({
+        greenhouseId: ghCtx.greenhouseId,
+        actorUserId: ghCtx.actorUserId,
+        category: 'harvest_prediction',
+        dataSource: resolvedSource,
+        summary: `${cropType}: est. harvest ${parsed.estimatedHarvestDate} (${parsed.daysRemaining}d remaining)`,
+        payload: parsed
+      });
+    }
+
     return res.json({
       success: true,
-      result: JSON.parse(response.text.trim()),
+      result: parsed,
+      dataSource: resolvedSource,
+      telemetryTimestamp: ghCtx.telemetrySource?.timestamp || null,
       modelUsed
     });
   } catch (err: any) {
-    console.error('Harvest prediction error on server:', err.message);
+    console.error('Harvest prediction error on server:', redactSecretsFromText(err.message));
     return res.status(502).json({
       error: 'HARVEST_PREDICTION_FAILED',
-      message: `Harvest prediction failed: ${err.message}`
+      message: `Harvest prediction failed: ${redactSecretsFromText(err.message)}`
     });
   }
 });
 
 /**
  * POST /api/ai/agent-decision
- * Server-side structured decision evaluation for ClimateAgent and IrrigationAgent.
- * Keeps all @google/genai calls strictly on the server.
+ * Server-side structured advisory evaluation for ClimateAgent and IrrigationAgent.
+ * Enforces telemetry freshness, distinguishes 0 from unavailable (null), clamps safety interlocks,
+ * and returns advisoryOnly=true (never executing unconfirmed physical actuation).
  */
 app.post('/api/ai/agent-decision', async (req, res) => {
+  const ghCtx = resolveGreenhouseAiContext(req);
+  if ('errorCode' in ghCtx) {
+    return res.status(ghCtx.statusCode).json({ error: ghCtx.errorCode, message: ghCtx.message });
+  }
+
+  const { agentType, telemetry, requireFresh = true } = req.body || {};
+  if (agentType !== 'climate' && agentType !== 'irrigation') {
+    return res.status(400).json({
+      error: 'INVALID_AGENT_TYPE',
+      message: 'agentType must be "climate" or "irrigation".'
+    });
+  }
+
+  const resolvedTelemetry =
+    ghCtx.greenhouseId && ghCtx.telemetrySource
+      ? {
+          ...ghCtx.telemetrySource.readings,
+          activeCrop: ghCtx.cropType || telemetry?.activeCrop || 'Tomato',
+          dataSource: ghCtx.telemetrySource.dataSource,
+          timestamp: ghCtx.telemetrySource.timestamp,
+          ageSeconds: ghCtx.telemetrySource.ageSeconds,
+          thermalLocked: ghCtx.telemetrySource.interlocks?.thermalLocked,
+          waterLowLocked: ghCtx.telemetrySource.interlocks?.waterLowLocked
+        }
+      : telemetry || {};
+
+  const dataSource = String(resolvedTelemetry?.dataSource || 'SIMULATED').toUpperCase();
+  const telemetryTimestamp = resolvedTelemetry?.timestamp || null;
+
+  if (requireFresh !== false && (dataSource === 'STALE' || dataSource === 'DISCONNECTED')) {
+    return res.status(409).json({
+      error: 'STALE_TELEMETRY',
+      dataSource,
+      telemetryTimestamp,
+      message: `Telemetry source is ${dataSource}; refusing live ${agentType} agent decision on stale or disconnected hardware readings.`
+    });
+  }
+
+  const isSimulated = dataSource === 'SIMULATED';
+  const toNullable = (v: unknown): number | null =>
+    v === undefined || v === null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v);
+
+  if (!isSimulated) {
+    if (agentType === 'climate') {
+      if (toNullable(resolvedTelemetry?.temperature) === null && toNullable(resolvedTelemetry?.humidity) === null) {
+        return res.status(422).json({
+          error: 'SENSOR_UNAVAILABLE',
+          message: 'Physical temperature and humidity readings are both unavailable (null); cannot evaluate climate recommendation.'
+        });
+      }
+    } else if (toNullable(resolvedTelemetry?.soilMoisture) === null) {
+      return res.status(422).json({
+        error: 'SENSOR_UNAVAILABLE',
+        message: 'Physical soilMoisture reading is unavailable (null); cannot evaluate irrigation recommendation.'
+      });
+    }
+  }
+
   const ai = getGeminiClient();
   if (!ai) {
     return res.status(503).json({
@@ -1106,30 +1718,24 @@ app.post('/api/ai/agent-decision', async (req, res) => {
     });
   }
 
-  const { agentType, telemetry } = req.body || {};
-  if (agentType !== 'climate' && agentType !== 'irrigation') {
-    return res.status(400).json({ error: 'INVALID_AGENT_TYPE', message: 'agentType must be "climate" or "irrigation".' });
-  }
-
   try {
     if (agentType === 'climate') {
-      const temp = Number(telemetry?.temperature ?? 24);
-      const humidity = Number(telemetry?.humidity ?? 60);
-      const activeCrop = String(telemetry?.activeCrop || 'Tomato');
-      const dataSource = String(telemetry?.dataSource || 'SIMULATED');
-      const thermalLocked = Boolean(telemetry?.thermalLocked || temp > 32);
+      const temp = toNullable(resolvedTelemetry?.temperature) ?? (isSimulated ? 24 : null);
+      const humidity = toNullable(resolvedTelemetry?.humidity) ?? (isSimulated ? 60 : null);
+      const activeCrop = String(resolvedTelemetry?.activeCrop || 'Tomato');
+      const thermalLocked = Boolean(resolvedTelemetry?.thermalLocked || (temp !== null && temp > 32));
 
-      const prompt = `You are EDENS AI Climate Agent, optimizing greenhouse ventilation and temperature for ${activeCrop}.
-Current Telemetry (${dataSource}):
-- Temperature: ${temp}°C
-- Humidity: ${humidity}%
+      const prompt = `You are EDENS AI Climate Agent (Advisory Mode), recommending greenhouse ventilation and temperature settings for ${activeCrop}.
+Current Telemetry (Source: ${dataSource}${telemetryTimestamp ? `, Timestamp: ${telemetryTimestamp}` : ''}):
+- Temperature: ${formatNullableReading(temp, '°C')}
+- Humidity: ${formatNullableReading(humidity, '%')}
 - Thermal Interlock: ${thermalLocked ? 'ACTIVE (Heater locked OFF)' : 'CLEAR'}
 Optimal ranges for ${activeCrop}: Temp 20-28°C, Humidity 50-75%.
 
 Safety Rules:
-1. Never turn heater ON if temperature is above 26°C or if thermal interlock is active.
-2. Turn fan ON if temp > 28°C or humidity > 75%.
-3. Explain your exact reasoning with safety margins.
+1. Never recommend heater "ON" if temperature is unavailable, above 26°C, or if thermal interlock is active.
+2. Recommend fan "ON" if temp > 28°C or humidity > 75%.
+3. State clearly if any sensor is unavailable and explain your exact reasoning with safety margins.
 Return JSON: { "fan": "ON"|"OFF", "heater": "ON"|"OFF", "reason": "string" }`;
 
       const { response, modelUsed } = await generateWithModelFallback(ai, {
@@ -1149,30 +1755,58 @@ Return JSON: { "fan": "ON"|"OFF", "heater": "ON"|"OFF", "reason": "string" }`;
       });
 
       const parsed = JSON.parse(response.text?.trim() || '{}');
-      return res.json({ success: true, result: parsed, modelUsed });
+      // Enforce deterministic server-side safety interlock clamp
+      if (thermalLocked || temp === null || temp > 26) {
+        parsed.heater = 'OFF';
+      }
+
+      if (ghCtx.greenhouseId) {
+        platformDb.recordAiObservation({
+          greenhouseId: ghCtx.greenhouseId,
+          actorUserId: ghCtx.actorUserId,
+          category: 'agent_advisory',
+          dataSource,
+          summary: `Climate Advisory: Fan=${parsed.fan}, Heater=${parsed.heater} (${parsed.reason || ''})`,
+          payload: { agentType, ...parsed, telemetryTimestamp }
+        });
+      }
+
+      return res.json({
+        success: true,
+        result: parsed,
+        dataSource,
+        telemetryTimestamp,
+        advisoryOnly: true,
+        actuationExecuted: false,
+        modelUsed
+      });
     }
 
-    const soilMoisture = Number(telemetry?.soilMoisture ?? 50);
-    const rain = Boolean(telemetry?.rain);
-    const temp = Number(telemetry?.temperature ?? 24);
-    const waterLevel = Number(telemetry?.waterLevel ?? 70);
-    const activeCrop = String(telemetry?.activeCrop || 'Tomato');
-    const dataSource = String(telemetry?.dataSource || 'SIMULATED');
-    const waterLowLocked = waterLevel < 10;
+    const soilMoisture = toNullable(resolvedTelemetry?.soilMoisture) ?? (isSimulated ? 50 : null);
+    const rain =
+      resolvedTelemetry?.rain === null || resolvedTelemetry?.rain === undefined
+        ? null
+        : Boolean(resolvedTelemetry.rain);
+    const temp = toNullable(resolvedTelemetry?.temperature) ?? (isSimulated ? 24 : null);
+    const waterLevel = toNullable(resolvedTelemetry?.waterLevel) ?? (isSimulated ? 70 : null);
+    const activeCrop = String(resolvedTelemetry?.activeCrop || 'Tomato');
+    const waterLowLocked = Boolean(
+      resolvedTelemetry?.waterLowLocked || (waterLevel !== null && waterLevel < 10)
+    );
 
-    const prompt = `You are EDENS AI Irrigation Agent, managing precision drip irrigation for ${activeCrop}.
-Current Telemetry (${dataSource}):
-- Soil Moisture: ${soilMoisture}%
-- Ambient Temperature: ${temp}°C
-- Rain Detected: ${rain}
-- Reservoir Water Level: ${waterLevel}%
-- Reservoir Interlock: ${waterLowLocked ? 'LOCKED (Low Water)' : 'CLEAR'}
+    const prompt = `You are EDENS AI Irrigation Agent (Advisory Mode), recommending precision drip irrigation for ${activeCrop}.
+Current Telemetry (Source: ${dataSource}${telemetryTimestamp ? `, Timestamp: ${telemetryTimestamp}` : ''}):
+- Soil Moisture: ${formatNullableReading(soilMoisture, '%')}
+- Ambient Temperature: ${formatNullableReading(temp, '°C')}
+- Rain Detected: ${rain === null ? 'UNAVAILABLE (sensor not reported)' : String(rain)}
+- Reservoir Water Level: ${formatNullableReading(waterLevel, '%')}
+- Reservoir Interlock: ${waterLowLocked ? 'LOCKED (Low Water < 10%)' : waterLevel === null ? 'UNVERIFIED (Water sensor unavailable)' : 'CLEAR'}
 Optimal soil moisture for ${activeCrop}: 45-65%.
 
 Safety Rules:
-1. ONLY recommend pump "ON" if soil moisture is strictly below 40% and reservoir > 15%.
+1. ONLY recommend pump "ON" if soil moisture is strictly below 40% AND reservoir water level is verified > 15% (never recommend pump ON when waterLevel is UNAVAILABLE or < 10%).
 2. Duration MUST NOT exceed 120 seconds to prevent over-irrigation.
-3. If soil moisture is adequate, pump MUST be "OFF".
+3. If soil moisture is adequate or reservoir level is unverified/low, pump MUST be "OFF" and duration 0.
 4. State your agronomic reason clearly.
 Return JSON: { "pump": "ON"|"OFF", "duration": number, "reason": "string" }`;
 
@@ -1193,12 +1827,39 @@ Return JSON: { "pump": "ON"|"OFF", "duration": number, "reason": "string" }`;
     });
 
     const parsed = JSON.parse(response.text?.trim() || '{}');
-    return res.json({ success: true, result: parsed, modelUsed });
+    // Deterministic server-side safety clamp: never allow pump ON if waterLevel is null or < 10, and cap duration <= 120s
+    if (waterLowLocked || waterLevel === null || (soilMoisture !== null && soilMoisture >= 40)) {
+      parsed.pump = 'OFF';
+      parsed.duration = 0;
+    } else {
+      parsed.duration = Math.min(120, Math.max(0, Number(parsed.duration || 0)));
+    }
+
+    if (ghCtx.greenhouseId) {
+      platformDb.recordAiObservation({
+        greenhouseId: ghCtx.greenhouseId,
+        actorUserId: ghCtx.actorUserId,
+        category: 'agent_advisory',
+        dataSource,
+        summary: `Irrigation Advisory: Pump=${parsed.pump} (${parsed.duration}s) — ${parsed.reason || ''}`,
+        payload: { agentType, ...parsed, telemetryTimestamp }
+      });
+    }
+
+    return res.json({
+      success: true,
+      result: parsed,
+      dataSource,
+      telemetryTimestamp,
+      advisoryOnly: true,
+      actuationExecuted: false,
+      modelUsed
+    });
   } catch (err: any) {
-    console.error('Agent decision error on server:', err.message);
+    console.error('Agent decision error on server:', redactSecretsFromText(err.message));
     return res.status(502).json({
       error: 'AGENT_DECISION_FAILED',
-      message: `Agent decision evaluation failed: ${err.message}`
+      message: `Agent decision evaluation failed: ${redactSecretsFromText(err.message)}`
     });
   }
 });

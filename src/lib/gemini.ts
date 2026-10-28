@@ -175,6 +175,27 @@ export interface ChatMessage {
   voiceName?: string;
 }
 
+function buildAiRequestHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  try {
+    const token = sessionStorage.getItem('edens_session_token');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  } catch {}
+  return headers;
+}
+
+function getActiveGreenhouseIdForAi(dataSource?: string): string | undefined {
+  if (dataSource === 'SIMULATED') return undefined;
+  try {
+    const id = sessionStorage.getItem('edens_active_greenhouse_id');
+    return id || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function predictHarvest(
   cropType: string,
   plantingDate: string,
@@ -184,10 +205,13 @@ export async function predictHarvest(
   lightHours: number,
   soilMoisture: number
 ): Promise<HarvestPredictionResult> {
+  const greenhouseId = getActiveGreenhouseIdForAi();
   const res = await fetch('/api/ai/predict-harvest', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildAiRequestHeaders(),
+    credentials: 'include',
     body: JSON.stringify({
+      greenhouseId,
       cropType,
       plantingDate,
       standardDays,
@@ -229,10 +253,13 @@ export class CameraDiagnosisError extends Error {
 export async function diagnoseLatestCameraFrame(
   languageId: string = 'ha'
 ): Promise<PlantAnalysisResult> {
+  const greenhouseId = getActiveGreenhouseIdForAi();
   const res = await fetch('/api/ai/diagnose', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildAiRequestHeaders(),
+    credentials: 'include',
     body: JSON.stringify({
+      greenhouseId,
       useLatestCameraFrame: true,
       requireFresh: true,
       languageId
@@ -261,7 +288,8 @@ export async function analyzePlantImage(
 ): Promise<PlantAnalysisResult> {
   const res = await fetch('/api/ai/diagnose', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildAiRequestHeaders(),
+    credentials: 'include',
     body: JSON.stringify({ image: base64Image, source: 'MANUAL_UPLOAD', languageId })
   });
 
@@ -288,7 +316,8 @@ export async function transcribeSpeechAudio(
 ): Promise<string> {
   const res = await fetch('/api/ai/transcribe', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildAiRequestHeaders(),
+    credentials: 'include',
     body: JSON.stringify({
       audio: base64Audio,
       mimeType,
@@ -316,7 +345,8 @@ export async function generateSpeechAudio(
 ): Promise<string> {
   const res = await fetch('/api/ai/speech', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildAiRequestHeaders(),
+    credentials: 'include',
     body: JSON.stringify({ text, voiceName })
   });
 
@@ -331,10 +361,12 @@ export async function evaluateAgentDecision<T = any>(
   agentType: 'climate' | 'irrigation',
   telemetry: Record<string, any>
 ): Promise<T> {
+  const greenhouseId = getActiveGreenhouseIdForAi(telemetry?.dataSource);
   const res = await fetch('/api/ai/agent-decision', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agentType, telemetry })
+    headers: buildAiRequestHeaders(),
+    credentials: 'include',
+    body: JSON.stringify({ greenhouseId, agentType, telemetry })
   });
 
   const data = await res.json().catch(() => ({}));
@@ -428,10 +460,13 @@ export async function consultAgronomist(
   }
 ): Promise<string> {
   try {
+    const greenhouseId = getActiveGreenhouseIdForAi(contextData?.dataSource);
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildAiRequestHeaders(),
+      credentials: 'include',
       body: JSON.stringify({
+        greenhouseId,
         message,
         languageId,
         history,
