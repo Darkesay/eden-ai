@@ -23,9 +23,9 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { CameraImageStore } from '../src/server/cameraStorage';
-import { registerCameraRoutes } from '../src/server/cameraAcquisition';
-import { createVisionDiagnosisHandler, VisionModelInput } from '../src/server/visionDiagnosis';
+import { CameraImageStore } from '../src/server/cameraStorage.ts';
+import { registerCameraRoutes } from '../src/server/cameraAcquisition.ts';
+import { createVisionDiagnosisHandler, VisionModelInput } from '../src/server/visionDiagnosis.ts';
 
 const TEST_KEY = 'test_secret_cam_key_2026_verified';
 

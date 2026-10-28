@@ -15,7 +15,7 @@ import {
   hashPasswordScrypt,
   sha256Hex,
   verifyPasswordScrypt
-} from './telemetryContract';
+} from './telemetryContract.ts';
 
 const require = createRequire(import.meta.url);
 
@@ -231,19 +231,36 @@ export class PlatformDatabase {
       Math.max(1, parseInt(process.env.SESSION_TTL_HOURS || '168', 10));
   }
 
+  public isInitialized(): boolean {
+    return Boolean(this.db);
+  }
+
   public async init(): Promise<void> {
     if (this.db) return;
     if (this.initPromise) return this.initPromise;
 
     this.initPromise = (async () => {
-      const SQL = await getSqlEngine();
-      if (!this.inMemoryOnly && fs.existsSync(this.dbFilePath)) {
-        const existingBytes = fs.readFileSync(this.dbFilePath);
-        this.db = new SQL.Database(existingBytes);
-      } else {
-        this.db = new SQL.Database();
+      try {
+        const SQL = await getSqlEngine();
+        if (!this.inMemoryOnly && fs.existsSync(this.dbFilePath)) {
+          try {
+            const existingBytes = fs.readFileSync(this.dbFilePath);
+            this.db = new SQL.Database(existingBytes);
+          } catch (readErr: any) {
+            console.error(
+              `[EDENS AI DB Warning] Could not load SQLite file at ${this.dbFilePath} (${readErr?.message || readErr}); starting fresh in-memory database.`
+            );
+            this.db = new SQL.Database();
+          }
+        } else {
+          this.db = new SQL.Database();
+        }
+        this.runMigrations();
+      } catch (err: any) {
+        this.initPromise = null;
+        console.error('[EDENS AI DB Initialization Failure]:', err?.stack || err?.message || err);
+        throw err;
       }
-      this.runMigrations();
     })();
 
     return this.initPromise;

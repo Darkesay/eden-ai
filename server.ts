@@ -1,24 +1,28 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
-import { CameraImageStore } from './src/server/cameraStorage';
-import { GreenhouseCameraStoreRegistry, registerCameraRoutes } from './src/server/cameraAcquisition';
-import { createVisionDiagnosisHandler } from './src/server/visionDiagnosis';
-import { PlatformDatabase } from './src/server/database';
-import { extractClientIp, registerSelfServiceGreenhouseRoutes } from './src/server/greenhouseRoutes';
-import { validateControllerTelemetryPayload } from './src/server/telemetryContract';
+import { CameraImageStore } from './src/server/cameraStorage.ts';
+import { GreenhouseCameraStoreRegistry, registerCameraRoutes } from './src/server/cameraAcquisition.ts';
+import { createVisionDiagnosisHandler } from './src/server/visionDiagnosis.ts';
+import { PlatformDatabase } from './src/server/database.ts';
+import { extractClientIp, registerSelfServiceGreenhouseRoutes } from './src/server/greenhouseRoutes.ts';
+import { validateControllerTelemetryPayload } from './src/server/telemetryContract.ts';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const app = express();
-const PORT = parseInt(process.env.PORT || '3000', 10);
-const isProd = process.env.NODE_ENV === 'production';
+export const app = express();
+const PORT = parseInt(process.env.PORT || '10000', 10);
+const distPath = path.join(__dirname, 'dist');
+const distIndexPath = path.join(distPath, 'index.html');
+const isCloudRuntime = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.FLY_APP_NAME);
+const isProd =
+  process.env.NODE_ENV === 'production' || (isCloudRuntime && fs.existsSync(distIndexPath));
 const MAX_UPLOAD_MB = parseInt(process.env.CAMERA_MAX_UPLOAD_MB || '10', 10);
 const MAX_AUDIO_MB = parseInt(process.env.AUDIO_MAX_UPLOAD_MB || '15', 10);
 
@@ -33,12 +37,49 @@ export const cameraStoreRegistry = new GreenhouseCameraStoreRegistry({
   maxUploadBytes: MAX_UPLOAD_MB * 1024 * 1024
 });
 
-app.use(async (_req, _res, next) => {
+let lastAsyncInitError: string | null = null;
+
+// Fast non-blocking readiness endpoint for Render port scan & health checks
+app.get('/api/health', (_req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'edens-ai',
+    mode: isProd ? 'production' : 'development',
+    dbInitialized: platformDb.isInitialized(),
+    asyncInitError: lastAsyncInitError,
+    cameraUploadEndpoint: '/api/camera/upload',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Ensure SQLite is initialized for auth/greenhouse/per-device routes without crashing core camera/AI routes on error
+app.use(async (req, res, next) => {
+  if (req.path === '/api/health' || !req.path.startsWith('/api/')) {
+    return next();
+  }
+  if (platformDb.isInitialized()) {
+    return next();
+  }
   try {
     await platformDb.init();
-    next();
-  } catch (err) {
-    next(err);
+    lastAsyncInitError = null;
+    return next();
+  } catch (err: any) {
+    lastAsyncInitError = err?.message || String(err);
+    console.error('[EDENS AI Async DB Init Error]:', err?.stack || lastAsyncInitError);
+    if (
+      req.path.startsWith('/api/auth') ||
+      req.path.startsWith('/api/greenhouses') ||
+      req.path.startsWith('/api/enrollments') ||
+      req.path.startsWith('/api/kits') ||
+      req.path.startsWith('/api/devices')
+    ) {
+      return res.status(503).json({
+        error: 'DATABASE_INIT_FAILED',
+        message: `Platform database failed to initialize: ${lastAsyncInitError}`
+      });
+    }
+    return next();
   }
 });
 
@@ -1227,28 +1268,59 @@ app.post('/api/ai/speech', async (req, res) => {
 // FRONTEND SERVING & VITE MIDDLEWARE
 // --------------------------------------------------------------------
 
-async function startServer() {
-  await platformDb.init();
-  if (!isProd) {
+export async function startServer(listenPort: number = PORT) {
+  if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) {
+    throw new Error(`Invalid PORT configuration: "${process.env.PORT}". Expected TCP port 1-65535.`);
+  }
+
+  if (isProd) {
+    if (!fs.existsSync(distIndexPath)) {
+      console.warn(
+        `[EDENS AI Startup Warning] Built frontend bundle not found at ${distIndexPath}. Run "npm run build" before "npm run start". API routes remain active.`
+      );
+    }
+    app.use(express.static(distPath));
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api/')) return next();
+      if (fs.existsSync(distIndexPath)) {
+        return res.sendFile(distIndexPath);
+      }
+      return res.status(503).json({
+        error: 'FRONTEND_BUNDLE_MISSING',
+        message: 'Frontend build artifacts (dist/index.html) are missing. Run "npm run build" during deployment.'
+      });
+    });
+  } else {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa'
     });
     app.use(vite.middlewares);
-  } else {
-    app.use(express.static(path.join(__dirname, 'dist')));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-    });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🌿 EDENS AI Server & Hardware Gateway running on http://0.0.0.0:${PORT}`);
-    console.log(`📸 ESP32-CAM Upload intake ready at POST http://0.0.0.0:${PORT}/api/camera/upload`);
+  await platformDb.init();
+  lastAsyncInitError = null;
+  console.log('[EDENS AI Startup] SQLite PlatformDatabase initialized and verified.');
+
+  const httpServer = await new Promise<ReturnType<typeof app.listen>>((resolve, reject) => {
+    const srv = app.listen(listenPort, '0.0.0.0', () => {
+      console.log(`🌿 EDENS AI Server & Hardware Gateway running on http://0.0.0.0:${listenPort} (${isProd ? 'production' : 'development'})`);
+      console.log(`📸 ESP32-CAM Upload intake ready at POST http://0.0.0.0:${listenPort}/api/camera/upload`);
+      resolve(srv);
+    });
+    srv.on('error', (err) => {
+      console.error(`[EDENS AI Fatal] HTTP server failed to bind 0.0.0.0:${listenPort}:`, err);
+      reject(err);
+    });
   });
+
+  return httpServer;
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+if (process.env.EDENS_SKIP_LISTEN !== '1') {
+  startServer().catch((err) => {
+    console.error('[EDENS AI Startup Fatal] Server failed to start:', err?.stack || err);
+    process.exit(1);
+  });
+}

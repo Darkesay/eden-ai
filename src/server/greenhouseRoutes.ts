@@ -1,18 +1,18 @@
 import express from 'express';
 import QRCode from 'qrcode';
-import { GreenhouseCameraStoreRegistry } from './cameraAcquisition';
+import { GreenhouseCameraStoreRegistry } from './cameraAcquisition.ts';
 import {
   type AuthenticatedUser,
   type DeviceRecord,
   type GreenhouseRecord,
   PlatformDatabase
-} from './database';
+} from './database.ts';
 import {
   type EnrollmentTokenPurpose,
   type GreenhouseDeviceType,
   type GreenhouseMemberRole,
   SlidingWindowRateLimiter
-} from './telemetryContract';
+} from './telemetryContract.ts';
 
 const SESSION_COOKIE_NAME = 'edens_session';
 

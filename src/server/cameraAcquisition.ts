@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import express from 'express';
 import { Readable } from 'node:stream';
-import { CameraImageStore } from './cameraStorage';
+import { CameraImageStore } from './cameraStorage.ts';
 
 export interface CameraAuthCheckResult {
   authorized: boolean;

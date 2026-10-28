@@ -1,6 +1,6 @@
 import express from 'express';
 import { Type } from '@google/genai';
-import { CameraImageStore } from './cameraStorage';
+import { CameraImageStore } from './cameraStorage.ts';
 
 export interface VisionModelInput {
   base64Data: string;
