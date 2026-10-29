@@ -30,27 +30,31 @@
   #include "controller_secrets.h"
 #else
   #warning "[EDENS-CTRL] controller_secrets.h not found! Copy controller_secrets.example.h to controller_secrets.h before flashing."
-  #ifndef EDENS_WIFI_SSID
-    #define EDENS_WIFI_SSID ""
-  #endif
-  #ifndef EDENS_WIFI_PASSWORD
-    #define EDENS_WIFI_PASSWORD ""
-  #endif
-  #ifndef EDENS_TELEMETRY_UPLOAD_URL
-    #define EDENS_TELEMETRY_UPLOAD_URL "https://edens-ai.onrender.com/api/telemetry/upload"
-  #endif
-  #ifndef EDENS_CONTROLLER_DEVICE_KEY
-    #define EDENS_CONTROLLER_DEVICE_KEY ""
-  #endif
-  #ifndef EDENS_GREENHOUSE_ID
-    #define EDENS_GREENHOUSE_ID ""
-  #endif
-  #ifndef EDENS_CONTROLLER_DEVICE_ID
-    #define EDENS_CONTROLLER_DEVICE_ID ""
-  #endif
-  #ifndef EDENS_TELEMETRY_INTERVAL_MS
-    #define EDENS_TELEMETRY_INTERVAL_MS 10000UL
-  #endif
+#endif
+
+#if !defined(EDENS_CONTROLLER_DEVICE_KEY) && defined(EDENS_HARDWARE_API_KEY)
+  #define EDENS_CONTROLLER_DEVICE_KEY EDENS_HARDWARE_API_KEY
+#endif
+#ifndef EDENS_WIFI_SSID
+  #define EDENS_WIFI_SSID ""
+#endif
+#ifndef EDENS_WIFI_PASSWORD
+  #define EDENS_WIFI_PASSWORD ""
+#endif
+#ifndef EDENS_TELEMETRY_UPLOAD_URL
+  #define EDENS_TELEMETRY_UPLOAD_URL "https://edens-ai.onrender.com/api/telemetry/upload"
+#endif
+#ifndef EDENS_CONTROLLER_DEVICE_KEY
+  #define EDENS_CONTROLLER_DEVICE_KEY ""
+#endif
+#ifndef EDENS_GREENHOUSE_ID
+  #define EDENS_GREENHOUSE_ID ""
+#endif
+#ifndef EDENS_CONTROLLER_DEVICE_ID
+  #define EDENS_CONTROLLER_DEVICE_ID ""
+#endif
+#ifndef EDENS_TELEMETRY_INTERVAL_MS
+  #define EDENS_TELEMETRY_INTERVAL_MS 10000UL
 #endif
 
 // Root CA PEM Bundle covering Render / Cloudflare / Let's Encrypt TLS certificate chains:
@@ -273,7 +277,7 @@ public:
     }
 
     const char* apiKey = EDENS_CONTROLLER_DEVICE_KEY;
-    if (!apiKey || strlen(apiKey) == 0 || strstr(apiKey, "REPLACE_WITH_") != nullptr) {
+    if (!apiKey || strlen(apiKey) == 0 || strstr(apiKey, "REPLACE_WITH_") != nullptr || apiKey[0] == '<') {
       Serial.println("[EDENS-CTRL] Upload skipped: EDENS_CONTROLLER_DEVICE_KEY not set in controller_secrets.h");
       return false;
     }

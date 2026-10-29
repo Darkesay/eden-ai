@@ -129,7 +129,9 @@ export function buildFirmwareSecretsHeader(params: {
 #define EDENS_GREENHOUSE_ID "${params.greenhouseId}"
 #define EDENS_CONTROLLER_DEVICE_ID "${params.deviceId}"
 #define EDENS_TELEMETRY_UPLOAD_URL "${origin}/api/telemetry/upload"
-#define EDENS_HARDWARE_API_KEY "${params.deviceKey}"
+#define EDENS_CONTROLLER_DEVICE_KEY "${params.deviceKey}"
+#define EDENS_HARDWARE_API_KEY EDENS_CONTROLLER_DEVICE_KEY
+#define EDENS_TELEMETRY_INTERVAL_MS 10000UL
 `
   };
 }

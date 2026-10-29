@@ -63,7 +63,7 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
 
-  if (strlen(EDENS_WIFI_SSID) > 0 && strstr(EDENS_WIFI_SSID, "REPLACE_WITH_") == nullptr) {
+  if (strlen(EDENS_WIFI_SSID) > 0 && strstr(EDENS_WIFI_SSID, "REPLACE_WITH_") == nullptr && EDENS_WIFI_SSID[0] != '<') {
     // SECURITY: Log SSID only; NEVER print EDENS_WIFI_PASSWORD or EDENS_CONTROLLER_DEVICE_KEY
     Serial.printf("[EDENS-CTRL] Connecting to 2.4 GHz Wi-Fi SSID: %s\n", EDENS_WIFI_SSID);
     WiFi.begin(EDENS_WIFI_SSID, EDENS_WIFI_PASSWORD);

@@ -1,45 +1,210 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  Activity,
   AlertTriangle,
   ArrowLeft,
   Camera,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Clock,
   Cpu,
   Droplets,
+  Fan,
+  Flame,
+  Lightbulb,
   Loader2,
   MapPin,
   QrCode,
   RefreshCw,
-  ShieldAlert,
   ShieldCheck,
-  Sparkles,
+  Snowflake,
+  Sprout,
   Sun,
   Thermometer,
+  Umbrella,
+  Waves,
   Wrench
 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
+import { formatExplicitDeviceState, formatRelativeAge } from '../lib/greenhouseState';
+import { hardwareService, DEFAULT_CROPS } from '../lib/hardwareService';
+import { useMqtt } from '../lib/mqtt';
+import { useStoreValue } from '../lib/store';
 import { QrCodeCard } from '../components/QrScannerModal';
 import { Button } from '../components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { cn } from '../lib/utils';
+
+interface TrendSample {
+  timestamp: string;
+  temperature: number | null;
+  humidity: number | null;
+  soilMoisture: number | null;
+}
+
+function EnvironmentalTrendChart({
+  samples,
+  tempMin,
+  tempMax
+}: {
+  samples: TrendSample[];
+  tempMin: number;
+  tempMax: number;
+}) {
+  const validTempSamples = samples.filter(
+    (s) => s.temperature !== null && Number.isFinite(s.temperature)
+  );
+
+  if (validTempSamples.length < 2) {
+    return (
+      <div className="rounded-xl bg-muted/50 p-6 text-center space-y-1.5">
+        <p className="text-sm font-semibold text-foreground">
+          {validTempSamples.length === 1
+            ? 'First reading recorded — collecting trend history'
+            : 'Trend chart appears once sensor readings arrive'}
+        </p>
+        <p className="text-xs text-muted-foreground max-w-md mx-auto">
+          EDENS AI plots only genuine sensor updates as they arrive during your monitoring session — never synthetic trend curves.
+        </p>
+      </div>
+    );
+  }
+
+  const width = 640;
+  const height = 180;
+  const padX = 36;
+  const padY = 20;
+  const innerW = width - padX * 2;
+  const innerH = height - padY * 2;
+
+  const temps = validTempSamples.map((s) => Number(s.temperature));
+  const minVal = Math.min(tempMin - 2, ...temps);
+  const maxVal = Math.max(tempMax + 2, ...temps);
+  const range = Math.max(1, maxVal - minVal);
+
+  const toX = (idx: number) =>
+    padX + (idx / Math.max(1, validTempSamples.length - 1)) * innerW;
+  const toY = (v: number) => padY + innerH - ((v - minVal) / range) * innerH;
+
+  const linePoints = validTempSamples
+    .map((s, idx) => `${toX(idx).toFixed(1)},${toY(Number(s.temperature)).toFixed(1)}`)
+    .join(' ');
+
+  const areaPoints = `${toX(0).toFixed(1)},${(padY + innerH).toFixed(1)} ${linePoints} ${toX(
+    validTempSamples.length - 1
+  ).toFixed(1)},${(padY + innerH).toFixed(1)}`;
+
+  const bandTop = toY(tempMax);
+  const bandBottom = toY(tempMin);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>Recent Temperature Trend (°C)</span>
+        <span className="font-mono tabular-nums">
+          Target band: {tempMin}–{tempMax}°C ({validTempSamples.length} readings)
+        </span>
+      </div>
+      <div className="w-full overflow-hidden rounded-xl bg-muted/30 p-3 border border-border">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="w-full h-40 overflow-visible"
+          role="img"
+          aria-label="Greenhouse temperature trend chart"
+        >
+          {/* Target Range Band */}
+          <rect
+            x={padX}
+            y={Math.min(bandTop, bandBottom)}
+            width={innerW}
+            height={Math.max(4, Math.abs(bandBottom - bandTop))}
+            fill="#15803D"
+            fillOpacity={0.08}
+            rx={4}
+          />
+          <line
+            x1={padX}
+            y1={bandTop}
+            x2={width - padX}
+            y2={bandTop}
+            stroke="#15803D"
+            strokeOpacity={0.3}
+            strokeDasharray="4 4"
+          />
+          <line
+            x1={padX}
+            y1={bandBottom}
+            x2={width - padX}
+            y2={bandBottom}
+            stroke="#15803D"
+            strokeOpacity={0.3}
+            strokeDasharray="4 4"
+          />
+
+          {/* Area Fill & Line */}
+          <polygon points={areaPoints} fill="#15803D" fillOpacity={0.12} />
+          <polyline
+            fill="none"
+            stroke="#15803D"
+            strokeWidth={2.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            points={linePoints}
+          />
+
+          {/* Data Points */}
+          {validTempSamples.map((s, idx) => (
+            <circle
+              key={`${s.timestamp}-${idx}`}
+              cx={toX(idx)}
+              cy={toY(Number(s.temperature))}
+              r={3.5}
+              fill="#FFFFFF"
+              stroke="#15803D"
+              strokeWidth={2}
+            />
+          ))}
+
+          {/* Y Axis Labels */}
+          <text
+            x={4}
+            y={padY + 4}
+            className="fill-muted-foreground text-[10px] font-mono"
+          >
+            {maxVal.toFixed(0)}°
+          </text>
+          <text
+            x={4}
+            y={padY + innerH}
+            className="fill-muted-foreground text-[10px] font-mono"
+          >
+            {minVal.toFixed(0)}°
+          </text>
+        </svg>
+      </div>
+    </div>
+  );
+}
 
 export default function GreenhouseDetails() {
   const { greenhouseId } = useParams<{ greenhouseId: string }>();
   const navigate = useNavigate();
   const { setActiveGreenhouseId, refreshSession } = useAuth();
+  const { publish } = useMqtt();
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [detail, setDetail] = useState<any | null>(null);
+  const [samples, setSamples] = useState<TrendSample[]>([]);
 
   const [testingConn, setTestingConn] = useState(false);
   const [connBanner, setConnBanner] = useState<string | null>(null);
 
-  const [diagnosing, setDiagnosing] = useState(false);
-  const [diagLang, setDiagLang] = useState('en');
-  const [diagnosisError, setDiagnosisError] = useState('');
-  const [diagnosisResult, setDiagnosisResult] = useState<any | null>(null);
+  const [controlFeedback, setControlFeedback] = useState<{
+    tone: 'ok' | 'err';
+    text: string;
+  } | null>(null);
+  const [busyControl, setBusyControl] = useState<string | null>(null);
 
   const [shareQr, setShareQr] = useState<{
     tokenId: string;
@@ -48,6 +213,16 @@ export default function GreenhouseDetails() {
     expiresAt: string;
   } | null>(null);
   const [issuingQr, setIssuingQr] = useState(false);
+  const [showTechSection, setShowTechSection] = useState(false);
+  const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null);
+
+  // Actuator states from store / controller
+  const pumpActive = Boolean(useStoreValue('pumpActive', false));
+  const fanActive = Boolean(useStoreValue('fanActive', false));
+  const lightActive = Boolean(useStoreValue('lightActive', false));
+  const heaterActive = Boolean(useStoreValue('heaterActive', false));
+  const peltierActive = Boolean(useStoreValue('peltierActive', false));
+  const roofActive = Boolean(useStoreValue('roofActive', false));
 
   const fetchDetails = useCallback(async () => {
     if (!greenhouseId) return;
@@ -60,8 +235,22 @@ export default function GreenhouseDetails() {
       }
       setDetail(data);
       setActiveGreenhouseId(greenhouseId);
-      if (data.latestCamera?.analysis && !diagnosisResult) {
-        setDiagnosisResult(data.latestCamera.analysis);
+
+      // Append genuine telemetry reading to session trend history if fresh/present
+      const tel = data.latestTelemetry;
+      if (tel && tel.receivedAt && tel.dataSource !== 'DISCONNECTED') {
+        setSamples((prev) => {
+          if (prev.some((p) => p.timestamp === tel.receivedAt)) return prev;
+          return [
+            ...prev.slice(-23),
+            {
+              timestamp: tel.receivedAt,
+              temperature: tel.readings?.temperature ?? null,
+              humidity: tel.readings?.humidity ?? null,
+              soilMoisture: tel.readings?.soilMoisture ?? null
+            }
+          ];
+        });
       }
       setErrorMsg('');
     } catch (err: any) {
@@ -69,11 +258,11 @@ export default function GreenhouseDetails() {
     } finally {
       setLoading(false);
     }
-  }, [greenhouseId, setActiveGreenhouseId, diagnosisResult]);
+  }, [greenhouseId, setActiveGreenhouseId]);
 
   useEffect(() => {
     fetchDetails();
-    const poll = window.setInterval(fetchDetails, 12000);
+    const poll = window.setInterval(fetchDetails, 10000);
     return () => window.clearInterval(poll);
   }, [fetchDetails]);
 
@@ -90,7 +279,7 @@ export default function GreenhouseDetails() {
       if (res.ok && data.success) {
         const passed = data.checks.filter((c: any) => c.status === 'PASS').length;
         setConnBanner(
-          `Safe Read-Only Check Complete (${passed}/${data.checks.length} checks verified, 0 actuator commands sent).`
+          `Connection check completed: ${passed} of ${data.checks.length} checks verified (read-only, 0 equipment commands sent).`
         );
       }
       await fetchDetails();
@@ -100,31 +289,42 @@ export default function GreenhouseDetails() {
     }
   };
 
-  const handleRunVisionDiagnosis = async () => {
-    if (!greenhouseId) return;
-    setDiagnosing(true);
-    setDiagnosisError('');
+  const handleToggleEquipment = async (
+    device: 'pump' | 'fan' | 'light' | 'heater' | 'peltier' | 'roof',
+    currentlyOn: boolean
+  ) => {
+    setBusyControl(device);
+    setControlFeedback(null);
+    const nextState = currentlyOn ? 'off' : 'on';
     try {
-      const res = await apiFetch('/api/ai/diagnose', {
-        method: 'POST',
-        body: JSON.stringify({
-          greenhouseId,
-          useLatestCameraFrame: true,
-          requireFresh: true,
-          languageId: diagLang
-        })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setDiagnosisError(data.message || 'Vision diagnosis could not be completed.');
-        return;
+      if (device === 'roof') {
+        const res = await hardwareService.setRoof(currentlyOn ? 'close' : 'open', false);
+        publish('greenhouse/control/roof', currentlyOn ? 'OFF' : 'ON');
+        setControlFeedback({
+          tone: res.success ? 'ok' : 'err',
+          text: res.message
+        });
+      } else {
+        const res = await hardwareService.setOverride(
+          device,
+          nextState,
+          device === 'pump' && nextState === 'on' ? 30 : 0
+        );
+        publish(`greenhouse/control/${device}`, nextState.toUpperCase());
+        setControlFeedback({
+          tone: res.success ? 'ok' : 'err',
+          text: res.message
+        });
       }
-      setDiagnosisResult(data.result);
-      await fetchDetails();
     } catch (err: any) {
-      setDiagnosisError(err?.message || 'Network error during crop diagnosis.');
+      setControlFeedback({
+        tone: 'err',
+        text:
+          err?.message ||
+          'Local controller is not reachable right now. Check Hardware Connections in Settings.'
+      });
     } finally {
-      setDiagnosing(false);
+      setBusyControl(null);
     }
   };
 
@@ -157,6 +357,7 @@ export default function GreenhouseDetails() {
       method: 'POST',
       body: JSON.stringify({})
     });
+    setConfirmRevokeId(null);
     await fetchDetails();
     await refreshSession();
   };
@@ -173,20 +374,20 @@ export default function GreenhouseDetails() {
 
   if (loading) {
     return (
-      <div className="py-20 flex flex-col items-center justify-center gap-3 opacity-75">
-        <Loader2 size={28} className="animate-spin text-[#10B981]" />
-        <span className="text-sm">Loading greenhouse state...</span>
+      <div className="py-20 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+        <Loader2 size={26} className="animate-spin text-primary" />
+        <span className="text-sm">Loading greenhouse status...</span>
       </div>
     );
   }
 
   if (errorMsg || !detail?.greenhouse) {
     return (
-      <div className="max-w-xl mx-auto rounded-3xl border border-red-500/40 bg-red-500/10 p-8 text-center space-y-4">
-        <AlertTriangle size={28} className="mx-auto text-red-400" />
-        <p className="text-sm text-red-300">{errorMsg || 'Greenhouse not found.'}</p>
+      <div className="max-w-lg mx-auto rounded-2xl border border-red-200 bg-red-50 p-8 text-center space-y-4">
+        <AlertTriangle size={26} className="mx-auto text-red-700" />
+        <p className="text-sm text-red-900 font-medium">{errorMsg || 'Greenhouse not found.'}</p>
         <Button type="button" variant="outline" onClick={() => navigate('/greenhouses')}>
-          Return to My Greenhouses
+          Back to My Greenhouse
         </Button>
       </div>
     );
@@ -197,63 +398,149 @@ export default function GreenhouseDetails() {
   const tel = detail.latestTelemetry;
   const canManage = gh.role === 'owner' || gh.role === 'operator';
 
+  const matchedCrop =
+    DEFAULT_CROPS.find(
+      (c) =>
+        c.id.toLowerCase() === String(gh.cropType || '').toLowerCase() ||
+        c.name.toLowerCase().includes(String(gh.cropType || '').toLowerCase())
+    ) || DEFAULT_CROPS[0];
+
+  const readings = tel?.dataSource !== 'DISCONNECTED' ? tel?.readings || null : null;
+  const valOrUnavail = (v: number | null | undefined, dec: number, unit: string) =>
+    v !== null && v !== undefined && Number.isFinite(v) ? `${v.toFixed(dec)}${unit}` : 'Unavailable';
+
+  const rainLocked = readings?.rain === true;
+  const waterLowLocked =
+    readings?.waterLevel !== null && readings?.waterLevel !== undefined && readings.waterLevel < 10;
+  const thermalLocked =
+    readings?.temperature !== null &&
+    readings?.temperature !== undefined &&
+    readings.temperature > 32;
+
+  const equipmentItems = [
+    {
+      id: 'pump' as const,
+      label: 'Water Pump',
+      hint: waterLowLocked ? 'Locked: tank below 10%' : 'Runs safe 30s watering cycle',
+      active: pumpActive,
+      locked: waterLowLocked,
+      icon: Waves
+    },
+    {
+      id: 'fan' as const,
+      label: 'Air Circulation Fan',
+      hint: 'Moves warm or humid air',
+      active: fanActive,
+      locked: false,
+      icon: Fan
+    },
+    {
+      id: 'roof' as const,
+      label: 'Roof Vent',
+      hint: rainLocked ? 'Locked closed during rain' : roofActive ? 'Currently open' : 'Currently closed',
+      active: roofActive,
+      locked: rainLocked && !roofActive,
+      icon: Umbrella
+    },
+    {
+      id: 'light' as const,
+      label: 'Grow Lights',
+      hint: 'Supplemental canopy lighting',
+      active: lightActive,
+      locked: false,
+      icon: Lightbulb
+    },
+    {
+      id: 'heater' as const,
+      label: 'Warmth Heater',
+      hint: thermalLocked ? 'Locked: air above 32°C' : 'Nighttime cold protection',
+      active: heaterActive,
+      locked: thermalLocked,
+      icon: Flame
+    },
+    {
+      id: 'peltier' as const,
+      label: 'Spot Cooling',
+      hint: 'Auxiliary cooling unit',
+      active: peltierActive,
+      locked: false,
+      icon: Snowflake
+    }
+  ];
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* Header */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="space-y-1">
           <Link
             to="/greenhouses"
-            className="text-xs opacity-70 hover:opacity-100 inline-flex items-center gap-1"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
           >
             <ArrowLeft size={14} /> All Greenhouses
           </Link>
           <div className="flex flex-wrap items-center gap-2.5">
-            <h1 className="text-2xl md:text-3xl font-bold tracking-tight">{gh.name}</h1>
-            <span className="text-[10px] font-mono uppercase px-2.5 py-1 rounded-md border border-[#10B981]/30 bg-[#10B981]/10 text-[#10B981]">
-              {gh.overallStatus}
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">{gh.name}</h1>
+            <span
+              className={cn(
+                'text-xs font-semibold px-2.5 py-1 rounded-md border',
+                gh.overallStatus === 'ONLINE'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : gh.overallStatus === 'PARTIAL' || gh.overallStatus === 'STALE'
+                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-muted text-muted-foreground border-border'
+              )}
+            >
+              {gh.overallStatus === 'ONLINE'
+                ? 'Connected'
+                : gh.overallStatus === 'PARTIAL'
+                  ? 'Partial Connection'
+                  : gh.overallStatus === 'STALE'
+                    ? 'Delayed Signal'
+                    : gh.overallStatus === 'SETUP_INCOMPLETE'
+                      ? 'Setup Needed'
+                      : 'Offline'}
             </span>
           </div>
-          <div className="flex items-center gap-3 text-xs opacity-75">
-            <span className="flex items-center gap-1">
-              <MapPin size={13} /> {gh.locationLabel}
-            </span>
-            <span>Crop: {gh.cropType}</span>
-            <span className="font-mono">ID: {gh.id}</span>
-          </div>
+          <p className="text-xs text-muted-foreground flex items-center gap-2">
+            <MapPin size={13} />
+            <span>{gh.locationLabel || 'Location not set'}</span>
+            <span>·</span>
+            <span className="font-medium text-foreground">Crop: {gh.cropType}</span>
+          </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5">
           <Button
             type="button"
             variant="outline"
-            size="sm"
             disabled={testingConn}
             onClick={handleRetryConnectionTest}
+            className="h-10 px-3.5 rounded-lg text-xs font-semibold cursor-pointer"
           >
-            <RefreshCw size={14} className={`mr-1.5 ${testingConn ? 'animate-spin' : ''}`} />
-            Retry Connection
+            <RefreshCw size={14} className={cn('mr-1.5', testingConn && 'animate-spin')} />
+            Check Connection
           </Button>
+
           {canManage && (
             <>
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
                 disabled={issuingQr}
                 onClick={handleIssueShareQr}
-                className="border-[#10B981]/40 text-[#059669] dark:text-[#10B981]"
+                className="h-10 px-3.5 rounded-lg text-xs font-semibold cursor-pointer"
               >
-                <QrCode size={14} className="mr-1.5" />
-                Share Invite QR
+                <QrCode size={14} className="mr-1.5 text-primary" />
+                Share Access QR
               </Button>
               <Button
                 type="button"
-                size="sm"
                 onClick={() => navigate(`/greenhouses/${gh.id}/setup`)}
-                className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
+                className="h-10 px-4 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold cursor-pointer"
               >
                 <Wrench size={14} className="mr-1.5" />
-                Setup Help & Keys
+                Setup Guide
               </Button>
             </>
           )}
@@ -261,11 +548,9 @@ export default function GreenhouseDetails() {
       </div>
 
       {connBanner && (
-        <div className="rounded-2xl border border-[#10B981]/40 bg-[#10B981]/10 px-4 py-3 text-xs text-[#10B981] flex items-center justify-between">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-900 flex items-center gap-2">
+          <CheckCircle2 size={16} className="text-emerald-700 shrink-0" />
           <span>{connBanner}</span>
-          <button type="button" onClick={() => setConnBanner(null)} className="underline">
-            Dismiss
-          </button>
         </div>
       )}
 
@@ -275,393 +560,392 @@ export default function GreenhouseDetails() {
             qrDataUrl={shareQr.qrDataUrl}
             enrollmentCode={shareQr.enrollmentCode}
             expiresAt={shareQr.expiresAt}
-            title={`Member Invite QR (${gh.name})`}
-            subtitle="Valid for 30 minutes, single use. Grants operator access."
+            title={`Invite Co-Farmer to ${gh.name}`}
+            subtitle="Have your co-farmer scan this code from their EDENS AI account within 30 minutes."
           />
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* ESP32-CAM Crop Snapshot & Manual AI Diagnosis */}
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader className="pb-3 border-b border-[#D1E8D1] dark:border-[#1A2A1A]">
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle className="text-base font-bold flex items-center gap-2">
-                <Camera size={17} className="text-[#14B8A6]" /> ESP32-CAM Crop Snapshot
-              </CardTitle>
-              <div className="flex items-center gap-1.5 text-[10px] font-mono">
-                <span className="px-2 py-0.5 rounded bg-black/5 dark:bg-white/10">
-                  SNAPSHOT (NOT LIVE VIDEO)
-                </span>
-                <span
-                  className={`px-2 py-0.5 rounded font-bold ${
-                    cam?.isFresh
-                      ? 'bg-[#10B981]/20 text-[#10B981]'
-                      : cam?.exists
-                        ? 'bg-amber-500/20 text-amber-400'
-                        : 'bg-red-500/20 text-red-400'
-                  }`}
-                >
-                  {gh.camera?.explicitState || (cam?.exists ? cam.freshness : 'OFFLINE')}
-                </span>
-              </div>
-            </div>
-          </CardHeader>
-
-          <CardContent className="p-5 space-y-4">
-            {cam?.exists ? (
-              <div className="space-y-2">
-                <div className="rounded-2xl overflow-hidden bg-black aspect-video border border-[#1A2A1A]">
-                  <img
-                    src={cam.base64 || cam.url}
-                    alt="Verified ESP32-CAM Greenhouse Snapshot"
-                    className="w-full h-full object-contain"
-                  />
-                </div>
-                <div className="flex items-center justify-between text-xs opacity-75 font-mono">
-                  <span>Captured: {new Date(cam.timestamp).toLocaleTimeString()}</span>
-                  <span>Age: {cam.ageSeconds}s • {(cam.sizeBytes / 1024).toFixed(1)} KB</span>
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-[#D1E8D1] dark:border-[#1A2A1A] p-8 text-center space-y-2">
-                <Camera size={28} className="mx-auto opacity-40" />
-                <div className="text-sm font-medium">No ESP32-CAM Snapshot Uploaded Yet</div>
-                <p className="text-xs opacity-70">
-                  Issue a camera credential in Setup Help and flash `camera_secrets.h` so your ESP32-CAM posts verified
-                  JPEGs to `/api/camera/upload`.
-                </p>
-              </div>
-            )}
-
-            <div className="border-t border-[#D1E8D1] dark:border-[#1A2A1A] pt-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <select
-                  value={diagLang}
-                  onChange={(e) => setDiagLang(e.target.value)}
-                  className="rounded-xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-transparent px-3 py-1.5 text-xs"
-                >
-                  <option value="en">English (Nigeria)</option>
-                  <option value="pcm">Nigerian Pidgin</option>
-                  <option value="ha">Hausa</option>
-                  <option value="yo">Yoruba</option>
-                  <option value="ig">Igbo</option>
-                </select>
-
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={!cam?.isFresh || diagnosing}
-                  onClick={handleRunVisionDiagnosis}
-                  className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-                >
-                  {diagnosing ? (
-                    <Loader2 size={14} className="animate-spin mr-1.5" />
-                  ) : (
-                    <Sparkles size={14} className="mr-1.5" />
-                  )}
-                  Analyze Fresh Crop Snapshot
-                </Button>
-              </div>
-
-              {!cam?.isFresh && cam?.exists && (
-                <p className="text-[11px] text-amber-400">
-                  Snapshot is {cam.freshness} ({cam.ageSeconds}s old). Live AI diagnosis requires a FRESH camera upload
-                  (&le;90s old).
-                </p>
-              )}
-
-              {diagnosisError && (
-                <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-400">
-                  {diagnosisError}
-                </div>
-              )}
-
-              {diagnosisResult && (
-                <div className="rounded-2xl border border-[#10B981]/30 bg-[#10B981]/5 p-4 space-y-2 text-xs">
-                  <div className="flex items-center justify-between font-bold text-sm">
-                    <span>{diagnosisResult.species}</span>
-                    <span className="text-[#10B981]">{diagnosisResult.healthStatus}</span>
-                  </div>
-                  <p>
-                    <strong>Symptoms:</strong> {diagnosisResult.symptoms}
-                  </p>
-                  <p>
-                    <strong>Likely Cause:</strong> {diagnosisResult.cause}
-                  </p>
-                  <p>
-                    <strong>Recommendation:</strong> {diagnosisResult.recommendation}
-                  </p>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Main ESP32 Controller Telemetry & Hardware Interlocks */}
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader className="pb-3 border-b border-[#D1E8D1] dark:border-[#1A2A1A]">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base font-bold flex items-center gap-2">
-                <Activity size={17} className="text-[#10B981]" /> Main ESP32 Sensor Telemetry
-              </CardTitle>
-              <div className="flex items-center gap-1.5 text-[10px] font-mono">
-                {gh.controller?.explicitState && (
-                  <span className="px-2 py-0.5 rounded bg-black/5 dark:bg-white/10">
-                    {gh.controller.explicitState}
-                  </span>
-                )}
-                <span
-                  className={`font-bold px-2.5 py-0.5 rounded ${
-                    tel?.dataSource === 'REAL_HARDWARE'
-                      ? 'bg-[#10B981]/20 text-[#10B981]'
-                      : tel?.dataSource === 'CACHED' || tel?.dataSource === 'STALE'
-                        ? 'bg-amber-500/20 text-amber-400'
-                        : 'bg-red-500/20 text-red-400'
-                  }`}
-                >
-                  {tel?.dataSource || 'DISCONNECTED'}
-                </span>
-              </div>
-            </div>
-          </CardHeader>
-
-          <CardContent className="p-5 space-y-4">
-            {tel?.exists && tel.readings ? (
-              <>
-                <div className="flex flex-wrap items-center justify-between text-[11px] font-mono opacity-75">
-                  <span>
-                    Latest Telemetry:{' '}
-                    {tel.receivedAt ? new Date(tel.receivedAt).toLocaleTimeString() : 'Unknown'}
-                  </span>
-                  <span>Age: {tel.ageSeconds ?? 0}s (Fresh &le;45s · Stale 46–180s)</span>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3">
-                    <div className="text-[11px] opacity-70 flex items-center gap-1">
-                      <Thermometer size={12} className="text-[#10B981]" /> Air Temp
-                    </div>
-                    <div className="text-xl font-mono font-bold mt-1">
-                      {tel.readings.temperature !== null && tel.readings.temperature !== undefined
-                        ? `${tel.readings.temperature.toFixed(1)}°C`
-                        : 'Unavailable'}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3">
-                    <div className="text-[11px] opacity-70 flex items-center gap-1">
-                      <Droplets size={12} className="text-sky-400" /> Humidity
-                    </div>
-                    <div className="text-xl font-mono font-bold mt-1">
-                      {tel.readings.humidity !== null && tel.readings.humidity !== undefined
-                        ? `${tel.readings.humidity.toFixed(0)}%`
-                        : 'Unavailable'}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3">
-                    <div className="text-[11px] opacity-70">Soil Moisture</div>
-                    <div className="text-xl font-mono font-bold mt-1">
-                      {tel.readings.soilMoisture !== null && tel.readings.soilMoisture !== undefined
-                        ? `${tel.readings.soilMoisture.toFixed(0)}%`
-                        : 'Unavailable'}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3 text-xs">
-                  <div className="rounded-xl bg-black/5 dark:bg-white/5 p-2.5">
-                    <span className="opacity-65 block">Reservoir</span>
-                    <span className="font-mono font-semibold">
-                      {tel.readings.waterLevel !== null && tel.readings.waterLevel !== undefined
-                        ? `${tel.readings.waterLevel}%`
-                        : 'Unavailable'}
-                    </span>
-                  </div>
-                  <div className="rounded-xl bg-black/5 dark:bg-white/5 p-2.5">
-                    <span className="opacity-65 flex items-center gap-1">
-                      <Sun size={11} /> Sunlight
-                    </span>
-                    <span className="font-mono font-semibold">
-                      {tel.readings.sunlight !== null && tel.readings.sunlight !== undefined
-                        ? `${tel.readings.sunlight} lx`
-                        : 'Unavailable'}
-                    </span>
-                  </div>
-                  <div className="rounded-xl bg-black/5 dark:bg-white/5 p-2.5">
-                    <span className="opacity-65 block">Battery</span>
-                    <span className="font-mono font-semibold">
-                      {tel.readings.batteryVoltage !== null && tel.readings.batteryVoltage !== undefined
-                        ? `${tel.readings.batteryVoltage}V`
-                        : 'Unavailable'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="space-y-2 text-xs">
-                  <div className="font-semibold flex items-center gap-1.5">
-                    <ShieldCheck size={14} className="text-[#10B981]" /> Local ESP32 Safety Interlocks (Autonomous)
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
-                    {Object.entries(tel.interlocks || {}).map(([key, locked]) => (
-                      <div
-                        key={key}
-                        className={`rounded-xl px-3 py-2 border flex items-center justify-between ${
-                          locked
-                            ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
-                            : 'border-[#D1E8D1] dark:border-[#1A2A1A] opacity-80'
-                        }`}
-                      >
-                        <span>{key}</span>
-                        <span>{locked ? 'LOCKED' : 'CLEAR'}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-[#D1E8D1] dark:border-[#1A2A1A] p-8 text-center space-y-2">
-                <Cpu size={28} className="mx-auto opacity-40" />
-                <div className="text-sm font-medium">No Controller Telemetry Uploaded Yet</div>
-                <p className="text-xs opacity-70">
-                  Zero synthetic values are displayed here. Configure `controller_secrets.h` on the Main ESP32 to push
-                  verified sensor JSON to `POST /api/telemetry/upload`.
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Enrolled Hardware Devices & Audit Trail */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base font-bold">Enrolled Hardware Identities & Connection States</CardTitle>
-            <p className="text-[11px] font-mono opacity-65">
-              Controller: &le;45s ONLINE · 46–180s STALE · &gt;180s OFFLINE | Camera: &le;90s ONLINE · 91–300s STALE · &gt;300s OFFLINE
+      {/* 1. Sensor Readings & Environmental Trend */}
+      <section className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-semibold text-foreground">Sensor Readings &amp; Trend</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {tel?.receivedAt
+                ? `Last controller update ${formatRelativeAge(tel.ageSeconds, tel.receivedAt)}`
+                : 'Waiting for first verified sensor reading from your ESP32 controller'}
             </p>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {(detail.devices || []).map((dev: any) => (
-              <div
-                key={dev.id}
-                className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3.5 flex items-start justify-between gap-3 text-xs"
-              >
-                <div className="space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-bold text-sm">{dev.label}</span>
-                    <span
-                      className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
-                        dev.explicitState === 'ONLINE'
-                          ? 'bg-[#10B981]/20 text-[#10B981]'
-                          : dev.explicitState === 'STALE'
-                            ? 'bg-amber-500/20 text-amber-400'
-                            : dev.explicitState === 'AUTHENTICATION_ERROR' || dev.explicitState === 'CONNECTION_ERROR'
-                              ? 'bg-red-500/20 text-red-400'
-                              : 'bg-black/5 dark:bg-white/10 opacity-80'
-                      }`}
-                    >
-                      {dev.explicitState || dev.provisioningStatus}
-                    </span>
+          </div>
+          <span className="text-xs font-mono tabular-nums px-2.5 py-1 rounded-md bg-muted text-muted-foreground border border-border">
+            {tel?.dataSource === 'REAL_HARDWARE'
+              ? 'Live Hardware'
+              : tel?.dataSource === 'CACHED'
+                ? 'Recent Hardware'
+                : tel?.dataSource === 'STALE'
+                  ? 'Delayed Reading'
+                  : 'No Live Signal'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="rounded-xl bg-muted/50 p-3.5">
+            <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+              <Thermometer size={12} className="text-primary" /> Temperature
+            </span>
+            <p className="text-lg font-bold font-mono tabular-nums text-foreground mt-1">
+              {valOrUnavail(readings?.temperature, 1, '°C')}
+            </p>
+            <span className="text-[11px] text-muted-foreground font-mono tabular-nums">
+              Target {matchedCrop.tempMin}–{matchedCrop.tempMax}°C
+            </span>
+          </div>
+
+          <div className="rounded-xl bg-muted/50 p-3.5">
+            <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+              <Droplets size={12} className="text-primary" /> Humidity
+            </span>
+            <p className="text-lg font-bold font-mono tabular-nums text-foreground mt-1">
+              {valOrUnavail(readings?.humidity, 0, '%')}
+            </p>
+            <span className="text-[11px] text-muted-foreground font-mono tabular-nums">
+              Target {matchedCrop.humMin}–{matchedCrop.humMax}%
+            </span>
+          </div>
+
+          <div className="rounded-xl bg-muted/50 p-3.5">
+            <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+              <Sprout size={12} className="text-primary" /> Soil Moisture
+            </span>
+            <p className="text-lg font-bold font-mono tabular-nums text-foreground mt-1">
+              {valOrUnavail(readings?.soilMoisture, 0, '%')}
+            </p>
+            <span className="text-[11px] text-muted-foreground font-mono tabular-nums">
+              Target {matchedCrop.soilMin}–{matchedCrop.soilMax}%
+            </span>
+          </div>
+
+          <div className="rounded-xl bg-muted/50 p-3.5">
+            <span className="text-[11px] text-muted-foreground">Water Tank</span>
+            <p className="text-lg font-bold font-mono tabular-nums text-foreground mt-1">
+              {valOrUnavail(readings?.waterLevel, 0, '%')}
+            </p>
+            <span className="text-[11px] text-muted-foreground">Reservoir level</span>
+          </div>
+
+          <div className="rounded-xl bg-muted/50 p-3.5">
+            <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+              <Sun size={12} className="text-amber-600" /> Sunlight
+            </span>
+            <p className="text-lg font-bold font-mono tabular-nums text-foreground mt-1">
+              {valOrUnavail(readings?.sunlight, 0, ' lx')}
+            </p>
+            <span className="text-[11px] text-muted-foreground">Canopy light</span>
+          </div>
+
+          <div className="rounded-xl bg-muted/50 p-3.5">
+            <span className="text-[11px] text-muted-foreground">Battery / Rain</span>
+            <p className="text-lg font-bold font-mono tabular-nums text-foreground mt-1">
+              {valOrUnavail(readings?.batteryVoltage, 1, 'V')}
+            </p>
+            <span className="text-[11px] text-muted-foreground">
+              {readings?.rain === null || readings?.rain === undefined
+                ? 'Rain: Unavailable'
+                : readings.rain
+                  ? 'Rain detected'
+                  : 'Weather dry'}
+            </span>
+          </div>
+        </div>
+
+        <EnvironmentalTrendChart
+          samples={samples}
+          tempMin={matchedCrop.tempMin}
+          tempMax={matchedCrop.tempMax}
+        />
+      </section>
+
+      {/* 2. Two-Column Camera Snapshot Summary + Safe Equipment Controls */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Plant Camera Summary */}
+        <section className="lg:col-span-6 rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                <Camera size={18} className="text-primary" />
+                Plant Camera Snapshot
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Uploaded Photograph (Not Live Video)
+              </p>
+            </div>
+
+            <span
+              className={cn(
+                'text-xs font-medium px-2.5 py-1 rounded-md border whitespace-nowrap shrink-0',
+                cam?.exists && cam?.isFresh
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : cam?.exists
+                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-muted text-muted-foreground border-border'
+              )}
+            >
+              {cam?.exists ? (cam.isFresh ? 'Fresh Photo' : 'Outdated Photo') : 'No Photo Yet'}
+            </span>
+          </div>
+
+          <div className="aspect-video w-full rounded-xl overflow-hidden border border-border bg-muted/60 flex items-center justify-center">
+            {cam?.exists && cam?.url ? (
+              <img
+                src={cam.url}
+                alt={`Latest snapshot from ${gh.name}`}
+                className="w-full h-full object-contain bg-stone-950"
+              />
+            ) : (
+              <div className="p-6 text-center space-y-1.5">
+                <Camera size={24} className="mx-auto text-muted-foreground" />
+                <p className="text-sm font-medium text-foreground">No Camera Snapshot Uploaded Yet</p>
+                <p className="text-xs text-muted-foreground max-w-xs mx-auto">
+                  Once your ESP32-CAM is powered on 2.4 GHz Wi-Fi, its latest crop photo appears here automatically.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <span className="text-xs text-muted-foreground font-mono tabular-nums flex items-center gap-1.5">
+              <Clock size={13} />
+              {cam?.capturedAt
+                ? `Captured ${formatRelativeAge(cam.ageSeconds, cam.capturedAt)}`
+                : 'Awaiting first upload'}
+            </span>
+
+            <Link
+              to="/vision"
+              className="inline-flex items-center justify-center gap-1.5 h-10 px-4 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold transition-colors whitespace-nowrap"
+            >
+              <span>Inspect in Plant Vision</span>
+            </Link>
+          </div>
+        </section>
+
+        {/* Safe Equipment Controls & Hardware Safety Locks */}
+        <section className="lg:col-span-6 rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">
+                Equipment Controls &amp; Safety Locks
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Built-in hardware safety locks prevent roof opening in rain or dry-running the water pump.
+              </p>
+            </div>
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-primary bg-accent px-2.5 py-1 rounded-md shrink-0">
+              <ShieldCheck size={13} /> Safety Active
+            </span>
+          </div>
+
+          {controlFeedback && (
+            <div
+              className={cn(
+                'rounded-xl border px-3.5 py-2.5 text-xs font-medium',
+                controlFeedback.tone === 'ok'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                  : 'border-amber-200 bg-amber-50 text-amber-900'
+              )}
+            >
+              {controlFeedback.text}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {equipmentItems.map((item) => {
+              const Icon = item.icon;
+              const isBusy = busyControl === item.id;
+              return (
+                <div
+                  key={item.id}
+                  className="rounded-xl bg-muted/50 p-3.5 flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <Icon size={14} className={item.active ? 'text-primary' : 'text-muted-foreground'} />
+                      <span>{item.label}</span>
+                    </p>
+                    <p className="text-[11px] text-muted-foreground truncate mt-0.5">{item.hint}</p>
                   </div>
-                  <div className="font-mono opacity-65">
-                    {dev.id} {dev.credentialPrefix ? `• Key ${dev.credentialPrefix}...` : '• No key issued'}
-                  </div>
-                  <div className="opacity-75 space-x-2">
-                    <span>
-                      Last seen: {dev.lastSeenAt ? new Date(dev.lastSeenAt).toLocaleTimeString() : 'Never'}
-                    </span>
-                    {dev.deviceType === 'esp32_controller' && (
-                      <span>
-                        • Latest telemetry:{' '}
-                        {dev.lastTelemetryAt ? new Date(dev.lastTelemetryAt).toLocaleTimeString() : 'None'}
-                      </span>
-                    )}
-                    {dev.deviceType === 'esp32_cam' && (
-                      <span>
-                        • Latest upload:{' '}
-                        {dev.lastUploadAt ? new Date(dev.lastUploadAt).toLocaleTimeString() : 'None'}
-                      </span>
-                    )}
-                  </div>
-                  {dev.lastError && (
-                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-400 font-mono">
-                      [{dev.lastError.code}] {dev.lastError.message} (at{' '}
-                      {new Date(dev.lastError.timestamp).toLocaleTimeString()})
-                    </div>
-                  )}
-                </div>
-                {canManage && dev.provisioningStatus !== 'revoked' && dev.hasCredentialIssued && (
+
                   <Button
                     type="button"
-                    variant="outline"
                     size="sm"
-                    onClick={() => handleRevokeDevice(dev.id)}
-                    className="border-red-500/40 text-red-400 hover:bg-red-500/10 shrink-0"
+                    variant={item.active ? 'default' : 'outline'}
+                    disabled={item.locked || isBusy || !canManage}
+                    onClick={() => handleToggleEquipment(item.id, item.active)}
+                    className={cn(
+                      'h-9 px-3 rounded-lg text-xs font-semibold shrink-0 cursor-pointer',
+                      item.active && 'bg-primary hover:bg-primary/90 text-primary-foreground'
+                    )}
                   >
-                    <ShieldAlert size={13} className="mr-1" /> Revoke
+                    {isBusy ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : item.locked ? (
+                      'Locked'
+                    ) : item.active ? (
+                      'On'
+                    ) : (
+                      'Off'
+                    )}
                   </Button>
-                )}
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <CardTitle className="text-base font-bold">Security Audit & Historical AI Observations</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2.5 max-h-80 overflow-y-auto text-xs">
-            {(detail.observations || []).map((obs: any) => (
-              <div
-                key={obs.id}
-                className="rounded-xl border border-[#14B8A6]/30 bg-[#14B8A6]/5 p-2.5 space-y-1"
-              >
-                <div className="flex items-center justify-between font-mono text-[10px] text-[#14B8A6]">
-                  <span>AI · {obs.observationType.toUpperCase()} · {obs.dataSource}</span>
-                  <span>{new Date(obs.createdAt).toLocaleString()}</span>
                 </div>
-                <div className="font-medium">{obs.summary}</div>
-              </div>
-            ))}
+              );
+            })}
+          </div>
 
-            {(detail.enrollmentTokens || [])
-              .filter((t: any) => !t.usedAt && !t.revokedAt)
-              .map((tok: any) => (
-                <div
-                  key={tok.id}
-                  className="rounded-xl border border-[#10B981]/30 bg-[#10B981]/5 p-2.5 flex items-center justify-between"
-                >
-                  <div>
-                    <span className="font-mono font-semibold">{tok.tokenPrefix}...</span> • Active {tok.purpose}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleRevokeToken(tok.id)}
-                    className="text-red-400 hover:underline font-medium"
-                  >
-                    Revoke QR
-                  </button>
-                </div>
-              ))}
-
-            {(detail.auditEvents || []).map((ev: any) => (
-              <div
-                key={ev.id}
-                className="rounded-xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-2.5 flex items-start gap-2"
-              >
-                <CheckCircle2 size={14} className="text-[#10B981] shrink-0 mt-0.5" />
-                <div>
-                  <div className="font-medium">{ev.summary}</div>
-                  <div className="font-mono text-[10px] opacity-60">
-                    {ev.eventType} • {new Date(ev.createdAt).toLocaleString()}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            Note: Direct equipment toggles require local network or configured gateway access to your ESP32 controller, or Practice Mode in Settings.
+          </p>
+        </section>
       </div>
+
+      {/* 3. Collapsible Technician & Security Details */}
+      <section className="rounded-2xl border border-border bg-card shadow-xs overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowTechSection((prev) => !prev)}
+          className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-muted/40 transition-colors cursor-pointer"
+        >
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">
+              Technician Details: Enrolled Boards &amp; Activity History
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              View enrolled device IDs, key prefixes, active QR invites, and audit logs.
+            </p>
+          </div>
+          {showTechSection ? (
+            <ChevronUp size={18} className="text-muted-foreground shrink-0" />
+          ) : (
+            <ChevronDown size={18} className="text-muted-foreground shrink-0" />
+          )}
+        </button>
+
+        {showTechSection && (
+          <div className="px-6 pb-6 pt-4 border-t border-border grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Enrolled Hardware Devices */}
+            <div className="space-y-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Enrolled Hardware Boards
+              </h3>
+              {(detail.devices || []).map((d: any) => {
+                const st = formatExplicitDeviceState(d.explicitState || d.connectionStatus);
+                return (
+                  <div key={d.id} className="rounded-xl bg-muted/50 p-4 space-y-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-foreground flex items-center gap-1.5">
+                        {d.deviceType === 'esp32_cam' ? (
+                          <Camera size={14} className="text-primary" />
+                        ) : (
+                          <Cpu size={14} className="text-primary" />
+                        )}
+                        {d.label}
+                      </span>
+                      <span className="font-medium text-muted-foreground">{st.label}</span>
+                    </div>
+                    <div className="text-[11px] font-mono tabular-nums text-muted-foreground space-y-0.5">
+                      <div>Device ID: {d.id}</div>
+                      <div>Key Prefix: {d.keyPrefix ? `${d.keyPrefix}••••••••` : 'Not issued yet'}</div>
+                      <div>
+                        Last Seen:{' '}
+                        {d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : 'Never checked in'}
+                      </div>
+                    </div>
+
+                    {canManage && d.provisioningStatus !== 'revoked' && (
+                      <div className="pt-1 flex items-center gap-2">
+                        {confirmRevokeId === d.id ? (
+                          <>
+                            <span className="text-[11px] text-red-700 font-medium">Revoke key?</span>
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => handleRevokeDevice(d.id)}
+                              className="h-8 px-2.5 bg-red-600 hover:bg-red-700 text-white text-xs cursor-pointer"
+                            >
+                              Confirm Revoke
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setConfirmRevokeId(null)}
+                              className="h-8 px-2.5 text-xs cursor-pointer"
+                            >
+                              Cancel
+                            </Button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmRevokeId(d.id)}
+                            className="text-xs font-medium text-red-700 hover:underline cursor-pointer"
+                          >
+                            Revoke Device Key
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {(detail.enrollmentTokens || []).filter((t: any) => t.status === 'active').length >
+                0 && (
+                <div className="pt-2 space-y-2">
+                  <h4 className="text-xs font-semibold text-foreground">Active QR Invites</h4>
+                  {detail.enrollmentTokens
+                    .filter((t: any) => t.status === 'active')
+                    .map((tok: any) => (
+                      <div
+                        key={tok.id}
+                        className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-xs"
+                      >
+                        <span className="font-mono tabular-nums">{tok.tokenPrefix}••••</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRevokeToken(tok.id)}
+                          className="text-red-700 font-medium hover:underline cursor-pointer"
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+
+            {/* Security & Observation Log */}
+            <div className="space-y-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Recent Greenhouse Events
+              </h3>
+              {(detail.auditEvents || []).length === 0 ? (
+                <p className="text-xs text-muted-foreground">No events logged yet.</p>
+              ) : (
+                <div className="divide-y divide-border rounded-xl bg-muted/40 px-4 py-2 max-h-64 overflow-y-auto">
+                  {(detail.auditEvents || []).slice(0, 10).map((ev: any) => (
+                    <div key={ev.id} className="py-2.5 text-xs flex items-start justify-between gap-3">
+                      <span className="text-foreground">{ev.summary}</span>
+                      <span className="text-[11px] font-mono tabular-nums text-muted-foreground shrink-0">
+                        {new Date(ev.createdAt).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

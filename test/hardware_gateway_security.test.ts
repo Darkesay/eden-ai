@@ -259,6 +259,7 @@ async function runSuite() {
     });
     assert.strictEqual(issueCam.status, 200);
     const camKey = issueCam.json.oneTimeDeviceKey as string;
+    assert.ok(issueCam.json.firmwareHeader.content.includes('#define EDENS_CAMERA_UPLOAD_KEY'));
 
     const issueCtrl = await httpReq(mainPort, {
       method: 'POST',
@@ -268,6 +269,8 @@ async function runSuite() {
     });
     assert.strictEqual(issueCtrl.status, 200);
     const ctrlKey = issueCtrl.json.oneTimeDeviceKey as string;
+    assert.ok(issueCtrl.json.firmwareHeader.content.includes('#define EDENS_CONTROLLER_DEVICE_KEY'));
+    assert.ok(issueCtrl.json.firmwareHeader.content.includes('#define EDENS_TELEMETRY_INTERVAL_MS'));
 
     const detailAfterIssue = await httpReq(mainPort, {
       method: 'GET',

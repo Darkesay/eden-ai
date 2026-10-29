@@ -15,8 +15,12 @@
   #include "camera_secrets.example.h"
 #endif
 
-// Copy `firmware/esp32_cam_cloud_sync/edens_cloud_upload.h` into your sketch folder before compiling
-#include "../../esp32_cam_cloud_sync/edens_cloud_upload.h"
+// Prefer local sketch-folder copy (required by Arduino IDE temp build dir), with repo-tree fallback
+#if __has_include("edens_cloud_upload.h")
+  #include "edens_cloud_upload.h"
+#else
+  #include "../../esp32_cam_cloud_sync/edens_cloud_upload.h"
+#endif
 
 // AI-Thinker ESP32-CAM Standard OV2640 Pin Map (verify if using another board variant such as ESP32-S3-EYE)
 #define PWDN_GPIO_NUM     32
@@ -80,12 +84,16 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
-  WiFi.begin(EDENS_WIFI_SSID, EDENS_WIFI_PASSWORD);
-  Serial.printf("[EDENS-CAM] Joining 2.4 GHz Wi-Fi SSID: %s\n", EDENS_WIFI_SSID);
-
-  uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000UL) {
-    delay(250);
+  if (strlen(EDENS_WIFI_SSID) > 0 && strstr(EDENS_WIFI_SSID, "REPLACE_WITH_") == nullptr && EDENS_WIFI_SSID[0] != '<') {
+    // SECURITY: Log SSID only; NEVER print EDENS_WIFI_PASSWORD or EDENS_CAMERA_UPLOAD_KEY
+    Serial.printf("[EDENS-CAM] Joining 2.4 GHz Wi-Fi SSID: %s\n", EDENS_WIFI_SSID);
+    WiFi.begin(EDENS_WIFI_SSID, EDENS_WIFI_PASSWORD);
+    uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000UL) {
+      delay(250);
+    }
+  } else {
+    Serial.println("[EDENS-CAM] Configure EDENS_WIFI_SSID and EDENS_WIFI_PASSWORD in camera_secrets.h before flashing.");
   }
 
   startLocalLanCameraServerIfPresent();

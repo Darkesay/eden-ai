@@ -18,8 +18,11 @@ This package connects your existing physical ESP32-CAM (which serves `/photo`, `
 
 ## Option B — Standalone Reference Sketch
 
-Open `esp32_cam_reference.ino`, copy `../../esp32_cam_cloud_sync/edens_cloud_upload.h` into the same sketch folder, create `camera_secrets.h` from `camera_secrets.example.h`, and flash with:
-- **Board**: `AI Thinker ESP32-CAM`
-- **PSRAM**: `Enabled`
-- **Partition Scheme**: `Huge APP (3MB No OTA/1MB SPIFFS)`
-- **Power Supply**: Dedicated **5V >= 2A** regulated supply (USB-UART adapters below 500 mA will brown out during Wi-Fi + TLS handshakes).
+1. Create an Arduino sketch folder named `esp32_cam_reference/` (Arduino IDE requires the parent folder name to match `esp32_cam_reference.ino`).
+2. Copy `esp32_cam_reference.ino`, `../../esp32_cam_cloud_sync/edens_cloud_upload.h`, and your configured `camera_secrets.h` (from `camera_secrets.example.h` or the Setup Wizard) into `esp32_cam_reference/`.
+3. Flash in Arduino IDE with:
+   - **Board**: `AI Thinker ESP32-CAM`
+   - **PSRAM**: `Enabled`
+   - **Partition Scheme**: `Huge APP (3MB No OTA/1MB SPIFFS)`
+   - **Power Supply**: Dedicated **5V >= 2A** regulated supply (USB-UART adapters below 500 mA will brown out during Wi-Fi + TLS handshakes).
+

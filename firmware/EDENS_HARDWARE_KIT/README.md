@@ -109,7 +109,7 @@ npm run build
 - [ ] **2. Verify Regulated Power**: Supply **5V >= 2A** regulated DC to the ESP32-CAM and Main ESP32 (avoid powering ESP32-CAM through unpowered USB hubs during Wi-Fi TLS bursts).
 - [ ] **3. Issue & Download Headers**: Download `camera_secrets.h` and `controller_secrets.h` from Step 3 of the EDENS AI Setup Wizard, and type your local 2.4 GHz Wi-Fi password into `EDENS_WIFI_PASSWORD` offline.
 - [ ] **4. Wire Sensor & Relay Adapter Hooks (Main ESP32)**:
-  - Open `esp32_controller_adapter/esp32_controller_reference.ino` (or include `edens_controller_sync.h` in your existing controller firmware).
+  - Copy `esp32_controller_adapter/esp32_controller_reference.ino`, `edens_controller_sync.h`, and your configured `controller_secrets.h` into an Arduino sketch folder named `esp32_controller_reference/` (or `#include "edens_controller_sync.h"` inside your existing controller sketch folder).
   - Fill in `readPhysicalGreenhouseSensors()` with your actual sensor library reads; leave any unpopulated sensor as `NAN`.
   - Verify relay active-HIGH / active-LOW polarity on a bench multimeter before connecting mains/12V pumps or heaters.
 - [ ] **5. Flash Main ESP32 Controller**:

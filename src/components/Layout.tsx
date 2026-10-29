@@ -1,207 +1,341 @@
 import React, { useEffect, useState } from 'react';
-import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { useMqtt } from '../lib/mqtt';
-import { useAuth } from '../lib/auth';
-import { Sun, Moon, LogOut, LayoutDashboard, Brain, Cpu, Sliders, Sprout } from 'lucide-react';
+import { Outlet, NavLink, Link, useNavigate, useLocation } from 'react-router-dom';
+import {
+  Camera,
+  ChevronRight,
+  Home,
+  LogOut,
+  MessageSquare,
+  Settings,
+  Sprout
+} from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { useAuth } from '../lib/auth';
 import { OnboardingTour } from './OnboardingTour';
 import { DataSourceBadge } from './DataSourceBadge';
+import { Button } from './ui/button';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+interface PrimaryNavItem {
+  to: string;
+  label: string;
+  shortLabel: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  matchPrefix?: string;
+}
+
+const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
+  { to: '/', label: 'Home', shortLabel: 'Home', icon: Home },
+  {
+    to: '/greenhouses',
+    label: 'My Greenhouse',
+    shortLabel: 'Greenhouse',
+    icon: Sprout,
+    matchPrefix: '/greenhouses'
+  },
+  {
+    to: '/assistant',
+    label: 'AI Assistant',
+    shortLabel: 'Assistant',
+    icon: MessageSquare,
+    matchPrefix: '/assistant'
+  },
+  {
+    to: '/vision',
+    label: 'Plant Vision',
+    shortLabel: 'Vision',
+    icon: Camera,
+    matchPrefix: '/vision'
+  },
+  {
+    to: '/settings',
+    label: 'Settings',
+    shortLabel: 'Settings',
+    icon: Settings,
+    matchPrefix: '/settings'
+  }
+];
+
+function getBreadcrumbLabel(pathname: string, activeGhName?: string): { section: string; detail?: string } {
+  if (pathname === '/') {
+    return { section: 'Home', detail: 'Overview' };
+  }
+  if (pathname.startsWith('/greenhouses/setup') || pathname.endsWith('/setup')) {
+    return { section: 'My Greenhouse', detail: 'Guided Setup' };
+  }
+  if (pathname.startsWith('/greenhouses/')) {
+    return { section: 'My Greenhouse', detail: activeGhName || 'Greenhouse Monitor' };
+  }
+  if (pathname.startsWith('/greenhouses')) {
+    return { section: 'My Greenhouse' };
+  }
+  if (pathname.startsWith('/assistant') || pathname.startsWith('/ai-lab')) {
+    return { section: 'AI Assistant', detail: 'Crop & Climate Advisor' };
+  }
+  if (pathname.startsWith('/vision')) {
+    return { section: 'Plant Vision', detail: 'Leaf & Camera Inspection' };
+  }
+  if (pathname.startsWith('/settings') || pathname.startsWith('/hardware') || pathname.startsWith('/devices')) {
+    return { section: 'Settings' };
+  }
+  return { section: 'Home' };
+}
+
 export default function Layout() {
-  const [isDark, setIsDark] = useState(true);
   const navigate = useNavigate();
   const location = useLocation();
-  const { status } = useMqtt();
-  const { user, logout } = useAuth();
+  const { user, activeGreenhouse, greenhouses, setActiveGreenhouseId, logout } = useAuth();
   const [forceTour, setForceTour] = useState(false);
 
-  // Listen for custom event to trigger tour from anywhere
+  useEffect(() => {
+    // Enforce clean light-first agricultural SaaS theme by default
+    document.documentElement.classList.remove('dark');
+  }, []);
+
   useEffect(() => {
     const handleReplay = () => setForceTour(true);
     window.addEventListener('replay-tour', handleReplay);
-    return () => window.removeEventListener('replay-tour', handleReplay);
+    window.addEventListener('edens-open-tour', handleReplay);
+    return () => {
+      window.removeEventListener('replay-tour', handleReplay);
+      window.removeEventListener('edens-open-tour', handleReplay);
+    };
   }, []);
-
-  useEffect(() => {
-    // initialize theme
-    const stored = localStorage.getItem('botanix_theme');
-    if (stored === 'light') {
-      setIsDark(false);
-      document.documentElement.classList.remove('dark');
-    } else {
-      setIsDark(true);
-      document.documentElement.classList.add('dark');
-    }
-  }, []);
-
-  const toggleTheme = () => {
-    if (isDark) {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('botanix_theme', 'light');
-      setIsDark(false);
-    } else {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('botanix_theme', 'dark');
-      setIsDark(true);
-    }
-  };
 
   const handleLogout = async () => {
     await logout();
     navigate('/login');
   };
 
-  const navLinks = [
-    { to: '/', label: 'Control Center' },
-    { to: '/greenhouses', label: 'Greenhouses' },
-    { to: '/ai-lab', label: 'AI Lab' },
-    { to: '/devices', label: 'Device Management' },
-    { to: '/hardware', label: 'Hardware Config' },
-  ];
+  const breadcrumb = getBreadcrumbLabel(location.pathname, activeGreenhouse?.name);
+  const isOnAssistant = location.pathname.startsWith('/assistant') || location.pathname.startsWith('/ai-lab');
 
   return (
-    <div className="min-h-screen bg-[#F8FAF8] dark:bg-[#040404] text-[#1A1A1A] dark:text-[#F0F0F0] font-sans transition-colors duration-500 relative pb-20 md:pb-0">
-      {/* Subtle radial gradient mesh */}
-      <div className="fixed inset-0 pointer-events-none transition-opacity duration-500">
-        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-[#10B981]/5 dark:bg-[#10B981]/10 blur-[120px]" />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-[#34D399]/5 dark:bg-[#34D399]/5 blur-[100px]" />
-      </div>
-
-      <header className="sticky top-0 z-50 bg-[#FFFFFF]/80 dark:bg-[#040404]/80 backdrop-blur-xl border-b border-[#D1E8D1] dark:border-[#1A2A1A] transition-colors duration-500">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex flex-col">
-            <div className="flex items-center gap-2">
-              <div className="text-xl font-bold tracking-tight text-[#059669] dark:text-[#10B981]">EDENS AI ✨🌿</div>
+    <div className="min-h-screen bg-background text-foreground font-sans flex flex-col md:flex-row">
+      {/* Desktop Sidebar */}
+      <aside className="hidden md:flex md:w-64 lg:w-68 shrink-0 flex-col border-r border-border bg-sidebar sticky top-0 h-screen">
+        {/* Brand */}
+        <div className="h-16 px-5 flex items-center justify-between border-b border-sidebar-border">
+          <Link to="/" className="flex items-center gap-2.5 group">
+            <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
+              <Sprout size={20} />
             </div>
-            <div className="text-[9px] uppercase font-mono font-bold tracking-[0.2em] text-[#10B981] opacity-80">Powered by RA</div>
-          </div>
-
-          <nav className="hidden md:flex gap-1 ml-10">
-            {navLinks.map((link) => {
-              const isAiLab = link.to === '/ai-lab';
-              return (
-                <NavLink
-                  key={link.to}
-                  to={link.to}
-                  className={({ isActive }) => cn(
-                    "px-4 py-2 rounded-xl font-medium text-sm transition-all flex items-center gap-2",
-                    isActive 
-                      ? "bg-[#059669]/10 dark:bg-[#10B981]/10 text-[#059669] dark:text-[#10B981]" 
-                      : "hover:bg-[#059669]/5 dark:hover:bg-[#10B981]/5 opacity-70 hover:opacity-100"
-                  )}
-                >
-                  {isAiLab && (
-                    <img 
-                      src="https://i.imgur.com/WOeaqFK.png" 
-                      alt="AI Lab Logo" 
-                      className="w-6 h-6 rounded-lg shadow-[0_0_10px_rgba(16,185,129,0.3)]"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none';
-                        e.currentTarget.nextElementSibling?.classList.remove('hidden');
-                      }}
-                    />
-                  )}
-                  {isAiLab && <Brain size={16} className="hidden text-[#10B981]" />}
-                  {link.label}
-                </NavLink>
-              );
-            })}
-          </nav>
-
-          <div className="hidden md:flex items-center gap-3">
-            <DataSourceBadge variant="badge" />
-
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#FFFFFF] dark:bg-[#080808] border border-[#D1E8D1] dark:border-[#1A2A1A]">
-              <div className={cn(
-                "w-2 h-2 rounded-full",
-                status === 'connected' ? 'bg-[#10B981] animate-pulse' :
-                status === 'connecting' ? 'bg-amber-400 animate-pulse' :
-                status === 'demo' ? 'bg-yellow-500' : 'bg-red-500'
-              )} />
-              <span className="text-xs font-mono uppercase tracking-wider opacity-80">
-                MQTT: {status}
-              </span>
-            </div>
-
-            {user && (
-              <span className="hidden lg:inline-block text-xs font-medium opacity-75 truncate max-w-[140px]">
-                {user.displayName}
-              </span>
-            )}
-            <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-white/5 transition-all">
-              <div className={cn("transition-transform duration-500", isDark ? "rotate-180" : "rotate-0")}>
-                {isDark ? <Moon size={20} /> : <Sun size={20} />}
+            <div>
+              <div className="text-base font-bold tracking-tight text-foreground leading-none">
+                EDENS AI
               </div>
-            </button>
-            <button onClick={handleLogout} title="Sign Out" className="p-2 rounded-full hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 transition-colors">
-              <LogOut size={20} />
-            </button>
-          </div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">
+                Greenhouse Advisor
+              </div>
+            </div>
+          </Link>
         </div>
-      </header>
 
-      {/* Mobile Bottom Nav */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#F8FAF8]/90 dark:bg-[#040404]/90 backdrop-blur-xl border-t border-[#D1E8D1] dark:border-[#1A2A1A] pb-safe transition-colors duration-500">
-        <div className="flex items-center justify-around h-16 px-2">
-          {navLinks.map((link) => {
-            const isAiLab = link.to === '/ai-lab';
+        {/* Active Greenhouse Switcher */}
+        <div className="px-4 pt-4 pb-2">
+          {greenhouses.length > 1 ? (
+            <div className="space-y-1">
+              <label htmlFor="sidebar-gh-select" className="text-[11px] font-medium text-muted-foreground px-1">
+                Active Greenhouse
+              </label>
+              <select
+                id="sidebar-gh-select"
+                value={activeGreenhouse?.id || ''}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setActiveGreenhouseId(id);
+                  if (location.pathname.startsWith('/greenhouses/') && !location.pathname.endsWith('/setup')) {
+                    navigate(`/greenhouses/${id}`);
+                  }
+                }}
+                className="w-full h-10 rounded-lg border border-border bg-background px-3 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                {greenhouses.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name} ({g.cropType})
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : activeGreenhouse ? (
+            <Link
+              to={`/greenhouses/${activeGreenhouse.id}`}
+              className="block rounded-xl border border-border bg-background px-3.5 py-2.5 hover:border-primary/40 transition-colors"
+            >
+              <div className="text-[11px] text-muted-foreground">Active Greenhouse</div>
+              <div className="text-sm font-semibold text-foreground truncate mt-0.5">
+                {activeGreenhouse.name}
+              </div>
+              <div className="text-xs text-muted-foreground truncate">
+                {activeGreenhouse.cropType} · {activeGreenhouse.locationLabel}
+              </div>
+            </Link>
+          ) : (
+            <Link
+              to="/greenhouses/setup"
+              className="block rounded-xl border border-dashed border-primary/40 bg-accent/60 px-3.5 py-2.5 hover:bg-accent transition-colors"
+            >
+              <div className="text-xs font-semibold text-accent-foreground">Set Up Your Greenhouse</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">
+                Connect sensors &amp; camera in 6 simple steps
+              </div>
+            </Link>
+          )}
+        </div>
+
+        {/* Primary 5-Item Navigation */}
+        <nav aria-label="Main navigation" className="flex-1 px-3 py-3 space-y-1 overflow-y-auto">
+          {PRIMARY_NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const isItemActive =
+              item.to === '/'
+                ? location.pathname === '/'
+                : Boolean(item.matchPrefix && location.pathname.startsWith(item.matchPrefix));
+
             return (
               <NavLink
-                key={link.to}
-                to={link.to}
-                className={({ isActive }) => cn(
-                  "flex flex-col items-center justify-center w-full h-full gap-1 transition-colors",
-                  isActive 
-                    ? "text-[#059669] dark:text-[#10B981]" 
-                    : "text-gray-500 hover:text-gray-900 dark:hover:text-white"
+                key={item.to}
+                to={item.to}
+                end={item.to === '/'}
+                className={cn(
+                  'h-10 px-3 rounded-lg text-sm font-medium flex items-center gap-3 transition-colors whitespace-nowrap shrink-0',
+                  isItemActive
+                    ? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >
-                {link.to === '/' ? <LayoutDashboard size={20} /> : 
-                 link.to === '/greenhouses' ? <Sprout size={20} /> :
-                 link.to === '/hardware' ? <Sliders size={20} /> :
-                 isAiLab ? (
-                   <>
-                     <img 
-                       src="https://i.imgur.com/WOeaqFK.png" 
-                       alt="AI Lab Logo" 
-                       className="w-5 h-5 rounded shadow-[0_0_8px_rgba(16,185,129,0.3)]"
-                       onError={(e) => {
-                         e.currentTarget.style.display = 'none';
-                         e.currentTarget.nextElementSibling?.classList.remove('hidden');
-                       }}
-                     />
-                     <Brain size={20} className="hidden text-[#10B981]" />
-                   </>
-                 ) : 
-                 <Cpu size={20} />}
-                <span className="text-[10px] font-medium tracking-wide">{link.label}</span>
+                <Icon
+                  size={18}
+                  className={cn(isItemActive ? 'text-primary' : 'text-muted-foreground')}
+                />
+                <span>{item.label}</span>
               </NavLink>
             );
           })}
-          <button onClick={toggleTheme} className="flex flex-col items-center justify-center w-full h-full gap-1 text-gray-500 transition-all">
-            <div className={cn("transition-transform duration-500", isDark ? "rotate-180" : "rotate-0")}>
-              {isDark ? <Moon size={20} /> : <Sun size={20} />}
+        </nav>
+
+        {/* Sidebar Footer: Honest Data Source + Account */}
+        <div className="p-4 border-t border-sidebar-border space-y-3">
+          <DataSourceBadge className="w-full justify-center py-1.5" />
+
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-foreground truncate">
+                {user?.displayName || 'Farmer'}
+              </div>
+              <div className="text-xs text-muted-foreground truncate">
+                {user?.email || ''}
+              </div>
             </div>
-            <span className="text-[10px] font-medium tracking-wide">Theme</span>
-          </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              title="Sign out"
+              aria-label="Sign out"
+              className="h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive hover:border-destructive/30 hover:bg-red-50 transition-colors shrink-0 cursor-pointer"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
         </div>
+      </aside>
+
+      {/* Main Content Area */}
+      <div className="flex-1 min-w-0 flex flex-col pb-20 md:pb-0">
+        {/* Top Bar (Compact <= 56px on mobile, 64px on desktop) */}
+        <header className="sticky top-0 z-30 h-14 md:h-16 bg-card/95 backdrop-blur-sm border-b border-border px-4 md:px-8 flex items-center justify-between gap-3">
+          {/* Left: Mobile Brand OR Desktop Breadcrumb */}
+          <div className="flex items-center gap-2 min-w-0">
+            <Link to="/" className="md:hidden flex items-center gap-2 shrink-0">
+              <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
+                <Sprout size={17} />
+              </div>
+              <span className="font-bold text-sm tracking-tight text-foreground">EDENS AI</span>
+            </Link>
+
+            <div className="hidden md:flex items-center gap-2 text-sm min-w-0">
+              <span className="font-medium text-muted-foreground">EDENS AI</span>
+              <ChevronRight size={14} className="text-muted-foreground/60 shrink-0" />
+              <span className={cn('truncate', breadcrumb.detail ? 'text-muted-foreground' : 'font-semibold text-foreground')}>
+                {breadcrumb.section}
+              </span>
+              {breadcrumb.detail && (
+                <>
+                  <ChevronRight size={14} className="text-muted-foreground/60 shrink-0" />
+                  <span className="font-semibold text-foreground truncate">{breadcrumb.detail}</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Right: Max 1-2 Actions */}
+          <div className="flex items-center gap-2.5 shrink-0">
+            <div className="md:hidden">
+              <DataSourceBadge showFreshness={false} />
+            </div>
+
+            {!isOnAssistant && (
+              <Button
+                type="button"
+                onClick={() => navigate('/assistant')}
+                className="h-9 md:h-10 px-3.5 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs md:text-sm font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <MessageSquare size={15} className="mr-1.5" />
+                Ask EDENS AI
+              </Button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              title="Sign out"
+              aria-label="Sign out"
+              className="md:hidden h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive shrink-0"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
+        </header>
+
+        {/* Page Viewport */}
+        <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 md:px-8 py-6 md:py-8">
+          <Outlet />
+        </main>
       </div>
 
-      {status === 'demo' && (
-        <div className="relative z-10 bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 px-4 py-2 text-center text-sm font-medium border-b border-yellow-500/30 backdrop-blur-md">
-          MQTT Offline – Running in Demo Mode
-        </div>
-      )}
+      {/* Mobile Bottom Navigation (5 Farmer-Facing Items, >=44px touch targets) */}
+      <nav
+        aria-label="Mobile navigation"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-card border-t border-border px-1 flex items-center justify-around"
+      >
+        {PRIMARY_NAV_ITEMS.map((item) => {
+          const Icon = item.icon;
+          const isItemActive =
+            item.to === '/'
+              ? location.pathname === '/'
+              : Boolean(item.matchPrefix && location.pathname.startsWith(item.matchPrefix));
 
-      <main className="relative z-10 max-w-7xl mx-auto px-4 py-8">
-        <Outlet />
-      </main>
-      
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === '/'}
+              className={cn(
+                'flex flex-col items-center justify-center min-h-[44px] min-w-[56px] px-2 py-1 rounded-lg gap-0.5 transition-colors whitespace-nowrap shrink-0',
+                isItemActive ? 'text-primary font-semibold' : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <Icon size={20} />
+              <span className="text-[11px] leading-tight">{item.shortLabel}</span>
+            </NavLink>
+          );
+        })}
+      </nav>
+
       <OnboardingTour forceShow={forceTour} onClose={() => setForceTour(false)} />
     </div>
   );

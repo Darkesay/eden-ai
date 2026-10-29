@@ -7,6 +7,8 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Copy,
   Cpu,
@@ -16,13 +18,16 @@ import {
   QrCode,
   RefreshCw,
   ShieldCheck,
+  Sprout,
   Wifi
 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
+import { DEFAULT_CROPS } from '../lib/hardwareService';
+import { store } from '../lib/store';
 import { QrScannerModal } from '../components/QrScannerModal';
 import { Button } from '../components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Input } from '../components/ui/input';
+import { cn } from '../lib/utils';
 
 interface IssuedCredentialBundle {
   deviceId: string;
@@ -35,28 +40,52 @@ interface IssuedCredentialBundle {
   };
 }
 
+type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
+
+const STEP_LABELS: { step: WizardStep; title: string }[] = [
+  { step: 1, title: 'Create Greenhouse' },
+  { step: 2, title: 'Select Crop' },
+  { step: 3, title: 'Connect Hardware' },
+  { step: 4, title: 'Review Targets' },
+  { step: 5, title: 'Connection Check' },
+  { step: 6, title: 'Start Monitoring' }
+];
+
 export default function GreenhouseSetupWizard() {
   const { greenhouseId: routeGhId } = useParams<{ greenhouseId?: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { refreshSession, setActiveGreenhouseId } = useAuth();
 
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(routeGhId ? 2 : 1);
+  const [step, setStep] = useState<WizardStep>(routeGhId ? 2 : 1);
   const [ghId, setGhId] = useState<string | null>(routeGhId || null);
 
-  const [name, setName] = useState('Kano Bay 1 Greenhouse');
-  const [locationLabel, setLocationLabel] = useState('Northern Farm Plot A');
-  const [cropType, setCropType] = useState('Tomato');
+  // Step 1 & 2 state
+  const [name, setName] = useState('Main Farm Greenhouse');
+  const [locationLabel, setLocationLabel] = useState('Plot A');
+  const [selectedCropId, setSelectedCropId] = useState('tomato');
+  const [customCropName, setCustomCropName] = useState('');
 
+  // Step 3 (Hardware & Technician Area)
+  const [showTechArea, setShowTechArea] = useState(false);
   const [wifiMethod, setWifiMethod] = useState<'guided_secrets_header' | 'softap_portal_pending'>(
     'guided_secrets_header'
   );
   const [wifiSsidHint, setWifiSsidHint] = useState('');
-
   const [devices, setDevices] = useState<any[]>([]);
   const [issuedMap, setIssuedMap] = useState<Record<string, IssuedCredentialBundle>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  // Step 4 (Targets & Incoming Readings)
+  const [tempMin, setTempMin] = useState(20);
+  const [tempMax, setTempMax] = useState(28);
+  const [humMin, setHumMin] = useState(55);
+  const [humMax, setHumMax] = useState(75);
+  const [soilMin, setSoilMin] = useState(45);
+  const [soilMax, setSoilMax] = useState(65);
+  const [latestTelemetry, setLatestTelemetry] = useState<any | null>(null);
+
+  // Step 5 (Connection Check)
   const [connectionCheck, setConnectionCheck] = useState<{
     allHardwareVerifiedOnline: boolean;
     actuationCommandsSent: number;
@@ -69,21 +98,51 @@ export default function GreenhouseSetupWizard() {
   const [errorMsg, setErrorMsg] = useState('');
   const [infoMsg, setInfoMsg] = useState('');
 
-  const loadGreenhouseState = useCallback(async (targetId: string) => {
-    const res = await apiFetch(`/api/greenhouses/${targetId}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data.greenhouse) {
-      setName(data.greenhouse.name);
-      setLocationLabel(data.greenhouse.locationLabel);
-      setCropType(data.greenhouse.cropType);
-      setWifiMethod(data.greenhouse.wifiProvisioningMethod || 'guided_secrets_header');
-      setWifiSsidHint(data.greenhouse.wifiSsidHint || '');
-    }
-    if (Array.isArray(data.devices)) {
-      setDevices(data.devices);
+  const applyCropPreset = useCallback((cropId: string) => {
+    setSelectedCropId(cropId);
+    const preset = DEFAULT_CROPS.find((c) => c.id === cropId);
+    if (preset) {
+      setTempMin(preset.tempMin);
+      setTempMax(preset.tempMax);
+      setHumMin(preset.humMin);
+      setHumMax(preset.humMax);
+      setSoilMin(preset.soilMin);
+      setSoilMax(preset.soilMax);
     }
   }, []);
+
+  const loadGreenhouseState = useCallback(
+    async (targetId: string) => {
+      const res = await apiFetch(`/api/greenhouses/${targetId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.greenhouse) {
+        setName(data.greenhouse.name);
+        setLocationLabel(data.greenhouse.locationLabel);
+        const rawCrop = String(data.greenhouse.cropType || 'Tomato');
+        const matched = DEFAULT_CROPS.find(
+          (c) =>
+            c.id.toLowerCase() === rawCrop.toLowerCase() ||
+            c.name.toLowerCase().includes(rawCrop.toLowerCase())
+        );
+        if (matched) {
+          applyCropPreset(matched.id);
+        } else {
+          setSelectedCropId('custom');
+          setCustomCropName(rawCrop);
+        }
+        setWifiMethod(data.greenhouse.wifiProvisioningMethod || 'guided_secrets_header');
+        setWifiSsidHint(data.greenhouse.wifiSsidHint || '');
+      }
+      if (Array.isArray(data.devices)) {
+        setDevices(data.devices);
+      }
+      if (data.latestTelemetry) {
+        setLatestTelemetry(data.latestTelemetry);
+      }
+    },
+    [applyCropPreset]
+  );
 
   useEffect(() => {
     if (ghId) {
@@ -112,15 +171,14 @@ export default function GreenhouseSetupWizard() {
           setActiveGreenhouseId(data.greenhouse.id);
           setName(data.greenhouse.name);
           setLocationLabel(data.greenhouse.locationLabel);
-          setCropType(data.greenhouse.cropType);
           setDevices(data.devices || []);
           setInfoMsg(
-            'QR enrollment token redeemed. Note: hardware is NOT connected yet — proceed through Wi-Fi & credential provisioning below.'
+            'Kit QR code linked to your account. Continue below to select your crop and connect hardware.'
           );
           await refreshSession();
           setStep(2);
         } catch (err: any) {
-          setErrorMsg(err?.message || 'Failed redeeming QR token.');
+          setErrorMsg(err?.message || 'Failed redeeming QR code.');
         } finally {
           setBusy(false);
         }
@@ -128,7 +186,13 @@ export default function GreenhouseSetupWizard() {
     }
   }, [searchParams, ghId, refreshSession, setActiveGreenhouseId]);
 
-  const handleCreateOrSaveStep1 = async (e: React.FormEvent) => {
+  const resolvedCropName =
+    selectedCropId === 'custom'
+      ? customCropName.trim() || 'Custom Crop'
+      : DEFAULT_CROPS.find((c) => c.id === selectedCropId)?.name.split(' (')[0] || 'Tomato';
+
+  // Step 1: Create or Save Greenhouse Name & Location
+  const handleSaveStep1 = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setErrorMsg('');
@@ -136,7 +200,12 @@ export default function GreenhouseSetupWizard() {
       if (!ghId) {
         const res = await apiFetch('/api/greenhouses', {
           method: 'POST',
-          body: JSON.stringify({ name, locationLabel, cropType, wifiProvisioningMethod: wifiMethod })
+          body: JSON.stringify({
+            name: name.trim(),
+            locationLabel: locationLabel.trim(),
+            cropType: resolvedCropName,
+            wifiProvisioningMethod: wifiMethod
+          })
         });
         const data = await res.json();
         if (!res.ok || !data.success) {
@@ -146,20 +215,22 @@ export default function GreenhouseSetupWizard() {
         setGhId(data.greenhouse.id);
         setActiveGreenhouseId(data.greenhouse.id);
         setDevices(data.devices || []);
-        await refreshSession();
       } else {
         await apiFetch(`/api/greenhouses/${ghId}`, {
           method: 'PATCH',
-          body: JSON.stringify({ name, locationLabel, cropType })
+          body: JSON.stringify({ name: name.trim(), locationLabel: locationLabel.trim() })
         });
-        await refreshSession();
       }
+      store.setValue('farmName', name.trim());
+      store.setValue('location', locationLabel.trim());
+      await refreshSession();
       setStep(2);
     } finally {
       setBusy(false);
     }
   };
 
+  // Step 2: Save Crop Selection
   const handleSaveStep2 = async () => {
     if (!ghId) return;
     setBusy(true);
@@ -167,18 +238,36 @@ export default function GreenhouseSetupWizard() {
     try {
       const res = await apiFetch(`/api/greenhouses/${ghId}`, {
         method: 'PATCH',
+        body: JSON.stringify({ cropType: resolvedCropName })
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setErrorMsg(data.message || 'Could not save crop choice.');
+        return;
+      }
+      store.setValue('cropType', resolvedCropName);
+      await refreshSession();
+      setStep(3);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Step 3: Save Wi-Fi hint & continue
+  const handleSaveStep3 = async () => {
+    if (!ghId) return;
+    setBusy(true);
+    setErrorMsg('');
+    try {
+      await apiFetch(`/api/greenhouses/${ghId}`, {
+        method: 'PATCH',
         body: JSON.stringify({
           wifiProvisioningMethod: wifiMethod,
           wifiSsidHint: wifiSsidHint.trim() || null
         })
       });
-      if (!res.ok) {
-        const data = await res.json();
-        setErrorMsg(data.message || 'Failed saving Wi-Fi provisioning settings.');
-        return;
-      }
       await loadGreenhouseState(ghId);
-      setStep(3);
+      setStep(4);
     } finally {
       setBusy(false);
     }
@@ -195,7 +284,7 @@ export default function GreenhouseSetupWizard() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        setErrorMsg(data.message || 'Failed to issue device credential.');
+        setErrorMsg(data.message || 'Could not generate device key.');
         return;
       }
       setIssuedMap((prev) => ({
@@ -227,6 +316,18 @@ export default function GreenhouseSetupWizard() {
     URL.revokeObjectURL(url);
   };
 
+  // Step 4: Save Environmental Targets
+  const handleSaveStep4 = () => {
+    store.setValue('tempMinThreshold', String(tempMin));
+    store.setValue('tempMaxThreshold', String(tempMax));
+    store.setValue('humMinThreshold', String(humMin));
+    store.setValue('humMaxThreshold', String(humMax));
+    store.setValue('soilMinThreshold', String(soilMin));
+    store.setValue('soilMaxThreshold', String(soilMax));
+    setStep(5);
+  };
+
+  // Step 5: Safe Read-Only Connection Check
   const runReadOnlyConnectionTest = useCallback(async () => {
     if (!ghId) return;
     setBusy(true);
@@ -238,7 +339,7 @@ export default function GreenhouseSetupWizard() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        setErrorMsg(data.message || 'Connection test failed.');
+        setErrorMsg(data.message || 'Connection check could not run.');
         return;
       }
       setConnectionCheck(data);
@@ -250,7 +351,7 @@ export default function GreenhouseSetupWizard() {
   }, [ghId, loadGreenhouseState, refreshSession]);
 
   useEffect(() => {
-    if (step === 4 && ghId) {
+    if (step === 5 && ghId) {
       runReadOnlyConnectionTest();
       const interval = window.setInterval(() => {
         runReadOnlyConnectionTest();
@@ -259,438 +360,717 @@ export default function GreenhouseSetupWizard() {
     }
   }, [step, ghId, runReadOnlyConnectionTest]);
 
-  const handleQrScan = async (rawCodeOrUri: string) => {
+  const handleCopy = async (id: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch {}
+  };
+
+  const handleQrDetected = async (rawCodeOrUri: string) => {
+    setErrorMsg('');
     const res = await apiFetch('/api/enrollments/redeem', {
       method: 'POST',
-      body: JSON.stringify({ qrPayload: rawCodeOrUri, greenhouseName: name, locationLabel, cropType })
+      body: JSON.stringify({ qrPayload: rawCodeOrUri })
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      throw new Error(data.message || 'QR code could not be redeemed.');
+      throw new Error(data.message || 'Invalid or expired QR code.');
     }
     setScannerOpen(false);
     setGhId(data.greenhouse.id);
     setActiveGreenhouseId(data.greenhouse.id);
     setName(data.greenhouse.name);
     setLocationLabel(data.greenhouse.locationLabel);
-    setCropType(data.greenhouse.cropType);
     setDevices(data.devices || []);
-    setInfoMsg(
-      'QR enrollment succeeded! Hardware is still unconfigured until you complete Steps 2–4 below.'
-    );
+    setInfoMsg('Kit QR verified. Select your crop below to continue.');
     await refreshSession();
     setStep(2);
   };
 
+  const readings =
+    latestTelemetry?.dataSource !== 'DISCONNECTED' ? latestTelemetry?.readings || null : null;
+
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => navigate('/greenhouses')}
-          className="text-xs font-medium opacity-75 hover:opacity-100 flex items-center gap-1.5"
-        >
-          <ArrowLeft size={15} /> Back to My Greenhouses
-        </button>
-        {ghId && (
-          <span className="text-xs font-mono opacity-60">Greenhouse ID: {ghId}</span>
-        )}
-      </div>
-
-      <div>
-        <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Greenhouse Hardware Setup Wizard</h1>
-        <p className="text-sm opacity-75 mt-1">
-          Secure self-service onboarding for your ESP32-CAM crop camera and Main ESP32 controller.
-        </p>
-      </div>
-
-      {/* Stepper */}
-      <div className="grid grid-cols-4 gap-2">
-        {[
-          { num: 1, label: '1. Identity / QR' },
-          { num: 2, label: '2. Wi-Fi Method' },
-          { num: 3, label: '3. Device Keys' },
-          { num: 4, label: '4. Verify Check-In' }
-        ].map((item) => (
+    <div className="max-w-3xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3">
+        <div>
           <button
-            key={item.num}
             type="button"
-            disabled={item.num > 1 && !ghId}
-            onClick={() => setStep(item.num as 1 | 2 | 3 | 4)}
-            className={`py-2.5 px-3 rounded-xl text-xs font-semibold border text-left transition-all ${
-              step === item.num
-                ? 'border-[#10B981] bg-[#10B981]/15 text-[#10B981]'
-                : item.num < step
-                  ? 'border-[#10B981]/30 bg-[#10B981]/5 opacity-90'
-                  : 'border-[#D1E8D1] dark:border-[#1A2A1A] opacity-50'
-            }`}
+            onClick={() => navigate('/greenhouses')}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground mb-1 cursor-pointer"
           >
-            {item.label}
+            <ArrowLeft size={14} /> Back to My Greenhouse
           </button>
-        ))}
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            Greenhouse Setup Guide
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Step {step} of 6 — {STEP_LABELS[step - 1].title}
+          </p>
+        </div>
       </div>
+
+      {/* Clean 6-Step Progress Bar */}
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
+        {STEP_LABELS.map((item) => {
+          const active = step === item.step;
+          const completed = step > item.step && Boolean(ghId);
+          const canJump = Boolean(ghId) || item.step === 1;
+          return (
+            <button
+              key={item.step}
+              type="button"
+              disabled={!canJump}
+              onClick={() => canJump && setStep(item.step)}
+              className={cn(
+                'rounded-xl border px-3 py-2.5 text-left transition-colors',
+                active
+                  ? 'border-primary bg-accent text-foreground'
+                  : completed
+                    ? 'border-emerald-200 bg-emerald-50/70 text-emerald-900 cursor-pointer'
+                    : 'border-border bg-card text-muted-foreground',
+                canJump && !active && 'hover:bg-muted/60 cursor-pointer'
+              )}
+            >
+              <div className="text-[11px] font-mono tabular-nums font-semibold flex items-center justify-between">
+                <span>Step {item.step}</span>
+                {completed && <Check size={12} className="text-primary" />}
+              </div>
+              <div className="text-xs font-medium truncate mt-0.5">{item.title}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {errorMsg && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 flex items-center gap-2">
+          <AlertTriangle size={16} className="shrink-0 text-red-700" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
 
       {infoMsg && (
-        <div className="rounded-2xl border border-[#10B981]/40 bg-[#10B981]/10 px-4 py-3 text-xs text-[#10B981]">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
           {infoMsg}
         </div>
       )}
 
-      {errorMsg && (
-        <div className="rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-400">
-          {errorMsg}
-        </div>
-      )}
-
-      {/* STEP 1: QR Claim or Name Greenhouse */}
+      {/* STEP 1: Create Greenhouse */}
       {step === 1 && (
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <CardTitle className="text-lg">Step 1 — Claim Kit QR or Register Greenhouse</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="rounded-2xl border border-[#10B981]/30 bg-[#10B981]/5 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div className="space-y-1">
-                <div className="font-semibold text-sm flex items-center gap-2">
-                  <QrCode size={17} className="text-[#10B981]" /> Have an EDENS AI Kit QR Sticker?
-                </div>
-                <p className="text-xs opacity-75">
-                  Scan the one-time QR code with your phone camera to bind the kit to your account.
-                </p>
+        <section className="rounded-2xl border border-border bg-card p-6 md:p-8 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-border">
+            <div>
+              <h2 className="text-lg font-bold text-foreground">1. Name Your Greenhouse</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Have an EDENS AI hardware kit box? Scan its QR sticker first, or type a name below.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setScannerOpen(true)}
+              className="h-10 px-3.5 text-xs font-semibold shrink-0 cursor-pointer"
+            >
+              <QrCode size={15} className="mr-1.5 text-primary" />
+              Scan Kit QR
+            </Button>
+          </div>
+
+          <form onSubmit={handleSaveStep1} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Greenhouse Name</label>
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g., Kano Plot 1 Greenhouse"
+                  required
+                  className="h-11 bg-background"
+                />
               </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Farm Location</label>
+                <Input
+                  value={locationLabel}
+                  onChange={(e) => setLocationLabel(e.target.value)}
+                  placeholder="e.g., Zaria Road Farm"
+                  className="h-11 bg-background"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
               <Button
-                type="button"
-                onClick={() => setScannerOpen(true)}
-                className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold shrink-0"
+                type="submit"
+                disabled={busy || !name.trim()}
+                className="h-11 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer"
               >
-                <QrCode size={15} className="mr-1.5" /> Scan Kit QR
+                {busy ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
+                Continue to Crop Selection
+                <ArrowRight size={16} className="ml-2" />
               </Button>
             </div>
-
-            <form onSubmit={handleCreateOrSaveStep1} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium opacity-80">Greenhouse Name</label>
-                  <Input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    required
-                    className="bg-transparent border-[#D1E8D1] dark:border-[#1A2A1A]"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium opacity-80">Location / Plot Label</label>
-                  <Input
-                    value={locationLabel}
-                    onChange={(e) => setLocationLabel(e.target.value)}
-                    required
-                    className="bg-transparent border-[#D1E8D1] dark:border-[#1A2A1A]"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium opacity-80">Primary Crop</label>
-                  <Input
-                    value={cropType}
-                    onChange={(e) => setCropType(e.target.value)}
-                    required
-                    className="bg-transparent border-[#D1E8D1] dark:border-[#1A2A1A]"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end">
-                <Button
-                  type="submit"
-                  disabled={busy}
-                  className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-                >
-                  {busy ? <Loader2 size={15} className="animate-spin mr-1.5" /> : null}
-                  Continue to Wi-Fi Setup <ArrowRight size={15} className="ml-1.5" />
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
+          </form>
+        </section>
       )}
 
-      {/* STEP 2: Honest Wi-Fi Provisioning Selection */}
+      {/* STEP 2: Select Crop */}
       {step === 2 && (
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Wifi size={18} className="text-[#10B981]" /> Step 2 — Greenhouse 2.4 GHz Wi-Fi Provisioning
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <button
-                type="button"
-                onClick={() => setWifiMethod('guided_secrets_header')}
-                className={`text-left rounded-2xl border p-4 space-y-2 transition-all ${
-                  wifiMethod === 'guided_secrets_header'
-                    ? 'border-[#10B981] bg-[#10B981]/10'
-                    : 'border-[#D1E8D1] dark:border-[#1A2A1A]'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-sm">Guided Header Provisioning</span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#10B981]/20 text-[#10B981]">
-                    SUPPORTED NOW
-                  </span>
-                </div>
-                <p className="text-xs opacity-75 leading-relaxed">
-                  Compatible with existing `edens_cloud_upload.h` firmware. Download pre-filled `camera_secrets.h` &
-                  `controller_secrets.h`, add your local 2.4 GHz Wi-Fi password offline, and flash once via USB.
-                </p>
-              </button>
+        <section className="rounded-2xl border border-border bg-card p-6 md:p-8 shadow-xs space-y-6">
+          <div>
+            <h2 className="text-lg font-bold text-foreground">2. What Crop Are You Growing?</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              EDENS AI sets recommended temperature, humidity, and soil moisture targets for your crop.
+            </p>
+          </div>
 
-              <button
-                type="button"
-                onClick={() => setWifiMethod('softap_portal_pending')}
-                className={`text-left rounded-2xl border p-4 space-y-2 transition-all ${
-                  wifiMethod === 'softap_portal_pending'
-                    ? 'border-amber-500 bg-amber-500/10'
-                    : 'border-[#D1E8D1] dark:border-[#1A2A1A]'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-sm">Phone SoftAP / BLE Captive Portal</span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-400">
-                    PENDING_FIRMWARE_SUPPORT
-                  </span>
-                </div>
-                <p className="text-xs opacity-75 leading-relaxed">
-                  Cloud bootstrap endpoint (`POST /api/devices/bootstrap`) is ready, but current ESP32 sketches do not
-                  yet host an `EDENS-SETUP-XXXX` Wi-Fi AP or NVS portal. Use Guided Header Provisioning for today&apos;s
-                  physical boards.
-                </p>
-              </button>
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {DEFAULT_CROPS.map((crop) => {
+              const selected = selectedCropId === crop.id;
+              return (
+                <button
+                  key={crop.id}
+                  type="button"
+                  onClick={() => applyCropPreset(crop.id)}
+                  className={cn(
+                    'rounded-xl border p-4 text-left transition-colors cursor-pointer',
+                    selected
+                      ? 'border-primary bg-accent/70'
+                      : 'border-border bg-background hover:bg-muted/60'
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-foreground flex items-center gap-2">
+                      <Sprout size={15} className="text-primary shrink-0" />
+                      {crop.name}
+                    </span>
+                    {selected && <CheckCircle2 size={16} className="text-primary shrink-0" />}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
+                    {crop.description}
+                  </p>
+                  <p className="text-[11px] font-mono tabular-nums text-muted-foreground mt-2">
+                    Ideal: {crop.tempMin}–{crop.tempMax}°C · Soil {crop.soilMin}–{crop.soilMax}% · ~
+                    {crop.daysToHarvest} days
+                  </p>
+                </button>
+              );
+            })}
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium opacity-80">
-                2.4 GHz Greenhouse Wi-Fi SSID Label (Optional — pre-fills downloaded header; password is NEVER sent to cloud)
-              </label>
+            <button
+              type="button"
+              onClick={() => setSelectedCropId('custom')}
+              className={cn(
+                'rounded-xl border p-4 text-left transition-colors cursor-pointer',
+                selectedCropId === 'custom'
+                  ? 'border-primary bg-accent/70'
+                  : 'border-border bg-background hover:bg-muted/60'
+              )}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-foreground">Other / Custom Crop</span>
+                {selectedCropId === 'custom' && <CheckCircle2 size={16} className="text-primary" />}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Enter any vegetable, fruit, or seedling variety and customize targets in Step 4.
+              </p>
+            </button>
+          </div>
+
+          {selectedCropId === 'custom' && (
+            <div className="space-y-1.5 max-w-sm">
+              <label className="text-sm font-medium text-foreground">Custom Crop Name</label>
               <Input
-                value={wifiSsidHint}
-                onChange={(e) => setWifiSsidHint(e.target.value)}
-                placeholder="e.g. Greenhouse_2.4G"
-                className="bg-transparent border-[#D1E8D1] dark:border-[#1A2A1A] max-w-md"
+                value={customCropName}
+                onChange={(e) => setCustomCropName(e.target.value)}
+                placeholder="e.g., Bell Pepper, Okra, Scent Leaf"
+                className="h-11 bg-background"
               />
             </div>
+          )}
 
-            {wifiMethod === 'softap_portal_pending' && (
-              <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-xs text-amber-300 flex items-start gap-2.5">
-                <AlertTriangle size={16} className="shrink-0 mt-0.5" />
-                <div>
-                  <strong>Honest Hardware Capability Note:</strong> ESP32 chips only connect to 2.4 GHz Wi-Fi (not 5 GHz).
-                  Until Victor flashes SoftAP/NVS portal code onto the ESP32-CAM and Main ESP32 sketches, phone-only
-                  Wi-Fi entry cannot configure the boards wirelessly. Proceed to Step 3 to issue unique per-device keys.
+          <div className="flex items-center justify-between pt-2">
+            <Button type="button" variant="outline" onClick={() => setStep(1)} className="h-10 cursor-pointer">
+              Back
+            </Button>
+            <Button
+              type="button"
+              disabled={busy || (selectedCropId === 'custom' && !customCropName.trim())}
+              onClick={handleSaveStep2}
+              className="h-11 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer"
+            >
+              {busy ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
+              Save Crop &amp; Continue
+              <ArrowRight size={16} className="ml-2" />
+            </Button>
+          </div>
+        </section>
+      )}
+
+      {/* STEP 3: Connect Controller & Camera */}
+      {step === 3 && (
+        <section className="rounded-2xl border border-border bg-card p-6 md:p-8 shadow-xs space-y-6">
+          <div>
+            <h2 className="text-lg font-bold text-foreground">3. Connect Controller &amp; Camera</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Follow this simple checklist to bring your greenhouse sensors and plant camera online.
+            </p>
+          </div>
+
+          {/* Simple Farmer Hardware Checklist */}
+          <div className="rounded-xl bg-muted/50 p-5 space-y-3 text-sm">
+            <div className="flex items-start gap-3">
+              <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+                1
+              </span>
+              <div>
+                <p className="font-semibold text-foreground">Use 2.4 GHz Wi-Fi or Hotspot</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  ESP32 greenhouse controllers and cameras connect to 2.4 GHz Wi-Fi networks (not 5 GHz-only bands).
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+                2
+              </span>
+              <div>
+                <p className="font-semibold text-foreground">Plug In Stable 5V Power</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Connect the main sensor box and ESP32-CAM to their 5V power supply inside the greenhouse weatherproof enclosure.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+                3
+              </span>
+              <div>
+                <p className="font-semibold text-foreground">Pre-Configured Kit vs Technician Flash</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  If an installer already flashed your boards, simply power them on. If a technician is flashing new boards now, open the Advanced Technician Area below to download the `.h` credential files.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Collapsible Advanced Technician Area */}
+          <div className="rounded-xl border border-border overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowTechArea((prev) => !prev)}
+              className="w-full px-4 py-3.5 bg-muted/30 hover:bg-muted/60 flex items-center justify-between text-left transition-colors cursor-pointer"
+            >
+              <div>
+                <span className="text-xs font-semibold text-foreground flex items-center gap-2">
+                  <KeyRound size={14} className="text-primary" />
+                  Advanced Technician Area (Device Keys &amp; Firmware Headers)
+                </span>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Generate one-time X-Hardware-Key / X-Camera-Key credentials and download Arduino `.h` files.
+                </p>
+              </div>
+              {showTechArea ? (
+                <ChevronUp size={16} className="text-muted-foreground shrink-0" />
+              ) : (
+                <ChevronDown size={16} className="text-muted-foreground shrink-0" />
+              )}
+            </button>
+
+            {showTechArea && (
+              <div className="p-4 border-t border-border space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                    <Wifi size={13} className="text-primary" />
+                    2.4 GHz Wi-Fi Network Name (Optional label for firmware header)
+                  </label>
+                  <Input
+                    value={wifiSsidHint}
+                    onChange={(e) => setWifiSsidHint(e.target.value)}
+                    placeholder="e.g., Farm_Router_2.4G"
+                    className="h-10 bg-background text-xs max-w-sm"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Your Wi-Fi password is never entered into or stored by EDENS AI.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {devices.map((device) => {
+                    const isCamera = device.deviceType === 'esp32_cam';
+                    const issued = issuedMap[device.id];
+                    return (
+                      <div key={device.id} className="rounded-xl bg-muted/40 p-4 space-y-3 border border-border">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                              {isCamera ? (
+                                <Camera size={14} className="text-primary" />
+                              ) : (
+                                <Cpu size={14} className="text-primary" />
+                              )}
+                              {device.label}
+                            </p>
+                            <p className="text-[11px] font-mono tabular-nums text-muted-foreground mt-0.5">
+                              {device.id}
+                            </p>
+                          </div>
+                          <span className="text-[11px] px-2 py-0.5 rounded bg-card border border-border font-medium text-muted-foreground">
+                            {device.keyPrefix ? 'Key Issued' : 'Needs Key'}
+                          </span>
+                        </div>
+
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => handleIssueCredential(device.id)}
+                          className="w-full h-9 text-xs font-semibold cursor-pointer"
+                        >
+                          <KeyRound size={13} className="mr-1.5 text-primary" />
+                          {device.keyPrefix ? 'Rotate Device Key' : 'Generate Unique Key'}
+                        </Button>
+
+                        {issued && (
+                          <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-3 space-y-2 text-xs">
+                            <p className="font-semibold text-emerald-950 flex items-center gap-1">
+                              <ShieldCheck size={13} className="text-emerald-700" />
+                              One-Time Key (Save Now)
+                            </p>
+                            <div className="flex items-center justify-between gap-2 bg-white border border-border rounded px-2.5 py-1.5 font-mono text-[11px]">
+                              <span className="truncate">{issued.oneTimeDeviceKey}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopy(device.id, issued.oneTimeDeviceKey)}
+                                className="text-primary font-semibold shrink-0 cursor-pointer"
+                              >
+                                {copiedId === device.id ? 'Copied' : <Copy size={13} />}
+                              </button>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() =>
+                                downloadHeaderFile(
+                                  issued.firmwareHeader.filename,
+                                  issued.firmwareHeader.content
+                                )
+                              }
+                              className="w-full h-8 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold cursor-pointer"
+                            >
+                              <Download size={13} className="mr-1.5" />
+                              Download {issued.firmwareHeader.filename}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
+          </div>
 
-            <div className="flex justify-between pt-2">
-              <Button type="button" variant="outline" onClick={() => setStep(1)}>
-                Back
-              </Button>
-              <Button
-                type="button"
-                disabled={busy}
-                onClick={handleSaveStep2}
-                className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-              >
-                Continue to Device Credentials <ArrowRight size={15} className="ml-1.5" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+          <div className="flex items-center justify-between pt-2">
+            <Button type="button" variant="outline" onClick={() => setStep(2)} className="h-10 cursor-pointer">
+              Back
+            </Button>
+            <Button
+              type="button"
+              disabled={busy}
+              onClick={handleSaveStep3}
+              className="h-11 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer"
+            >
+              Continue to Sensor Targets
+              <ArrowRight size={16} className="ml-2" />
+            </Button>
+          </div>
+        </section>
       )}
 
-      {/* STEP 3: Per-Device Credential Issuance */}
-      {step === 3 && (
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <KeyRound size={18} className="text-[#10B981]" /> Step 3 — Issue Unique Per-Device Credentials
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <p className="text-xs opacity-75">
-              Each device receives its own revocable secret (`X-Camera-Key` / `X-Hardware-Key`). Only SHA-256 hashes are
-              stored in SQLite; download the generated `.h` file immediately after issuing.
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {devices.map((dev) => {
-                const issued = issuedMap[dev.id];
-                const isCam = dev.deviceType === 'esp32_cam';
-
-                return (
-                  <div
-                    key={dev.id}
-                    className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-4 space-y-3"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="font-bold text-sm flex items-center gap-1.5">
-                          {isCam ? (
-                            <Camera size={15} className="text-[#14B8A6]" />
-                          ) : (
-                            <Cpu size={15} className="text-[#10B981]" />
-                          )}
-                          {dev.label}
-                        </div>
-                        <div className="text-[11px] font-mono opacity-65 mt-0.5">ID: {dev.id}</div>
-                      </div>
-                      <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
-                        {dev.explicitState || dev.provisioningStatus}
-                      </span>
-                    </div>
-
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => handleIssueCredential(dev.id)}
-                      className="w-full bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-                    >
-                      {dev.hasCredentialIssued ? 'Rotate Unique Key' : 'Issue Unique Device Key'}
-                    </Button>
-
-                    {issued && (
-                      <div className="rounded-xl bg-[#060A07] border border-[#10B981]/40 p-3 space-y-2 text-xs text-[#E5E7EB]">
-                        <div className="flex items-center justify-between text-[11px] text-[#10B981]">
-                          <span>{issued.authHeaderName} (Shown Once)</span>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              await navigator.clipboard.writeText(issued.oneTimeDeviceKey);
-                              setCopiedId(dev.id);
-                              setTimeout(() => setCopiedId(null), 2000);
-                            }}
-                            className="flex items-center gap-1 hover:underline"
-                          >
-                            {copiedId === dev.id ? <Check size={12} /> : <Copy size={12} />}
-                            {copiedId === dev.id ? 'Copied' : 'Copy Key'}
-                          </button>
-                        </div>
-                        <div className="font-mono text-[11px] break-all bg-black/60 p-2 rounded border border-white/10">
-                          {issued.oneTimeDeviceKey}
-                        </div>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() =>
-                            downloadHeaderFile(
-                              issued.firmwareHeader.filename,
-                              issued.firmwareHeader.content
-                            )
-                          }
-                          className="w-full border-[#10B981]/40 text-[#10B981] hover:bg-[#10B981]/10 text-xs"
-                        >
-                          <Download size={13} className="mr-1.5" />
-                          Download {issued.firmwareHeader.filename}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="flex justify-between pt-2">
-              <Button type="button" variant="outline" onClick={() => setStep(2)}>
-                Back
-              </Button>
-              <Button
-                type="button"
-                onClick={() => setStep(4)}
-                className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-              >
-                Continue to Safe Connection Test <ArrowRight size={15} className="ml-1.5" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* STEP 4: Read-Only Non-Actuating Connection Test */}
+      {/* STEP 4: Review Sensor Readings & Targets */}
       {step === 4 && (
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-lg flex items-center gap-2">
-                <ShieldCheck size={18} className="text-[#10B981]" /> Step 4 — Read-Only Hardware Check-In Verification
-              </CardTitle>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                onClick={runReadOnlyConnectionTest}
-              >
-                <RefreshCw size={14} className={`mr-1.5 ${busy ? 'animate-spin' : ''}`} />
-                Re-Test Now
-              </Button>
+        <section className="rounded-2xl border border-border bg-card p-6 md:p-8 shadow-xs space-y-6">
+          <div>
+            <h2 className="text-lg font-bold text-foreground">
+              4. Review Readings &amp; Safe Ranges for {resolvedCropName}
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              EDENS AI alerts you whenever greenhouse conditions drift outside these ranges.
+            </p>
+          </div>
+
+          {/* Current Incoming Readings Preview */}
+          <div className="rounded-xl bg-muted/50 p-4 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-foreground">Current Incoming Hardware Readings</span>
+              <span className="text-muted-foreground font-mono tabular-nums">
+                {readings ? 'Verified reading received' : 'Waiting for first controller upload'}
+              </span>
             </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="text-xs opacity-75">
-              Zero actuator commands are ever sent during verification (`actuationCommandsSent: 0`). Your greenhouse
-              turns `ONLINE` only after genuine authenticated uploads arrive from your ESP32 boards (`&le;45s` controller,
-              `&le;90s` camera).
+            <div className="grid grid-cols-3 gap-3 pt-1 text-xs">
+              <div>
+                <span className="text-muted-foreground">Temperature:</span>{' '}
+                <strong className="font-mono tabular-nums">
+                  {readings?.temperature !== null && readings?.temperature !== undefined
+                    ? `${readings.temperature.toFixed(1)}°C`
+                    : 'Unavailable'}
+                </strong>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Humidity:</span>{' '}
+                <strong className="font-mono tabular-nums">
+                  {readings?.humidity !== null && readings?.humidity !== undefined
+                    ? `${Math.round(readings.humidity)}%`
+                    : 'Unavailable'}
+                </strong>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Soil Moisture:</span>{' '}
+                <strong className="font-mono tabular-nums">
+                  {readings?.soilMoisture !== null && readings?.soilMoisture !== undefined
+                    ? `${Math.round(readings.soilMoisture)}%`
+                    : 'Unavailable'}
+                </strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Editable Target Ranges */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="rounded-xl border border-border p-4 space-y-3">
+              <p className="text-sm font-semibold text-foreground">Temperature (°C)</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[11px] text-muted-foreground">Min</label>
+                  <Input
+                    type="number"
+                    value={tempMin}
+                    onChange={(e) => setTempMin(Number(e.target.value))}
+                    className="h-10 font-mono tabular-nums bg-background"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-muted-foreground">Max</label>
+                  <Input
+                    type="number"
+                    value={tempMax}
+                    onChange={(e) => setTempMax(Number(e.target.value))}
+                    className="h-10 font-mono tabular-nums bg-background"
+                  />
+                </div>
+              </div>
             </div>
 
-            {connectionCheck && (
-              <div className="space-y-3">
-                {connectionCheck.checks.map((chk: any) => (
+            <div className="rounded-xl border border-border p-4 space-y-3">
+              <p className="text-sm font-semibold text-foreground">Air Humidity (%)</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[11px] text-muted-foreground">Min</label>
+                  <Input
+                    type="number"
+                    value={humMin}
+                    onChange={(e) => setHumMin(Number(e.target.value))}
+                    className="h-10 font-mono tabular-nums bg-background"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-muted-foreground">Max</label>
+                  <Input
+                    type="number"
+                    value={humMax}
+                    onChange={(e) => setHumMax(Number(e.target.value))}
+                    className="h-10 font-mono tabular-nums bg-background"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border p-4 space-y-3">
+              <p className="text-sm font-semibold text-foreground">Soil Moisture (%)</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[11px] text-muted-foreground">Min</label>
+                  <Input
+                    type="number"
+                    value={soilMin}
+                    onChange={(e) => setSoilMin(Number(e.target.value))}
+                    className="h-10 font-mono tabular-nums bg-background"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-muted-foreground">Max</label>
+                  <Input
+                    type="number"
+                    value={soilMax}
+                    onChange={(e) => setSoilMax(Number(e.target.value))}
+                    className="h-10 font-mono tabular-nums bg-background"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-2">
+            <Button type="button" variant="outline" onClick={() => setStep(3)} className="h-10 cursor-pointer">
+              Back
+            </Button>
+            <Button
+              type="button"
+              onClick={handleSaveStep4}
+              className="h-11 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer"
+            >
+              Save Targets &amp; Check Connection
+              <ArrowRight size={16} className="ml-2" />
+            </Button>
+          </div>
+        </section>
+      )}
+
+      {/* STEP 5: Safe Read-Only Connection Check */}
+      {step === 5 && (
+        <section className="rounded-2xl border border-border bg-card p-6 md:p-8 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-foreground">5. Safe Connection Check</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Checks your controller and camera status without turning on any pumps, fans, or roof motors.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={runReadOnlyConnectionTest}
+              className="h-10 px-3.5 text-xs font-semibold shrink-0 cursor-pointer"
+            >
+              <RefreshCw size={14} className={cn('mr-1.5', busy && 'animate-spin')} />
+              Re-Check Now
+            </Button>
+          </div>
+
+          {connectionCheck ? (
+            <div className="space-y-4">
+              <div
+                className={cn(
+                  'rounded-xl border p-4 text-sm flex items-start gap-3',
+                  connectionCheck.allHardwareVerifiedOnline
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
+                    : 'border-amber-200 bg-amber-50 text-amber-950'
+                )}
+              >
+                {connectionCheck.allHardwareVerifiedOnline ? (
+                  <CheckCircle2 size={18} className="text-emerald-700 shrink-0 mt-0.5" />
+                ) : (
+                  <Clock size={18} className="text-amber-700 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <p className="font-semibold">
+                    {connectionCheck.allHardwareVerifiedOnline
+                      ? 'Controller and plant camera are both online!'
+                      : 'Greenhouse saved — waiting for hardware check-in'}
+                  </p>
+                  <p className="text-xs opacity-90 mt-0.5">
+                    {connectionCheck.allHardwareVerifiedOnline
+                      ? 'Verified live readings and camera snapshots are reaching EDENS AI.'
+                      : 'You can continue to your dashboard now. Readings will appear automatically as soon as your ESP32 boards connect to Wi-Fi.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2.5">
+                {connectionCheck.checks.map((chk) => (
                   <div
                     key={chk.id}
-                    className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3.5 flex items-start gap-3"
+                    className="rounded-xl bg-muted/50 px-4 py-3 flex items-start justify-between gap-3 text-xs"
                   >
-                    {chk.status === 'PASS' ? (
-                      <CheckCircle2 size={18} className="text-[#10B981] shrink-0 mt-0.5" />
-                    ) : chk.status === 'FAIL' ? (
-                      <AlertTriangle size={18} className="text-red-400 shrink-0 mt-0.5" />
-                    ) : (
-                      <Clock size={18} className="text-amber-400 shrink-0 mt-0.5" />
-                    )}
-                    <div className="space-y-0.5">
-                      <div className="text-sm font-semibold flex flex-wrap items-center gap-2">
-                        {chk.label}
-                        <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
-                          {chk.explicitState || chk.status}
-                        </span>
-                      </div>
-                      <p className="text-xs opacity-75">{chk.detail}</p>
+                    <div>
+                      <p className="font-semibold text-foreground">{chk.label}</p>
+                      <p className="text-muted-foreground mt-0.5">{chk.detail}</p>
                     </div>
+                    <span
+                      className={cn(
+                        'px-2.5 py-0.5 rounded-md font-semibold border shrink-0',
+                        chk.status === 'PASS'
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : chk.status === 'WAITING'
+                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                            : 'bg-red-50 text-red-800 border-red-200'
+                      )}
+                    >
+                      {chk.status === 'PASS' ? 'Ready' : chk.status === 'WAITING' ? 'Waiting' : 'Check'}
+                    </span>
                   </div>
                 ))}
               </div>
-            )}
-
-            <div className="flex justify-between pt-3">
-              <Button type="button" variant="outline" onClick={() => setStep(3)}>
-                Back to Credentials
-              </Button>
-              <Button
-                type="button"
-                onClick={() => navigate(`/greenhouses/${ghId}`)}
-                className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-              >
-                Open Greenhouse Dashboard <ArrowRight size={15} className="ml-1.5" />
-              </Button>
             </div>
-          </CardContent>
-        </Card>
+          ) : (
+            <div className="py-10 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 size={18} className="animate-spin text-primary" />
+              <span>Checking hardware connection...</span>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between pt-2">
+            <Button type="button" variant="outline" onClick={() => setStep(4)} className="h-10 cursor-pointer">
+              Back
+            </Button>
+            <Button
+              type="button"
+              onClick={() => setStep(6)}
+              className="h-11 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer"
+            >
+              Continue to Finish
+              <ArrowRight size={16} className="ml-2" />
+            </Button>
+          </div>
+        </section>
+      )}
+
+      {/* STEP 6: Start Monitoring */}
+      {step === 6 && (
+        <section className="rounded-2xl border border-border bg-card p-8 text-center shadow-xs space-y-5">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 text-primary flex items-center justify-center mx-auto">
+            <CheckCircle2 size={24} />
+          </div>
+
+          <div className="space-y-1.5 max-w-lg mx-auto">
+            <h2 className="text-xl font-bold text-foreground">{name} Is Ready to Monitor</h2>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Your greenhouse profile for <strong className="text-foreground">{resolvedCropName}</strong> is saved with safe temperature ({tempMin}–{tempMax}°C), humidity ({humMin}–{humMax}%), and soil moisture ({soilMin}–{soilMax}%) targets.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate('/')}
+              className="h-11 px-5 rounded-xl font-semibold cursor-pointer"
+            >
+              Go to Home Overview
+            </Button>
+            <Button
+              type="button"
+              onClick={() => navigate(ghId ? `/greenhouses/${ghId}` : '/greenhouses')}
+              className="h-11 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer"
+            >
+              Open My Greenhouse
+              <ArrowRight size={16} className="ml-2" />
+            </Button>
+          </div>
+        </section>
       )}
 
       <QrScannerModal
         open={scannerOpen}
         onClose={() => setScannerOpen(false)}
-        onDetected={handleQrScan}
+        onDetected={handleQrDetected}
       />
     </div>
   );

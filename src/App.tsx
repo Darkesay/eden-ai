@@ -5,19 +5,19 @@
 
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 import { initStore } from './lib/store';
 import { MqttProvider } from './lib/mqtt';
 import { AuthProvider, useAuth } from './lib/auth';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import ControlCenter from './pages/ControlCenter';
-import AiLab from './pages/AiLab';
-import DeviceManagement from './pages/DeviceManagement';
-import HardwareConfigPage from './pages/HardwareConfig';
 import Greenhouses from './pages/Greenhouses';
 import GreenhouseSetupWizard from './pages/GreenhouseSetupWizard';
 import GreenhouseDetails from './pages/GreenhouseDetails';
+import AiAssistant from './pages/AiAssistant';
+import PlantVision from './pages/PlantVision';
+import SettingsPage from './pages/Settings';
 import { AgentManager } from './agents/AgentManager';
 
 interface ErrorBoundaryProps {
@@ -42,15 +42,21 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-[#040404] text-[#F0F0F0]">
-          <div className="w-full max-w-md rounded-2xl bg-[#080808] p-8 border border-[#1A2A1A] text-center shadow-xl">
-            <h1 className="text-2xl font-bold text-red-500 mb-4">EDENS AI CRASHED</h1>
-            <p className="mb-6 opacity-70 font-mono text-sm">{this.state.error?.message}</p>
+        <div className="flex min-h-screen items-center justify-center bg-background text-foreground p-4">
+          <div className="w-full max-w-md rounded-2xl bg-card p-8 border border-border text-center shadow-xs space-y-4">
+            <div className="w-11 h-11 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-center justify-center mx-auto">
+              <AlertTriangle size={22} />
+            </div>
+            <h1 className="text-xl font-bold text-foreground">Something went wrong</h1>
+            <p className="text-xs text-muted-foreground font-mono">
+              {this.state.error?.message || 'Unexpected display error.'}
+            </p>
             <button
+              type="button"
               onClick={() => window.location.reload()}
-              className="px-6 py-2 bg-[#10B981] text-black font-semibold rounded-lg hover:opacity-90"
+              className="h-10 px-6 bg-primary text-primary-foreground text-sm font-semibold rounded-xl hover:bg-primary/90 cursor-pointer"
             >
-              Reload System
+              Reload EDENS AI
             </button>
           </div>
         </div>
@@ -66,8 +72,9 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#040404] text-[#10B981]">
-        <Loader2 size={28} className="animate-spin" />
+      <div className="min-h-screen flex flex-col items-center justify-center gap-2.5 bg-background text-foreground">
+        <Loader2 size={26} className="animate-spin text-primary" />
+        <span className="text-xs font-medium text-muted-foreground">Loading your greenhouse workspace...</span>
       </div>
     );
   }
@@ -108,9 +115,13 @@ export default function App() {
                 <Route path="greenhouses/setup" element={<GreenhouseSetupWizard />} />
                 <Route path="greenhouses/:greenhouseId" element={<GreenhouseDetails />} />
                 <Route path="greenhouses/:greenhouseId/setup" element={<GreenhouseSetupWizard />} />
-                <Route path="ai-lab" element={<AiLab />} />
-                <Route path="devices" element={<DeviceManagement />} />
-                <Route path="hardware" element={<HardwareConfigPage />} />
+                <Route path="assistant" element={<AiAssistant />} />
+                <Route path="ai-lab" element={<Navigate to="/assistant" replace />} />
+                <Route path="vision" element={<PlantVision />} />
+                <Route path="settings" element={<SettingsPage />} />
+                <Route path="hardware" element={<Navigate to="/settings?tab=hardware" replace />} />
+                <Route path="devices" element={<Navigate to="/settings?tab=diagnostics" replace />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Routes>
           </BrowserRouter>

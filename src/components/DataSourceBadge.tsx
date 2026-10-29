@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { hardwareService } from '../lib/hardwareService';
-import { DataSource } from '../lib/hardwareTypes';
+import React from 'react';
+import { Link } from 'react-router-dom';
+import { AlertTriangle, CheckCircle2, Clock, FlaskConical, RefreshCw, WifiOff } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { Radio, RefreshCw, AlertTriangle, ShieldCheck, Cpu, WifiOff, Clock } from 'lucide-react';
+import { formatRelativeAge, useFarmerGreenhouseState } from '../lib/greenhouseState';
 
 interface DataSourceBadgeProps {
   className?: string;
@@ -15,171 +15,154 @@ export function DataSourceBadge({
   showFreshness = true,
   variant = 'badge'
 }: DataSourceBadgeProps) {
-  const [dataSource, setDataSource] = useState<DataSource>(hardwareService.getDataSource());
-  const [freshnessSec, setFreshnessSec] = useState<number>(hardwareService.getSensorFreshnessSeconds());
-
-  useEffect(() => {
-    const unsub = hardwareService.subscribe(() => {
-      setDataSource(hardwareService.getDataSource());
-      setFreshnessSec(hardwareService.getSensorFreshnessSeconds());
-    });
-
-    const timer = setInterval(() => {
-      setFreshnessSec(hardwareService.getSensorFreshnessSeconds());
-    }, 1000);
-
-    return () => {
-      unsub();
-      clearInterval(timer);
-    };
-  }, []);
-
-  const config = hardwareService.getConfig();
+  const ghState = useFarmerGreenhouseState();
+  const { provenance, lastUpdatedAgeSeconds, lastUpdatedAt, activeGreenhouse } = ghState;
+  const ageText = formatRelativeAge(lastUpdatedAgeSeconds, lastUpdatedAt);
 
   if (variant === 'banner') {
-    if (dataSource === 'REAL_HARDWARE') {
+    if (provenance === 'REAL_HARDWARE') {
       return (
-        <div className={cn(
-          "px-4 py-2 rounded-2xl bg-[#10B981]/10 border border-[#10B981]/30 flex flex-wrap items-center justify-between gap-2 text-xs",
-          className
-        )}>
-          <div className="flex items-center gap-2 text-[#10B981]">
-            <ShieldCheck size={16} className="animate-pulse" />
-            <span className="font-bold uppercase tracking-wider">Connected to Real ESP32 Hardware</span>
-            <span className="opacity-70 font-mono">({config.controllerHost})</span>
+        <div
+          className={cn(
+            'rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-emerald-950',
+            className
+          )}
+        >
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 size={18} className="text-emerald-700 shrink-0" />
+            <div>
+              <span className="font-semibold">Live Greenhouse Hardware Connected</span>
+              <span className="text-emerald-800 ml-2">
+                Showing verified readings from {ghState.greenhouseName}.
+              </span>
+            </div>
           </div>
           {showFreshness && (
-            <div className="flex items-center gap-1.5 text-[11px] font-mono text-[#10B981]/80">
-              <Clock size={12} />
-              <span>Freshness: {freshnessSec < 2 ? 'live' : `${freshnessSec}s ago`}</span>
-            </div>
+            <span className="text-xs font-mono tabular-nums text-emerald-800 flex items-center gap-1.5">
+              <Clock size={13} /> Updated {ageText}
+            </span>
           )}
         </div>
       );
     }
 
-    if (dataSource === 'CACHED') {
+    if (provenance === 'CACHED' || provenance === 'STALE') {
       return (
-        <div className={cn(
-          "px-4 py-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-500",
-          className
-        )}>
-          <div className="flex items-center gap-2">
-            <RefreshCw size={15} className="animate-spin" />
-            <span className="font-bold uppercase tracking-wider">CACHED HARDWARE TELEMETRY</span>
-            <span className="opacity-80 text-[11px]">— Recent reading buffered while polling retries...</span>
+        <div
+          className={cn(
+            'rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-amber-950',
+            className
+          )}
+        >
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle size={18} className="text-amber-700 shrink-0" />
+            <div>
+              <span className="font-semibold">Sensor Update Delayed</span>
+              <span className="text-amber-900 ml-2">
+                Last reading arrived {ageText}. Do not rely on these numbers as live until your controller reconnects.
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-1 text-[11px] font-mono font-bold">
-            <Clock size={12} />
-            <span>Last seen: {freshnessSec}s ago</span>
-          </div>
-        </div>
-      );
-    }
-
-    if (dataSource === 'STALE') {
-      return (
-        <div className={cn(
-          "px-4 py-2.5 rounded-2xl bg-orange-500/10 border border-orange-500/30 flex flex-wrap items-center justify-between gap-2 text-xs text-orange-500",
-          className
-        )}>
-          <div className="flex items-center gap-2">
-            <AlertTriangle size={15} />
-            <span className="font-bold uppercase tracking-wider">STALE HARDWARE TELEMETRY</span>
-            <span className="opacity-80 text-[11px]">— Readings are outdated ({freshnessSec}s old). Do not treat as live.</span>
-          </div>
-          <div className="flex items-center gap-1 text-[11px] font-mono font-bold">
-            <Clock size={12} />
-            <span>Last seen: {freshnessSec}s ago</span>
-          </div>
-        </div>
-      );
-    }
-
-    if (dataSource === 'DISCONNECTED') {
-      return (
-        <div className={cn(
-          "px-4 py-2.5 rounded-2xl bg-red-500/10 border border-red-500/30 flex flex-wrap items-center justify-between gap-2 text-xs text-red-500",
-          className
-        )}>
-          <div className="flex items-center gap-2">
-            <WifiOff size={16} />
-            <span className="font-bold uppercase tracking-wider">HARDWARE DISCONNECTED</span>
-            <span className="opacity-80 text-[11px]">— No active signal from main ESP32 controller</span>
-          </div>
-          <a
-            href="/hardware"
-            className="px-2.5 py-1 rounded-xl bg-red-500/20 hover:bg-red-500/30 font-bold uppercase tracking-widest text-[10px] text-red-400 underline"
+          <Link
+            to={activeGreenhouse ? `/greenhouses/${activeGreenhouse.id}` : '/settings?tab=hardware'}
+            className="text-xs font-semibold text-amber-900 underline underline-offset-4 whitespace-nowrap shrink-0"
           >
-            Configure Hardware →
-          </a>
+            Check Connection
+          </Link>
         </div>
       );
     }
 
-    // SIMULATED BANNER
+    if (provenance === 'SIMULATED') {
+      return (
+        <div
+          className={cn(
+            'rounded-xl border border-indigo-200 bg-indigo-50/80 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-indigo-950',
+            className
+          )}
+        >
+          <div className="flex items-center gap-2.5">
+            <FlaskConical size={18} className="text-indigo-700 shrink-0" />
+            <div>
+              <span className="font-semibold">Practice Mode Active</span>
+              <span className="text-indigo-900 ml-2">
+                Numbers shown are simulated for learning — not live readings from a physical greenhouse.
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <Link
+              to="/greenhouses/setup"
+              className="text-xs font-semibold text-indigo-900 underline underline-offset-4 whitespace-nowrap"
+            >
+              Connect Real Hardware
+            </Link>
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <div className={cn(
-        "px-4 py-2.5 rounded-2xl bg-purple-500/10 border border-purple-500/30 flex flex-wrap items-center justify-between gap-2 text-xs text-purple-400",
-        className
-      )}>
-        <div className="flex items-center gap-2">
-          <Cpu size={16} />
+      <div
+        className={cn(
+          'rounded-xl border border-stone-200 bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-foreground',
+          className
+        )}
+      >
+        <div className="flex items-center gap-2.5">
+          <WifiOff size={18} className="text-muted-foreground shrink-0" />
           <div>
-            <span className="font-bold uppercase tracking-wider">SIMULATION MODE ACTIVE</span>
-            <span className="opacity-80 text-[11px] ml-2 text-foreground/80">
-              Values are simulated for testing. Not actual greenhouse hardware readings.
+            <span className="font-semibold">No Live Sensor Signal</span>
+            <span className="text-muted-foreground ml-2">
+              {activeGreenhouse
+                ? `Waiting for ${activeGreenhouse.name} hardware to send verified readings.`
+                : 'Connect your EDENS AI greenhouse kit to view live environmental readings.'}
             </span>
           </div>
         </div>
-        <a
-          href="/hardware"
-          className="px-2.5 py-1 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 font-bold uppercase tracking-widest text-[10px] text-purple-300"
+        <Link
+          to={activeGreenhouse ? `/greenhouses/${activeGreenhouse.id}/setup` : '/greenhouses/setup'}
+          className="text-xs font-semibold text-primary hover:underline underline-offset-4 whitespace-nowrap shrink-0"
         >
-          Connect Real Hardware
-        </a>
+          {activeGreenhouse ? 'Open Setup Guide' : 'Set Up Greenhouse'}
+        </Link>
       </div>
     );
   }
 
-  // Variant: Badge / Pill
+  // Compact sidebar / header indicator
+  const toneClass =
+    provenance === 'REAL_HARDWARE'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+      : provenance === 'CACHED' || provenance === 'STALE'
+        ? 'border-amber-200 bg-amber-50 text-amber-800'
+        : provenance === 'SIMULATED'
+          ? 'border-indigo-200 bg-indigo-50 text-indigo-800'
+          : 'border-border bg-muted text-muted-foreground';
+
+  const Icon =
+    provenance === 'REAL_HARDWARE'
+      ? CheckCircle2
+      : provenance === 'CACHED'
+        ? RefreshCw
+        : provenance === 'STALE'
+          ? AlertTriangle
+          : provenance === 'SIMULATED'
+            ? FlaskConical
+            : WifiOff;
+
   return (
-    <div className={cn(
-      "inline-flex items-center gap-2 px-3 py-1 rounded-xl font-mono text-[11px] font-bold border tracking-wider uppercase backdrop-blur-md shadow-sm transition-all",
-      dataSource === 'REAL_HARDWARE' && "bg-[#10B981]/15 text-[#10B981] border-[#10B981]/40",
-      dataSource === 'SIMULATED' && "bg-purple-500/15 text-purple-400 border-purple-500/40",
-      dataSource === 'CACHED' && "bg-amber-500/15 text-amber-500 border-amber-500/40",
-      dataSource === 'STALE' && "bg-orange-500/15 text-orange-500 border-orange-500/40",
-      dataSource === 'DISCONNECTED' && "bg-red-500/15 text-red-500 border-red-500/40",
-      className
-    )}>
-      <span className={cn(
-        "w-2 h-2 rounded-full",
-        dataSource === 'REAL_HARDWARE' && "bg-[#10B981] animate-ping",
-        dataSource === 'SIMULATED' && "bg-purple-400",
-        dataSource === 'CACHED' && "bg-amber-500 animate-pulse",
-        dataSource === 'STALE' && "bg-orange-500",
-        dataSource === 'DISCONNECTED' && "bg-red-500"
-      )} />
-
-      <span>
-        {dataSource === 'REAL_HARDWARE' && 'REAL HARDWARE'}
-        {dataSource === 'SIMULATED' && 'SIMULATED DATA'}
-        {dataSource === 'CACHED' && 'CACHED DATA'}
-        {dataSource === 'STALE' && 'STALE DATA'}
-        {dataSource === 'DISCONNECTED' && 'DISCONNECTED'}
-      </span>
-
-      {showFreshness && dataSource === 'REAL_HARDWARE' && (
-        <span className="opacity-70 text-[10px] lowercase">
-          · {freshnessSec < 2 ? 'live' : `${freshnessSec}s`}
-        </span>
+    <div
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium whitespace-nowrap shrink-0',
+        toneClass,
+        className
       )}
-
-      {showFreshness && (dataSource === 'CACHED' || dataSource === 'STALE') && (
-        <span className="opacity-70 text-[10px] lowercase">
-          · {freshnessSec}s old
-        </span>
+    >
+      <Icon size={13} className="shrink-0" />
+      <span>{ghState.provenanceLabel}</span>
+      {showFreshness && provenance === 'REAL_HARDWARE' && lastUpdatedAgeSeconds !== null && (
+        <span className="text-[11px] font-mono tabular-nums opacity-80">· {ageText}</span>
       )}
     </div>
   );
