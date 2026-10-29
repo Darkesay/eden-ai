@@ -32,14 +32,112 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const app = express();
+app.set('trust proxy', 1);
+
 const PORT = parseInt(process.env.PORT || '10000', 10);
 const distPath = path.join(__dirname, 'dist');
 const distIndexPath = path.join(distPath, 'index.html');
 const isCloudRuntime = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.FLY_APP_NAME);
 const isProd =
   process.env.NODE_ENV === 'production' || (isCloudRuntime && fs.existsSync(distIndexPath));
-const MAX_UPLOAD_MB = parseInt(process.env.CAMERA_MAX_UPLOAD_MB || '10', 10);
-const MAX_AUDIO_MB = parseInt(process.env.AUDIO_MAX_UPLOAD_MB || '15', 10);
+const parsedUploadMb = parseInt(process.env.CAMERA_MAX_UPLOAD_MB || '10', 10);
+const MAX_UPLOAD_MB = Number.isFinite(parsedUploadMb) && parsedUploadMb >= 1 ? parsedUploadMb : 10;
+const parsedAudioMb = parseInt(process.env.AUDIO_MAX_UPLOAD_MB || '15', 10);
+const MAX_AUDIO_MB = Number.isFinite(parsedAudioMb) && parsedAudioMb >= 1 ? parsedAudioMb : 15;
+
+function buildAllowedCorsOrigins(): Set<string> {
+  const origins = new Set<string>([
+    'https://eden-ai.vercel.app',
+    'https://edens-ai.onrender.com'
+  ]);
+  const rawList = [
+    process.env.CORS_ALLOWED_ORIGINS,
+    process.env.FRONTEND_ORIGIN,
+    process.env.APP_URL,
+    process.env.RENDER_EXTERNAL_URL
+  ]
+    .filter(Boolean)
+    .join(',');
+
+  for (const entry of rawList.split(',')) {
+    const trimmed = entry.trim().replace(/\/+$/, '');
+    if (
+      trimmed &&
+      /^https?:\/\//i.test(trimmed) &&
+      !trimmed.includes('YOUR_APP_URL') &&
+      !trimmed.includes('REPLACE_WITH')
+    ) {
+      try {
+        origins.add(new URL(trimmed).origin);
+      } catch {
+        // Ignore malformed origin entries
+      }
+    }
+  }
+  return origins;
+}
+
+function isOriginAllowedForCors(originHeader: string, req: express.Request): boolean {
+  let parsedOrigin: URL;
+  try {
+    parsedOrigin = new URL(originHeader);
+  } catch {
+    return false;
+  }
+  const normalizedOrigin = parsedOrigin.origin;
+
+  // Always allow same-host requests matching Host / X-Forwarded-Host (even behind TLS-terminating container proxies)
+  const forwardedHost = String(req.headers['x-forwarded-host'] || req.headers['host'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  if (forwardedHost && parsedOrigin.host.toLowerCase() === forwardedHost) {
+    return true;
+  }
+
+  const configuredOrigins = buildAllowedCorsOrigins();
+  if (configuredOrigins.has(normalizedOrigin)) {
+    return true;
+  }
+
+  // Allow localhost / loopback origins during local development and automated test runs
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalizedOrigin)) {
+    return true;
+  }
+
+  return false;
+}
+
+// Safe, credential-aware CORS middleware for split frontend/backend deployments (never wildcard * with credentials)
+app.use('/api', (req, res, next) => {
+  const requestOrigin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+  if (requestOrigin) {
+    res.vary('Origin');
+    if (isOriginAllowedForCors(requestOrigin, req)) {
+      res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, Accept, X-Requested-With, X-Edens-Auth-Mode, X-Camera-Key, X-Hardware-Key, X-API-Key, X-Greenhouse-Id, X-Device-Id'
+      );
+      res.setHeader('Access-Control-Max-Age', '86400');
+    } else if (req.method === 'OPTIONS') {
+      console.warn(
+        `[EDENS AI CORS] Blocked preflight from unauthorized origin="${redactSecretsFromText(requestOrigin)}" path="${req.originalUrl}"`
+      );
+      return res.status(403).json({
+        error: 'CORS_ORIGIN_FORBIDDEN',
+        message: 'Cross-origin request from this origin is not permitted.'
+      });
+    }
+  }
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  return next();
+});
 
 // Dedicated Camera Image Storage Layer (lazy disk writes via CAMERA_STORAGE_PATH)
 export const cameraImageStore = new CameraImageStore({
@@ -62,6 +160,7 @@ app.get('/api/health', (_req, res) => {
     mode: isProd ? 'production' : 'development',
     dbInitialized: platformDb.isInitialized(),
     asyncInitError: lastAsyncInitError,
+    authEndpointsReady: true,
     cameraUploadEndpoint: '/api/camera/upload',
     timestamp: new Date().toISOString()
   });
@@ -1924,6 +2023,47 @@ app.post('/api/ai/speech', async (req, res) => {
     });
   }
 });
+
+// --------------------------------------------------------------------
+// EXPLICIT API JSON 404 & ERROR HANDLERS (NEVER RETURN HTML FOR /api/*)
+// --------------------------------------------------------------------
+
+app.use('/api', (req, res) => {
+  console.warn(
+    `[EDENS AI API 404] Unmatched API route: ${req.method} ${redactSecretsFromText(req.originalUrl)} (ip=${extractClientIp(req)})`
+  );
+  return res.status(404).json({
+    error: 'API_ROUTE_NOT_FOUND',
+    message: `API endpoint ${req.method} ${req.path} does not exist on the EDENS AI server.`,
+    method: req.method,
+    path: req.originalUrl.split('?')[0]
+  });
+});
+
+app.use(
+  (
+    err: any,
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction
+  ) => {
+    if (res.headersSent) {
+      return next(err);
+    }
+    const safeMsg = redactSecretsFromText(err?.message || 'Unexpected internal server error');
+    console.error(
+      `[EDENS AI Server Error] ${req.method} ${redactSecretsFromText(req.originalUrl)}:`,
+      safeMsg
+    );
+    if (req.originalUrl.startsWith('/api/')) {
+      return res.status(err?.status || err?.statusCode || 500).json({
+        error: 'INTERNAL_SERVER_ERROR',
+        message: 'An unexpected error occurred on the EDENS AI server. Please try again.'
+      });
+    }
+    return next(err);
+  }
+);
 
 // --------------------------------------------------------------------
 // FRONTEND SERVING & VITE MIDDLEWARE

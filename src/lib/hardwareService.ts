@@ -17,6 +17,7 @@
  */
 
 import { store } from './store';
+import { apiFetch, parseApiJsonResponse, resolveApiUrl } from './api.ts';
 import {
   HardwareConfig,
   Esp32StatusResponse,
@@ -315,7 +316,9 @@ class HardwareService {
 
     let baseUrl = '';
     if (this.config.mode === 'proxy') {
-      baseUrl = `${this.config.proxyGatewayUrl}?endpoint=${encodeURIComponent(endpoint)}`;
+      baseUrl = resolveApiUrl(
+        `${this.config.proxyGatewayUrl}?endpoint=${encodeURIComponent(endpoint)}`
+      );
     } else {
       let host = this.config.controllerHost.trim();
       if (!host.startsWith('http://') && !host.startsWith('https://')) {
@@ -331,7 +334,8 @@ class HardwareService {
       }
     }
 
-    const url = new URL(baseUrl, window.location.origin);
+    const fallbackOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    const url = new URL(baseUrl, fallbackOrigin);
 
     if (this.config.mode === 'proxy' && this.config.controllerHost.trim()) {
       url.searchParams.set('host', this.config.controllerHost.trim());
@@ -348,13 +352,6 @@ class HardwareService {
     const headers: Record<string, string> = {
       'Accept': 'application/json'
     };
-
-    try {
-      const sessionToken = sessionStorage.getItem('edens_session_token');
-      if (sessionToken) {
-        headers['Authorization'] = `Bearer ${sessionToken}`;
-      }
-    } catch {}
 
     if (this.config.controllerApiKey) {
       headers['X-Hardware-Key'] = this.config.controllerApiKey;
@@ -440,17 +437,19 @@ class HardwareService {
       const res = await fetch(url, {
         method: 'GET',
         headers,
+        credentials: this.config.mode === 'proxy' ? 'include' : 'omit',
         signal: controller.signal
       });
 
       clearTimeout(timeoutId);
       const latencyMs = Math.round(performance.now() - startTime);
 
-      if (!res.ok) {
-        throw new Error(`ESP32 returned HTTP ${res.status}: ${res.statusText}`);
+      const parsedResp = await parseApiJsonResponse<any>(res);
+      if (!parsedResp.ok) {
+        throw new Error(parsedResp.message || `ESP32 returned HTTP ${res.status}`);
       }
 
-      const raw = await res.json();
+      const raw = parsedResp.data;
       const parsed: Esp32StatusResponse = this.normalizeStatusPayload(raw, latencyMs);
 
       this.lastSuccessfulRead = parsed;
@@ -517,12 +516,17 @@ class HardwareService {
     const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
 
     try {
-      const res = await fetch(url, { headers, signal: controller.signal });
+      const res = await fetch(url, {
+        headers,
+        credentials: this.config.mode === 'proxy' ? 'include' : 'omit',
+        signal: controller.signal
+      });
       clearTimeout(timeoutId);
       const latencyMs = Math.round(performance.now() - startTime);
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok) throw new Error(parsed.message || `HTTP ${res.status}`);
+      const data = parsed.data;
       
       this.logDiagnostic('/crops', 'SUCCESS', `Retrieved ${data.length || 0} crop profiles from firmware`, latencyMs, res.status);
       return Array.isArray(data) && data.length > 0 ? data : DEFAULT_CROPS;
@@ -834,8 +838,9 @@ class HardwareService {
    */
   public async getLatestUploadedCameraImage(): Promise<LatestUploadedImage> {
     try {
-      const res = await fetch('/api/camera/latest', { cache: 'no-store' });
-      if (!res.ok) {
+      const res = await apiFetch('/api/camera/latest', { cache: 'no-store' });
+      const parsed = await parseApiJsonResponse<LatestUploadedImage>(res);
+      if (!parsed.ok) {
         return {
           exists: false,
           status: 'OFFLINE',
@@ -843,9 +848,12 @@ class HardwareService {
           uploadEndpoint: '/api/camera/upload'
         };
       }
-      const data: LatestUploadedImage = await res.json();
+      const data = parsed.data;
+      if (data.url) {
+        data.url = resolveApiUrl(data.url);
+      }
       return data;
-    } catch (err: any) {
+    } catch {
       return {
         exists: false,
         status: 'OFFLINE',
@@ -860,10 +868,11 @@ class HardwareService {
    */
   public async getCameraUploadInfo(): Promise<CameraUploadInfo | null> {
     try {
-      const res = await fetch('/api/camera/upload-info', { cache: 'no-store' });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch (_) {
+      const res = await apiFetch('/api/camera/upload-info', { cache: 'no-store' });
+      const parsed = await parseApiJsonResponse<CameraUploadInfo>(res);
+      if (!parsed.ok) return null;
+      return parsed.data;
+    } catch {
       return null;
     }
   }
@@ -882,18 +891,18 @@ class HardwareService {
       headers['X-Camera-Key'] = token;
     }
 
-    const res = await fetch('/api/camera/upload', {
+    const res = await apiFetch('/api/camera/upload', {
       method: 'POST',
       headers,
       body: imageData
     });
 
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.message || `Upload failed with HTTP ${res.status}`);
+    const parsed = await parseApiJsonResponse<CameraUploadResponse>(res);
+    if (!parsed.ok) {
+      throw new Error(parsed.message || `Upload failed with HTTP ${res.status}`);
     }
     this.notify();
-    return data;
+    return parsed.data;
   }
 
   /**
@@ -901,9 +910,8 @@ class HardwareService {
    */
   public async markCameraImageAnalyzed(id: string, analysis: any): Promise<void> {
     try {
-      await fetch('/api/camera/mark-analyzed', {
+      await apiFetch('/api/camera/mark-analyzed', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, analysis })
       });
     } catch (_) {}

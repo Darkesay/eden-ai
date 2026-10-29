@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { hardwareService } from './hardwareService';
+import { apiFetch, parseApiJsonResponse, resolveApiUrl } from './api.ts';
 import { store } from './store';
 
 export type CameraTransportMethod = 'auto' | 'cloud_upload' | 'lan_gateway' | 'lan_direct';
@@ -520,11 +521,12 @@ class CameraConnectionManager {
     }
 
     try {
-      const infoRes = await fetch('/api/camera/upload-info', { cache: 'no-store' });
-      if (!infoRes.ok) {
-        throw new Error(`Camera service returned HTTP ${infoRes.status}`);
+      const infoRes = await apiFetch('/api/camera/upload-info', { cache: 'no-store' });
+      const parsedInfo = await parseApiJsonResponse<any>(infoRes);
+      if (!parsedInfo.ok) {
+        throw new Error(parsedInfo.message || `Camera service returned HTTP ${infoRes.status}`);
       }
-      const info = await infoRes.json();
+      const info = parsedInfo.data;
       const cloudHosted = Boolean(info.cloudHosted) || isHttpsOrigin;
       const authConfigured = Boolean(info.authConfigured);
       const freshMaxSeconds = Number(info.freshMaxSeconds) || 90;
@@ -551,18 +553,20 @@ class CameraConnectionManager {
             statusPath: this.config.statusPath,
             streamPath: this.config.streamPath
           });
-          const lanStatusRes = await fetch(`/api/camera/lan/status?${statusQuery.toString()}`, {
+          const lanStatusRes = await apiFetch(`/api/camera/lan/status?${statusQuery.toString()}`, {
             cache: 'no-store'
           });
-          if (lanStatusRes.ok) {
-            const lanData = await lanStatusRes.json();
+          const parsedLan = await parseApiJsonResponse<any>(lanStatusRes);
+          if (parsedLan.ok) {
+            const lanData = parsedLan.data;
             lanReachable = Boolean(lanData.lanReachable);
             if (lanReachable) {
               methodLabel = 'Local Gateway Camera Feed';
-              candidateStreamUrl = lanData.proxyStreamUrl || null;
-              await fetch('/api/camera/lan/sync', {
+              candidateStreamUrl = lanData.proxyStreamUrl
+                ? resolveApiUrl(lanData.proxyStreamUrl)
+                : null;
+              await apiFetch('/api/camera/lan/sync', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   host: this.config.host,
                   httpPort: this.config.httpPort,
@@ -598,9 +602,8 @@ class CameraConnectionManager {
         candidateStreamUrl = `${streamOrigin}${this.config.streamPath}`;
 
         if (forceLanSync) {
-          await fetch('/api/camera/lan/sync', {
+          await apiFetch('/api/camera/lan/sync', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               host: this.config.host,
               httpPort: this.config.httpPort,
@@ -620,17 +623,20 @@ class CameraConnectionManager {
       }
 
       // Retrieve latest validated JPEG snapshot from EDENS AI backend
-      const latestRes = await fetch('/api/camera/latest', { cache: 'no-store' });
-      if (!latestRes.ok) {
-        throw new Error(`Camera feed endpoint returned HTTP ${latestRes.status}`);
+      const latestRes = await apiFetch('/api/camera/latest', { cache: 'no-store' });
+      const parsedLatest = await parseApiJsonResponse<any>(latestRes);
+      if (!parsedLatest.ok) {
+        throw new Error(parsedLatest.message || `Camera feed endpoint returned HTTP ${latestRes.status}`);
       }
-      const latestJson = await latestRes.json();
+      const latestJson = parsedLatest.data;
       this.state.totalUploadsCount = Number(latestJson.totalUploadsCount) || 0;
 
       if (latestJson.exists && latestJson.id && latestJson.timestamp) {
         const isFresh = Boolean(
           latestJson.isFresh ?? Number(latestJson.ageSeconds) <= freshMaxSeconds
         );
+        const rawFrameUrl =
+          latestJson.url || `/api/camera/latest.jpg?frame=${encodeURIComponent(latestJson.id)}`;
         const snapshot: LatestCameraSnapshot = {
           id: latestJson.id,
           timestamp: latestJson.timestamp,
@@ -640,7 +646,7 @@ class CameraConnectionManager {
           isFresh,
           isStale: !isFresh,
           sizeBytes: Number(latestJson.sizeBytes) || 0,
-          url: latestJson.url || `/api/camera/latest.jpg?frame=${encodeURIComponent(latestJson.id)}`,
+          url: resolveApiUrl(rawFrameUrl),
           base64: latestJson.base64,
           acquisitionMethod:
             latestJson.acquisitionMethod === 'LAN_GATEWAY_PULL'

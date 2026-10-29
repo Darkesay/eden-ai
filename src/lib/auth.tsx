@@ -1,6 +1,19 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import {
+  type ApiErrorKind,
+  type ApiFetchOptions,
+  apiFetch as coreApiFetch,
+  classifyNetworkFailure,
+  clearInMemorySessionToken,
+  isEmbeddedIframeContext,
+  parseApiJsonResponse,
+  resolveApiUrl,
+  setInMemorySessionToken
+} from './api.ts';
 
-const SESSION_STORAGE_KEY = 'edens_session_token';
+export { resolveApiUrl };
+
+const LEGACY_SESSION_STORAGE_KEY = 'edens_session_token';
 const ACTIVE_GH_STORAGE_KEY = 'edens_active_greenhouse_id';
 
 export interface AuthUser {
@@ -80,55 +93,139 @@ export interface GreenhouseSummary {
   };
 }
 
-export function getStoredSessionToken(): string | null {
-  try {
-    return sessionStorage.getItem(SESSION_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function setStoredSessionToken(token: string | null): void {
-  try {
-    if (token) {
-      sessionStorage.setItem(SESSION_STORAGE_KEY, token);
-    } else {
-      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+export type AuthActionResult =
+  | {
+      ok: true;
+      user: AuthUser;
+      kind?: undefined;
+      errorCode?: undefined;
+      message?: undefined;
+      retryAfterSeconds?: undefined;
     }
-  } catch {
-    // Ignore storage quota / privacy mode errors; HttpOnly cookie remains primary
-  }
+  | {
+      ok: false;
+      kind: ApiErrorKind;
+      errorCode: string;
+      message: string;
+      retryAfterSeconds?: number;
+    };
+
+function clearLegacyWebStorageTokens(): void {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
+    }
+  } catch {}
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('botanix_auth');
+      localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
+    }
+  } catch {}
 }
 
-export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers || {});
-  const token = getStoredSessionToken();
-  if (token && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`);
+export async function apiFetch(input: string, init: ApiFetchOptions = {}): Promise<Response> {
+  return coreApiFetch(input, init);
+}
+
+/**
+ * Shared authentication client executor used by AuthProvider and verified by integration tests.
+ * Validates HTTP status + Content-Type, never calls `res.json()` blindly, and never stores raw
+ * session tokens in Web Storage.
+ */
+export async function executeAuthAction(
+  mode: 'login' | 'register',
+  payload: { displayName?: string; email: string; password: string },
+  options: {
+    baseUrl?: string;
+    fetchImpl?: typeof fetch;
+    authMode?: 'cookie' | 'memory';
+  } = {}
+): Promise<AuthActionResult> {
+  const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+  const effectiveAuthMode =
+    options.authMode ?? (isEmbeddedIframeContext() ? 'memory' : 'cookie');
+  const body =
+    mode === 'register'
+      ? {
+          displayName: String(payload.displayName || '').trim(),
+          email: String(payload.email || '').trim(),
+          password: payload.password
+        }
+      : {
+          email: String(payload.email || '').trim(),
+          password: payload.password
+        };
+
+  let res: Response;
+  try {
+    res = await coreApiFetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'X-Edens-Auth-Mode': effectiveAuthMode === 'memory' ? 'embedded' : 'cookie'
+      },
+      body: JSON.stringify(body),
+      baseUrl: options.baseUrl,
+      fetchImpl: options.fetchImpl
+    });
+  } catch (err) {
+    const netFailure = classifyNetworkFailure(err);
+    return {
+      ok: false,
+      kind: netFailure.kind,
+      errorCode: netFailure.errorCode,
+      message: netFailure.message
+    };
   }
-  if (init.body && typeof init.body === 'string' && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
+
+  const parsed = await parseApiJsonResponse<{
+    success?: boolean;
+    user?: AuthUser;
+    sessionToken?: string;
+    expiresAt?: string;
+    message?: string;
+    error?: string;
+  }>(res, mode);
+
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      kind: parsed.kind,
+      errorCode: parsed.errorCode,
+      message: parsed.message,
+      retryAfterSeconds: parsed.retryAfterSeconds
+    };
   }
-  return fetch(input, {
-    ...init,
-    credentials: 'include',
-    headers
-  });
+
+  if (!parsed.data?.success || !parsed.data?.user?.id || !parsed.data?.user?.email) {
+    return {
+      ok: false,
+      kind: 'INVALID_SERVER_RESPONSE',
+      errorCode: 'MALFORMED_AUTH_PAYLOAD',
+      message: 'The server returned an incomplete authentication payload. Please try again.'
+    };
+  }
+
+  if (effectiveAuthMode === 'memory' && typeof parsed.data.sessionToken === 'string') {
+    setInMemorySessionToken(parsed.data.sessionToken);
+  }
+
+  return {
+    ok: true,
+    user: parsed.data.user
+  };
 }
 
 interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
+  hasRegisteredUsers: boolean | null;
   greenhouses: GreenhouseSummary[];
   activeGreenhouse: GreenhouseSummary | null;
   setActiveGreenhouseId: (id: string | null) => void;
-  refreshSession: () => Promise<void>;
-  login: (email: string, password: string) => Promise<{ ok: true } | { ok: false; message: string }>;
-  register: (
-    displayName: string,
-    email: string,
-    password: string
-  ) => Promise<{ ok: true } | { ok: false; message: string }>;
+  refreshSession: () => Promise<boolean>;
+  login: (email: string, password: string) => Promise<AuthActionResult>;
+  register: (displayName: string, email: string, password: string) => Promise<AuthActionResult>;
   logout: () => Promise<void>;
 }
 
@@ -137,6 +234,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [hasRegisteredUsers, setHasRegisteredUsers] = useState<boolean | null>(null);
   const [greenhouses, setGreenhouses] = useState<GreenhouseSummary[]>([]);
   const [activeGreenhouseId, setActiveGhState] = useState<string | null>(() => {
     try {
@@ -146,6 +244,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   });
 
+  useEffect(() => {
+    clearLegacyWebStorageTokens();
+  }, []);
+
   const setActiveGreenhouseId = useCallback((id: string | null) => {
     setActiveGhState(id);
     try {
@@ -154,97 +256,131 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
-  const refreshSession = useCallback(async () => {
+  const refreshSession = useCallback(async (): Promise<boolean> => {
     try {
-      const res = await apiFetch('/api/auth/me');
+      const res = await coreApiFetch('/api/auth/session');
       if (!res.ok) {
+        clearInMemorySessionToken();
         setUser(null);
         setGreenhouses([]);
-        setStoredSessionToken(null);
-        return;
+        return false;
       }
-      const data = await res.json();
-      if (data.authenticated && data.user) {
-        setUser(data.user);
-        const list: GreenhouseSummary[] = Array.isArray(data.greenhouses) ? data.greenhouses : [];
+      const parsed = await parseApiJsonResponse<{
+        authenticated?: boolean;
+        hasRegisteredUsers?: boolean;
+        user?: AuthUser;
+        greenhouses?: GreenhouseSummary[];
+      }>(res, 'session');
+
+      if (parsed.ok && typeof parsed.data?.hasRegisteredUsers === 'boolean') {
+        setHasRegisteredUsers(parsed.data.hasRegisteredUsers);
+      }
+
+      if (parsed.ok && parsed.data?.authenticated && parsed.data?.user) {
+        setUser(parsed.data.user);
+        const list: GreenhouseSummary[] = Array.isArray(parsed.data.greenhouses)
+          ? parsed.data.greenhouses
+          : [];
         setGreenhouses(list);
         if (list.length > 0) {
           setActiveGhState((prev) => (prev && list.some((g) => g.id === prev) ? prev : list[0].id));
         }
-      } else {
-        setUser(null);
-        setGreenhouses([]);
+        return true;
       }
+
+      clearInMemorySessionToken();
+      setUser(null);
+      setGreenhouses([]);
+      return false;
     } catch {
       setUser(null);
       setGreenhouses([]);
+      return false;
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    refreshSession();
+    void refreshSession();
   }, [refreshSession]);
 
   const login = useCallback(
-    async (email: string, password: string): Promise<{ ok: true } | { ok: false; message: string }> => {
-      try {
-        const res = await apiFetch('/api/auth/login', {
-          method: 'POST',
-          body: JSON.stringify({ email, password })
-        });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          return { ok: false, message: data.message || 'Sign in failed.' };
-        }
-        if (data.sessionToken) {
-          setStoredSessionToken(data.sessionToken);
-        }
-        setUser(data.user);
-        await refreshSession();
-        return { ok: true };
-      } catch (err: any) {
-        return { ok: false, message: err?.message || 'Network error while signing in.' };
+    async (email: string, password: string): Promise<AuthActionResult> => {
+      const result = await executeAuthAction('login', { email, password });
+      if (!result.ok) {
+        return result;
       }
+
+      let sessionConfirmed = await refreshSession();
+      if (!sessionConfirmed && !isEmbeddedIframeContext()) {
+        // Browser blocked Set-Cookie on a top-level page (e.g. strict cookie blocker or cross-origin ITP);
+        // fall back seamlessly to private JS module memory (never localStorage or sessionStorage).
+        const memFallback = await executeAuthAction(
+          'login',
+          { email, password },
+          { authMode: 'memory' }
+        );
+        if (memFallback.ok) {
+          sessionConfirmed = await refreshSession();
+        }
+      }
+
+      if (!sessionConfirmed) {
+        return {
+          ok: false,
+          kind: 'AUTH_OR_SESSION_FAILED',
+          errorCode: 'SESSION_COOKIE_BLOCKED',
+          message:
+            'Sign-in succeeded, but your browser blocked session storage. Enable cookies for this site and try again.'
+        };
+      }
+
+      return result;
     },
     [refreshSession]
   );
 
   const register = useCallback(
-    async (
-      displayName: string,
-      email: string,
-      password: string
-    ): Promise<{ ok: true } | { ok: false; message: string }> => {
-      try {
-        const res = await apiFetch('/api/auth/register', {
-          method: 'POST',
-          body: JSON.stringify({ displayName, email, password })
-        });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          return { ok: false, message: data.message || 'Registration failed.' };
-        }
-        if (data.sessionToken) {
-          setStoredSessionToken(data.sessionToken);
-        }
-        setUser(data.user);
-        await refreshSession();
-        return { ok: true };
-      } catch (err: any) {
-        return { ok: false, message: err?.message || 'Network error during registration.' };
+    async (displayName: string, email: string, password: string): Promise<AuthActionResult> => {
+      const result = await executeAuthAction('register', { displayName, email, password });
+      if (!result.ok) {
+        return result;
       }
+
+      let sessionConfirmed = await refreshSession();
+      if (!sessionConfirmed && !isEmbeddedIframeContext()) {
+        const memFallback = await executeAuthAction(
+          'login',
+          { email, password },
+          { authMode: 'memory' }
+        );
+        if (memFallback.ok) {
+          sessionConfirmed = await refreshSession();
+        }
+      }
+
+      if (!sessionConfirmed) {
+        return {
+          ok: false,
+          kind: 'AUTH_OR_SESSION_FAILED',
+          errorCode: 'SESSION_COOKIE_BLOCKED',
+          message:
+            'Your account was created, but your browser blocked the session cookie. Sign in again with cookies enabled.'
+        };
+      }
+
+      return result;
     },
     [refreshSession]
   );
 
   const logout = useCallback(async () => {
     try {
-      await apiFetch('/api/auth/logout', { method: 'POST' });
+      await coreApiFetch('/api/auth/logout', { method: 'POST' });
     } catch {}
-    setStoredSessionToken(null);
-    localStorage.removeItem('botanix_auth');
+    clearInMemorySessionToken();
+    clearLegacyWebStorageTokens();
     setUser(null);
     setGreenhouses([]);
     setActiveGreenhouseId(null);
@@ -258,6 +394,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         user,
         loading,
+        hasRegisteredUsers,
         greenhouses,
         activeGreenhouse,
         setActiveGreenhouseId,

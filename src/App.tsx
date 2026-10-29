@@ -9,6 +9,7 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 import { initStore } from './lib/store';
 import { MqttProvider } from './lib/mqtt';
 import { AuthProvider, useAuth } from './lib/auth';
+import { ThemeProvider } from './lib/theme';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import ControlCenter from './pages/ControlCenter';
@@ -44,7 +45,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
       return (
         <div className="flex min-h-screen items-center justify-center bg-background text-foreground p-4">
           <div className="w-full max-w-md rounded-2xl bg-card p-8 border border-border text-center shadow-xs space-y-4">
-            <div className="w-11 h-11 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-center justify-center mx-auto">
+            <div className="w-11 h-11 rounded-xl bg-red-50 border border-red-200 text-red-700 dark:bg-red-950/50 dark:border-red-800/60 dark:text-red-300 flex items-center justify-center mx-auto">
               <AlertTriangle size={22} />
             </div>
             <h1 className="text-xl font-bold text-foreground">Something went wrong</h1>
@@ -95,10 +96,9 @@ export default function App() {
   if (!initialized) return null;
 
   return (
-    <ErrorBoundary>
-      <AuthProvider>
-        <MqttProvider>
-          <AgentManager />
+    <ThemeProvider>
+      <ErrorBoundary>
+        <AuthProvider>
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<Login />} />
@@ -106,7 +106,10 @@ export default function App() {
                 path="/"
                 element={
                   <RequireAuth>
-                    <Layout />
+                    <MqttProvider>
+                      <AgentManager />
+                      <Layout />
+                    </MqttProvider>
                   </RequireAuth>
                 }
               >
@@ -125,8 +128,8 @@ export default function App() {
               </Route>
             </Routes>
           </BrowserRouter>
-        </MqttProvider>
-      </AuthProvider>
-    </ErrorBoundary>
+        </AuthProvider>
+      </ErrorBoundary>
+    </ThemeProvider>
   );
 }

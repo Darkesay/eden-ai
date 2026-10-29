@@ -26,7 +26,8 @@ import {
   Waves,
   Wrench
 } from 'lucide-react';
-import { apiFetch, useAuth } from '../lib/auth';
+import { apiFetch, resolveApiUrl, useAuth } from '../lib/auth';
+import { parseApiJsonResponse } from '../lib/api';
 import { formatExplicitDeviceState, formatRelativeAge } from '../lib/greenhouseState';
 import { hardwareService, DEFAULT_CROPS } from '../lib/hardwareService';
 import { useMqtt } from '../lib/mqtt';
@@ -118,8 +119,8 @@ function EnvironmentalTrendChart({
             y={Math.min(bandTop, bandBottom)}
             width={innerW}
             height={Math.max(4, Math.abs(bandBottom - bandTop))}
-            fill="#15803D"
-            fillOpacity={0.08}
+            fill="var(--primary)"
+            fillOpacity={0.1}
             rx={4}
           />
           <line
@@ -127,8 +128,8 @@ function EnvironmentalTrendChart({
             y1={bandTop}
             x2={width - padX}
             y2={bandTop}
-            stroke="#15803D"
-            strokeOpacity={0.3}
+            stroke="var(--primary)"
+            strokeOpacity={0.35}
             strokeDasharray="4 4"
           />
           <line
@@ -136,16 +137,16 @@ function EnvironmentalTrendChart({
             y1={bandBottom}
             x2={width - padX}
             y2={bandBottom}
-            stroke="#15803D"
-            strokeOpacity={0.3}
+            stroke="var(--primary)"
+            strokeOpacity={0.35}
             strokeDasharray="4 4"
           />
 
           {/* Area Fill & Line */}
-          <polygon points={areaPoints} fill="#15803D" fillOpacity={0.12} />
+          <polygon points={areaPoints} fill="var(--primary)" fillOpacity={0.14} />
           <polyline
             fill="none"
-            stroke="#15803D"
+            stroke="var(--primary)"
             strokeWidth={2.5}
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -159,8 +160,8 @@ function EnvironmentalTrendChart({
               cx={toX(idx)}
               cy={toY(Number(s.temperature))}
               r={3.5}
-              fill="#FFFFFF"
-              stroke="#15803D"
+              fill="var(--card)"
+              stroke="var(--primary)"
               strokeWidth={2}
             />
           ))}
@@ -228,11 +229,12 @@ export default function GreenhouseDetails() {
     if (!greenhouseId) return;
     try {
       const res = await apiFetch(`/api/greenhouses/${greenhouseId}`);
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setErrorMsg(data.message || 'Unable to load greenhouse.');
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok || !parsed.data?.success) {
+        setErrorMsg(!parsed.ok ? parsed.message : parsed.data?.message || 'Unable to load greenhouse.');
         return;
       }
+      const data = parsed.data;
       setDetail(data);
       setActiveGreenhouseId(greenhouseId);
 
@@ -275,8 +277,9 @@ export default function GreenhouseDetails() {
         method: 'POST',
         body: JSON.stringify({})
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (parsed.ok && parsed.data?.success) {
+        const data = parsed.data;
         const passed = data.checks.filter((c: any) => c.status === 'PASS').length;
         setConnBanner(
           `Connection check completed: ${passed} of ${data.checks.length} checks verified (read-only, 0 equipment commands sent).`
@@ -336,8 +339,9 @@ export default function GreenhouseDetails() {
         method: 'POST',
         body: JSON.stringify({ purpose: 'member_share_qr', roleGranted: 'operator', ttlMinutes: 30 })
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (parsed.ok && parsed.data?.success) {
+        const data = parsed.data;
         setShareQr({
           tokenId: data.tokenId,
           qrDataUrl: data.qrDataUrl,
@@ -383,9 +387,9 @@ export default function GreenhouseDetails() {
 
   if (errorMsg || !detail?.greenhouse) {
     return (
-      <div className="max-w-lg mx-auto rounded-2xl border border-red-200 bg-red-50 p-8 text-center space-y-4">
-        <AlertTriangle size={26} className="mx-auto text-red-700" />
-        <p className="text-sm text-red-900 font-medium">{errorMsg || 'Greenhouse not found.'}</p>
+      <div className="max-w-lg mx-auto rounded-2xl border border-red-200 bg-red-50 dark:border-red-800/60 dark:bg-red-950/45 p-8 text-center space-y-4">
+        <AlertTriangle size={26} className="mx-auto text-red-700 dark:text-red-400" />
+        <p className="text-sm text-red-900 dark:text-red-200 font-medium">{errorMsg || 'Greenhouse not found.'}</p>
         <Button type="button" variant="outline" onClick={() => navigate('/greenhouses')}>
           Back to My Greenhouse
         </Button>
@@ -485,9 +489,9 @@ export default function GreenhouseDetails() {
               className={cn(
                 'text-xs font-semibold px-2.5 py-1 rounded-md border',
                 gh.overallStatus === 'ONLINE'
-                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60'
                   : gh.overallStatus === 'PARTIAL' || gh.overallStatus === 'STALE'
-                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/45 dark:text-amber-300 dark:border-amber-800/60'
                     : 'bg-muted text-muted-foreground border-border'
               )}
             >
@@ -548,8 +552,8 @@ export default function GreenhouseDetails() {
       </div>
 
       {connBanner && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-900 flex items-center gap-2">
-          <CheckCircle2 size={16} className="text-emerald-700 shrink-0" />
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200 px-4 py-3 text-xs font-medium flex items-center gap-2">
+          <CheckCircle2 size={16} className="text-emerald-700 dark:text-emerald-400 shrink-0" />
           <span>{connBanner}</span>
         </div>
       )}
@@ -635,7 +639,7 @@ export default function GreenhouseDetails() {
 
           <div className="rounded-xl bg-muted/50 p-3.5">
             <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-              <Sun size={12} className="text-amber-600" /> Sunlight
+              <Sun size={12} className="text-amber-600 dark:text-amber-400" /> Sunlight
             </span>
             <p className="text-lg font-bold font-mono tabular-nums text-foreground mt-1">
               {valOrUnavail(readings?.sunlight, 0, ' lx')}
@@ -684,9 +688,9 @@ export default function GreenhouseDetails() {
               className={cn(
                 'text-xs font-medium px-2.5 py-1 rounded-md border whitespace-nowrap shrink-0',
                 cam?.exists && cam?.isFresh
-                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60'
                   : cam?.exists
-                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/45 dark:text-amber-300 dark:border-amber-800/60'
                     : 'bg-muted text-muted-foreground border-border'
               )}
             >
@@ -697,7 +701,7 @@ export default function GreenhouseDetails() {
           <div className="aspect-video w-full rounded-xl overflow-hidden border border-border bg-muted/60 flex items-center justify-center">
             {cam?.exists && cam?.url ? (
               <img
-                src={cam.url}
+                src={resolveApiUrl(cam.url)}
                 alt={`Latest snapshot from ${gh.name}`}
                 className="w-full h-full object-contain bg-stone-950"
               />
@@ -750,8 +754,8 @@ export default function GreenhouseDetails() {
               className={cn(
                 'rounded-xl border px-3.5 py-2.5 text-xs font-medium',
                 controlFeedback.tone === 'ok'
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                  : 'border-amber-200 bg-amber-50 text-amber-900'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200'
+                  : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/45 dark:text-amber-200'
               )}
             >
               {controlFeedback.text}
@@ -864,7 +868,7 @@ export default function GreenhouseDetails() {
                       <div className="pt-1 flex items-center gap-2">
                         {confirmRevokeId === d.id ? (
                           <>
-                            <span className="text-[11px] text-red-700 font-medium">Revoke key?</span>
+                            <span className="text-[11px] text-red-700 dark:text-red-400 font-medium">Revoke key?</span>
                             <Button
                               type="button"
                               size="sm"
@@ -887,7 +891,7 @@ export default function GreenhouseDetails() {
                           <button
                             type="button"
                             onClick={() => setConfirmRevokeId(d.id)}
-                            className="text-xs font-medium text-red-700 hover:underline cursor-pointer"
+                            className="text-xs font-medium text-red-700 dark:text-red-400 hover:underline cursor-pointer"
                           >
                             Revoke Device Key
                           </button>
@@ -913,7 +917,7 @@ export default function GreenhouseDetails() {
                         <button
                           type="button"
                           onClick={() => handleRevokeToken(tok.id)}
-                          className="text-red-700 font-medium hover:underline cursor-pointer"
+                          className="text-red-700 dark:text-red-400 font-medium hover:underline cursor-pointer"
                         >
                           Revoke
                         </button>

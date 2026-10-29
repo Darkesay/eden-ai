@@ -24,21 +24,21 @@ export function DataSourceBadge({
       return (
         <div
           className={cn(
-            'rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-emerald-950',
+            'rounded-xl border border-emerald-200 bg-emerald-50/80 dark:border-emerald-800/60 dark:bg-emerald-950/45 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-emerald-950 dark:text-emerald-100',
             className
           )}
         >
           <div className="flex items-center gap-2.5">
-            <CheckCircle2 size={18} className="text-emerald-700 shrink-0" />
+            <CheckCircle2 size={18} className="text-emerald-700 dark:text-emerald-400 shrink-0" />
             <div>
               <span className="font-semibold">Live Greenhouse Hardware Connected</span>
-              <span className="text-emerald-800 ml-2">
+              <span className="text-emerald-800 dark:text-emerald-200/90 ml-2">
                 Showing verified readings from {ghState.greenhouseName}.
               </span>
             </div>
           </div>
           {showFreshness && (
-            <span className="text-xs font-mono tabular-nums text-emerald-800 flex items-center gap-1.5">
+            <span className="text-xs font-mono tabular-nums text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
               <Clock size={13} /> Updated {ageText}
             </span>
           )}
@@ -50,22 +50,22 @@ export function DataSourceBadge({
       return (
         <div
           className={cn(
-            'rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-amber-950',
+            'rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-800/60 dark:bg-amber-950/45 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-amber-950 dark:text-amber-100',
             className
           )}
         >
           <div className="flex items-center gap-2.5">
-            <AlertTriangle size={18} className="text-amber-700 shrink-0" />
+            <AlertTriangle size={18} className="text-amber-700 dark:text-amber-400 shrink-0" />
             <div>
               <span className="font-semibold">Sensor Update Delayed</span>
-              <span className="text-amber-900 ml-2">
+              <span className="text-amber-900 dark:text-amber-200/90 ml-2">
                 Last reading arrived {ageText}. Do not rely on these numbers as live until your controller reconnects.
               </span>
             </div>
           </div>
           <Link
             to={activeGreenhouse ? `/greenhouses/${activeGreenhouse.id}` : '/settings?tab=hardware'}
-            className="text-xs font-semibold text-amber-900 underline underline-offset-4 whitespace-nowrap shrink-0"
+            className="text-xs font-semibold text-amber-900 dark:text-amber-300 underline underline-offset-4 whitespace-nowrap shrink-0"
           >
             Check Connection
           </Link>
@@ -77,15 +77,15 @@ export function DataSourceBadge({
       return (
         <div
           className={cn(
-            'rounded-xl border border-indigo-200 bg-indigo-50/80 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-indigo-950',
+            'rounded-xl border border-indigo-200 bg-indigo-50/80 dark:border-indigo-800/60 dark:bg-indigo-950/45 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-indigo-950 dark:text-indigo-100',
             className
           )}
         >
           <div className="flex items-center gap-2.5">
-            <FlaskConical size={18} className="text-indigo-700 shrink-0" />
+            <FlaskConical size={18} className="text-indigo-700 dark:text-indigo-300 shrink-0" />
             <div>
               <span className="font-semibold">Practice Mode Active</span>
-              <span className="text-indigo-900 ml-2">
+              <span className="text-indigo-900 dark:text-indigo-200/90 ml-2">
                 Numbers shown are simulated for learning — not live readings from a physical greenhouse.
               </span>
             </div>
@@ -93,7 +93,7 @@ export function DataSourceBadge({
           <div className="flex items-center gap-3 shrink-0">
             <Link
               to="/greenhouses/setup"
-              className="text-xs font-semibold text-indigo-900 underline underline-offset-4 whitespace-nowrap"
+              className="text-xs font-semibold text-indigo-900 dark:text-indigo-300 underline underline-offset-4 whitespace-nowrap"
             >
               Connect Real Hardware
             </Link>
@@ -105,7 +105,7 @@ export function DataSourceBadge({
     return (
       <div
         className={cn(
-          'rounded-xl border border-stone-200 bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-foreground',
+          'rounded-xl border border-border bg-card px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-foreground',
           className
         )}
       >
@@ -133,11 +133,11 @@ export function DataSourceBadge({
   // Compact sidebar / header indicator
   const toneClass =
     provenance === 'REAL_HARDWARE'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-300'
       : provenance === 'CACHED' || provenance === 'STALE'
-        ? 'border-amber-200 bg-amber-50 text-amber-800'
+        ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/45 dark:text-amber-300'
         : provenance === 'SIMULATED'
-          ? 'border-indigo-200 bg-indigo-50 text-indigo-800'
+          ? 'border-indigo-200 bg-indigo-50 text-indigo-800 dark:border-indigo-800/60 dark:bg-indigo-950/45 dark:text-indigo-300'
           : 'border-border bg-muted text-muted-foreground';
 
   const Icon =

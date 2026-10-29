@@ -19,7 +19,8 @@ import {
   WifiOff,
   X
 } from 'lucide-react';
-import { apiFetch, useAuth } from '../lib/auth';
+import { apiFetch, resolveApiUrl, useAuth } from '../lib/auth';
+import { parseApiJsonResponse } from '../lib/api';
 import { formatFrameAge, useCameraConnection } from '../lib/cameraConnectionManager';
 import {
   analyzePlantImage,
@@ -72,10 +73,10 @@ export default function PlantVision() {
     setLoadingGhCam(true);
     try {
       const res = await apiFetch(`/api/greenhouses/${activeGreenhouse.id}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setGhCamera(data.latestCamera || null);
-      setGhObservations(Array.isArray(data.observations) ? data.observations : []);
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok) return;
+      setGhCamera(parsed.data.latestCamera || null);
+      setGhObservations(Array.isArray(parsed.data.observations) ? parsed.data.observations : []);
     } catch {
       // Ignore transient poll errors
     } finally {
@@ -104,7 +105,11 @@ export default function PlantVision() {
   const snapshotExists = hasEnrolledGh
     ? Boolean(ghCamera?.exists && ghCamera?.url)
     : Boolean(camera.latestFrame);
-  const snapshotUrl = hasEnrolledGh ? ghCamera?.url : camera.latestFrame?.url;
+  const snapshotUrl = hasEnrolledGh
+    ? ghCamera?.url
+      ? resolveApiUrl(ghCamera.url)
+      : undefined
+    : camera.latestFrame?.url;
   const snapshotTimestamp = hasEnrolledGh
     ? ghCamera?.capturedAt || ghCamera?.timestamp || null
     : camera.lastImageTimestamp;
@@ -320,7 +325,7 @@ export default function PlantVision() {
                     className={cn(
                       'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-semibold',
                       cameraConnected
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/45 dark:border-emerald-800/60 dark:text-emerald-300'
                         : 'bg-muted border-border text-muted-foreground'
                     )}
                   >
@@ -333,8 +338,8 @@ export default function PlantVision() {
                       className={cn(
                         'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-semibold',
                         snapshotIsFresh
-                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                          : 'bg-amber-50 border-amber-200 text-amber-800'
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/45 dark:border-emerald-800/60 dark:text-emerald-300'
+                          : 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/45 dark:border-amber-800/60 dark:text-amber-300'
                       )}
                     >
                       {snapshotIsFresh ? <FileCheck size={13} /> : <AlertTriangle size={13} />}
@@ -419,11 +424,11 @@ export default function PlantVision() {
 
           {/* Stale Snapshot Honesty Notice */}
           {!manualPhotoDataUrl && snapshotExists && !snapshotIsFresh && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-950 flex items-start gap-2.5">
-              <AlertTriangle size={16} className="text-amber-700 shrink-0 mt-0.5" />
+            <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/45 dark:text-amber-100 px-4 py-3 text-xs flex items-start gap-2.5">
+              <AlertTriangle size={16} className="text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
               <div className="space-y-0.5">
                 <p className="font-semibold">Snapshot Is Outdated</p>
-                <p className="text-amber-900 leading-relaxed">
+                <p className="text-amber-900 dark:text-amber-200/90 leading-relaxed">
                   This camera photo is older than 90 seconds, so EDENS AI disables live-camera diagnosis until a fresh photo arrives. You can still upload a leaf photo from your phone right now.
                 </p>
               </div>
@@ -475,8 +480,8 @@ export default function PlantVision() {
           </div>
 
           {analysisError && (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-900 flex items-start gap-2">
-              <AlertTriangle size={15} className="text-red-700 shrink-0 mt-0.5" />
+            <div className="rounded-xl border border-red-200 bg-red-50 text-red-900 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-200 px-4 py-3 text-xs flex items-start gap-2">
+              <AlertTriangle size={15} className="text-red-700 dark:text-red-400 shrink-0 mt-0.5" />
               <span className="leading-relaxed">{analysisError}</span>
             </div>
           )}
@@ -521,7 +526,7 @@ export default function PlantVision() {
               <div className="rounded-xl bg-muted/50 p-4 space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-muted-foreground">Plant Identified</span>
-                  <span className="text-xs font-semibold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60">
                     {analysisResult.healthStatus}
                   </span>
                 </div>

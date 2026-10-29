@@ -22,6 +22,7 @@ import {
   Wifi
 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
+import { parseApiJsonResponse } from '../lib/api';
 import { DEFAULT_CROPS } from '../lib/hardwareService';
 import { store } from '../lib/store';
 import { QrScannerModal } from '../components/QrScannerModal';
@@ -114,8 +115,9 @@ export default function GreenhouseSetupWizard() {
   const loadGreenhouseState = useCallback(
     async (targetId: string) => {
       const res = await apiFetch(`/api/greenhouses/${targetId}`);
-      if (!res.ok) return;
-      const data = await res.json();
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok) return;
+      const data = parsed.data;
       if (data.greenhouse) {
         setName(data.greenhouse.name);
         setLocationLabel(data.greenhouse.locationLabel);
@@ -162,11 +164,14 @@ export default function GreenhouseSetupWizard() {
             method: 'POST',
             body: JSON.stringify({ code: qrCodeParam })
           });
-          const data = await res.json();
-          if (!res.ok || !data.success) {
-            setErrorMsg(data.message || 'QR enrollment code could not be redeemed.');
+          const parsed = await parseApiJsonResponse<any>(res);
+          if (!parsed.ok || !parsed.data?.success) {
+            setErrorMsg(
+              !parsed.ok ? parsed.message : parsed.data?.message || 'QR enrollment code could not be redeemed.'
+            );
             return;
           }
+          const data = parsed.data;
           setGhId(data.greenhouse.id);
           setActiveGreenhouseId(data.greenhouse.id);
           setName(data.greenhouse.name);
@@ -207,11 +212,12 @@ export default function GreenhouseSetupWizard() {
             wifiProvisioningMethod: wifiMethod
           })
         });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          setErrorMsg(data.message || 'Could not create greenhouse.');
+        const parsed = await parseApiJsonResponse<any>(res);
+        if (!parsed.ok || !parsed.data?.success) {
+          setErrorMsg(!parsed.ok ? parsed.message : parsed.data?.message || 'Could not create greenhouse.');
           return;
         }
+        const data = parsed.data;
         setGhId(data.greenhouse.id);
         setActiveGreenhouseId(data.greenhouse.id);
         setDevices(data.devices || []);
@@ -240,9 +246,9 @@ export default function GreenhouseSetupWizard() {
         method: 'PATCH',
         body: JSON.stringify({ cropType: resolvedCropName })
       });
-      if (!res.ok) {
-        const data = await res.json();
-        setErrorMsg(data.message || 'Could not save crop choice.');
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok) {
+        setErrorMsg(parsed.message || 'Could not save crop choice.');
         return;
       }
       store.setValue('cropType', resolvedCropName);
@@ -282,11 +288,12 @@ export default function GreenhouseSetupWizard() {
         method: 'POST',
         body: JSON.stringify({})
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setErrorMsg(data.message || 'Could not generate device key.');
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok || !parsed.data?.success) {
+        setErrorMsg(!parsed.ok ? parsed.message : parsed.data?.message || 'Could not generate device key.');
         return;
       }
+      const data = parsed.data;
       setIssuedMap((prev) => ({
         ...prev,
         [deviceId]: {
@@ -337,11 +344,12 @@ export default function GreenhouseSetupWizard() {
         method: 'POST',
         body: JSON.stringify({})
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setErrorMsg(data.message || 'Connection check could not run.');
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok || !parsed.data?.success) {
+        setErrorMsg(!parsed.ok ? parsed.message : parsed.data?.message || 'Connection check could not run.');
         return;
       }
+      const data = parsed.data;
       setConnectionCheck(data);
       await loadGreenhouseState(ghId);
       await refreshSession();
@@ -374,10 +382,11 @@ export default function GreenhouseSetupWizard() {
       method: 'POST',
       body: JSON.stringify({ qrPayload: rawCodeOrUri })
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'Invalid or expired QR code.');
+    const parsed = await parseApiJsonResponse<any>(res);
+    if (!parsed.ok || !parsed.data?.success) {
+      throw new Error(!parsed.ok ? parsed.message : parsed.data?.message || 'Invalid or expired QR code.');
     }
+    const data = parsed.data;
     setScannerOpen(false);
     setGhId(data.greenhouse.id);
     setActiveGreenhouseId(data.greenhouse.id);
@@ -430,7 +439,7 @@ export default function GreenhouseSetupWizard() {
                 active
                   ? 'border-primary bg-accent text-foreground'
                   : completed
-                    ? 'border-emerald-200 bg-emerald-50/70 text-emerald-900 cursor-pointer'
+                    ? 'border-emerald-200 bg-emerald-50/70 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/35 dark:text-emerald-200 cursor-pointer'
                     : 'border-border bg-card text-muted-foreground',
                 canJump && !active && 'hover:bg-muted/60 cursor-pointer'
               )}
@@ -446,14 +455,14 @@ export default function GreenhouseSetupWizard() {
       </div>
 
       {errorMsg && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 flex items-center gap-2">
-          <AlertTriangle size={16} className="shrink-0 text-red-700" />
+        <div className="rounded-xl border border-red-200 bg-red-50 text-red-800 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-200 px-4 py-3 text-sm flex items-center gap-2">
+          <AlertTriangle size={16} className="shrink-0 text-red-700 dark:text-red-400" />
           <span>{errorMsg}</span>
         </div>
       )}
 
       {infoMsg && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200 px-4 py-3 text-sm">
           {infoMsg}
         </div>
       )}
@@ -737,12 +746,12 @@ export default function GreenhouseSetupWizard() {
                         </Button>
 
                         {issued && (
-                          <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-3 space-y-2 text-xs">
-                            <p className="font-semibold text-emerald-950 flex items-center gap-1">
-                              <ShieldCheck size={13} className="text-emerald-700" />
+                          <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 dark:border-emerald-800/60 dark:bg-emerald-950/40 p-3 space-y-2 text-xs">
+                            <p className="font-semibold text-emerald-950 dark:text-emerald-100 flex items-center gap-1">
+                              <ShieldCheck size={13} className="text-emerald-700 dark:text-emerald-400" />
                               One-Time Key (Save Now)
                             </p>
-                            <div className="flex items-center justify-between gap-2 bg-white border border-border rounded px-2.5 py-1.5 font-mono text-[11px]">
+                            <div className="flex items-center justify-between gap-2 bg-background border border-border rounded px-2.5 py-1.5 font-mono text-[11px] text-foreground">
                               <span className="truncate">{issued.oneTimeDeviceKey}</span>
                               <button
                                 type="button"
@@ -960,14 +969,14 @@ export default function GreenhouseSetupWizard() {
                 className={cn(
                   'rounded-xl border p-4 text-sm flex items-start gap-3',
                   connectionCheck.allHardwareVerifiedOnline
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
-                    : 'border-amber-200 bg-amber-50 text-amber-950'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-100'
+                    : 'border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/45 dark:text-amber-100'
                 )}
               >
                 {connectionCheck.allHardwareVerifiedOnline ? (
-                  <CheckCircle2 size={18} className="text-emerald-700 shrink-0 mt-0.5" />
+                  <CheckCircle2 size={18} className="text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5" />
                 ) : (
-                  <Clock size={18} className="text-amber-700 shrink-0 mt-0.5" />
+                  <Clock size={18} className="text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
                 )}
                 <div>
                   <p className="font-semibold">
@@ -997,10 +1006,10 @@ export default function GreenhouseSetupWizard() {
                       className={cn(
                         'px-2.5 py-0.5 rounded-md font-semibold border shrink-0',
                         chk.status === 'PASS'
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60'
                           : chk.status === 'WAITING'
-                            ? 'bg-amber-50 text-amber-800 border-amber-200'
-                            : 'bg-red-50 text-red-800 border-red-200'
+                            ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/45 dark:text-amber-300 dark:border-amber-800/60'
+                            : 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/45 dark:text-red-300 dark:border-red-800/60'
                       )}
                     >
                       {chk.status === 'PASS' ? 'Ready' : chk.status === 'WAITING' ? 'Waiting' : 'Check'}
@@ -1035,7 +1044,7 @@ export default function GreenhouseSetupWizard() {
       {/* STEP 6: Start Monitoring */}
       {step === 6 && (
         <section className="rounded-2xl border border-border bg-card p-8 text-center shadow-xs space-y-5">
-          <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 text-primary flex items-center justify-center mx-auto">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/45 dark:border-emerald-800/60 text-primary flex items-center justify-center mx-auto">
             <CheckCircle2 size={24} />
           </div>
 

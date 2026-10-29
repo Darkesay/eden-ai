@@ -4,6 +4,8 @@
  * Never imports @google/genai or exposes GEMINI_API_KEY in client bundles.
  */
 
+import { apiFetch, parseApiJsonResponse } from './api.ts';
+
 export interface PlantAnalysisResult {
   species: string;
   speciesLocal?: string;
@@ -175,17 +177,6 @@ export interface ChatMessage {
   voiceName?: string;
 }
 
-function buildAiRequestHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  try {
-    const token = sessionStorage.getItem('edens_session_token');
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-  } catch {}
-  return headers;
-}
-
 function getActiveGreenhouseIdForAi(dataSource?: string): string | undefined {
   if (dataSource === 'SIMULATED') return undefined;
   try {
@@ -206,10 +197,8 @@ export async function predictHarvest(
   soilMoisture: number
 ): Promise<HarvestPredictionResult> {
   const greenhouseId = getActiveGreenhouseIdForAi();
-  const res = await fetch('/api/ai/predict-harvest', {
+  const res = await apiFetch('/api/ai/predict-harvest', {
     method: 'POST',
-    headers: buildAiRequestHeaders(),
-    credentials: 'include',
     body: JSON.stringify({
       greenhouseId,
       cropType,
@@ -222,11 +211,13 @@ export async function predictHarvest(
     })
   });
 
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data?.result) {
-    throw new Error(data?.message || `Harvest prediction failed with HTTP ${res.status}`);
+  const parsed = await parseApiJsonResponse<{ result?: HarvestPredictionResult }>(res);
+  if (!parsed.ok || !parsed.data?.result) {
+    throw new Error(
+      !parsed.ok ? parsed.message : `Harvest prediction failed with HTTP ${res.status}`
+    );
   }
-  return data.result as HarvestPredictionResult;
+  return parsed.data.result;
 }
 
 export class CameraDiagnosisError extends Error {
@@ -254,10 +245,8 @@ export async function diagnoseLatestCameraFrame(
   languageId: string = 'ha'
 ): Promise<PlantAnalysisResult> {
   const greenhouseId = getActiveGreenhouseIdForAi();
-  const res = await fetch('/api/ai/diagnose', {
+  const res = await apiFetch('/api/ai/diagnose', {
     method: 'POST',
-    headers: buildAiRequestHeaders(),
-    credentials: 'include',
     body: JSON.stringify({
       greenhouseId,
       useLatestCameraFrame: true,
@@ -266,19 +255,25 @@ export async function diagnoseLatestCameraFrame(
     })
   });
 
-  if (res.ok) {
-    const data = await res.json();
-    if (data.result) return data.result as PlantAnalysisResult;
+  const parsed = await parseApiJsonResponse<{
+    result?: PlantAnalysisResult;
+    ageSeconds?: number;
+    timestamp?: string;
+    error?: string;
+    message?: string;
+  }>(res);
+
+  if (parsed.ok) {
+    if (parsed.data?.result) return parsed.data.result;
     throw new Error('Diagnosis response missing result data.');
   }
 
-  const errJson = await res.json().catch(() => ({}));
   throw new CameraDiagnosisError(
-    errJson.message || `Camera plant diagnosis failed with HTTP ${res.status}`,
-    errJson.error || 'DIAGNOSIS_FAILED',
+    parsed.message || `Camera plant diagnosis failed with HTTP ${res.status}`,
+    parsed.errorCode || 'DIAGNOSIS_FAILED',
     res.status,
-    errJson.ageSeconds,
-    errJson.timestamp
+    undefined,
+    undefined
   );
 }
 
@@ -286,27 +281,24 @@ export async function analyzePlantImage(
   base64Image: string,
   languageId: string = 'pcm'
 ): Promise<PlantAnalysisResult> {
-  const res = await fetch('/api/ai/diagnose', {
+  const res = await apiFetch('/api/ai/diagnose', {
     method: 'POST',
-    headers: buildAiRequestHeaders(),
-    credentials: 'include',
     body: JSON.stringify({ image: base64Image, source: 'MANUAL_UPLOAD', languageId })
   });
 
-  if (res.ok) {
-    const data = await res.json();
-    if (data.result) return data.result as PlantAnalysisResult;
-    throw new Error('Diagnosis response missing result data');
+  const parsed = await parseApiJsonResponse<{ result?: PlantAnalysisResult }>(res);
+  if (parsed.ok) {
+    if (parsed.data?.result) return parsed.data.result;
+    throw new Error('Diagnosis response missing result data.');
   }
 
-  const errJson = await res.json().catch(() => ({}));
-  if (res.status === 503) {
+  if (res.status === 503 && parsed.errorCode === 'AI_SERVICE_UNCONFIGURED') {
     throw new Error(
-      errJson.message ||
+      parsed.message ||
         'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard.'
     );
   }
-  throw new Error(errJson.message || `Plant diagnosis failed with HTTP ${res.status}`);
+  throw new Error(parsed.message || `Plant diagnosis failed with HTTP ${res.status}`);
 }
 
 export async function transcribeSpeechAudio(
@@ -314,10 +306,8 @@ export async function transcribeSpeechAudio(
   mimeType: string = 'audio/webm',
   languageId: string = 'ha'
 ): Promise<string> {
-  const res = await fetch('/api/ai/transcribe', {
+  const res = await apiFetch('/api/ai/transcribe', {
     method: 'POST',
-    headers: buildAiRequestHeaders(),
-    credentials: 'include',
     body: JSON.stringify({
       audio: base64Audio,
       mimeType,
@@ -325,17 +315,12 @@ export async function transcribeSpeechAudio(
     })
   });
 
-  if (!res.ok) {
-    let errorMsg = `Server returned HTTP ${res.status}`;
-    try {
-      const errJson = await res.json();
-      errorMsg = errJson.message || errJson.error || errorMsg;
-    } catch (_) {}
-    throw new Error(errorMsg);
+  const parsed = await parseApiJsonResponse<{ transcript?: string }>(res);
+  if (!parsed.ok) {
+    throw new Error(parsed.message || `Speech transcription failed with HTTP ${res.status}`);
   }
 
-  const data = await res.json();
-  return data.transcript || '';
+  return parsed.data.transcript || '';
 }
 
 export async function generateSpeechAudio(
@@ -343,18 +328,18 @@ export async function generateSpeechAudio(
   voiceName: string = 'Kore',
   _styleDescription: string = 'Warm, respectful, articulate African agronomist expert'
 ): Promise<string> {
-  const res = await fetch('/api/ai/speech', {
+  const res = await apiFetch('/api/ai/speech', {
     method: 'POST',
-    headers: buildAiRequestHeaders(),
-    credentials: 'include',
     body: JSON.stringify({ text, voiceName })
   });
 
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data?.pcmBase64) {
-    throw new Error(data?.message || `Speech synthesis failed with HTTP ${res.status}`);
+  const parsed = await parseApiJsonResponse<{ pcmBase64?: string }>(res);
+  if (!parsed.ok || !parsed.data?.pcmBase64) {
+    throw new Error(
+      !parsed.ok ? parsed.message : `Speech synthesis failed with HTTP ${res.status}`
+    );
   }
-  return data.pcmBase64 as string;
+  return parsed.data.pcmBase64;
 }
 
 export async function evaluateAgentDecision<T = any>(
@@ -362,18 +347,18 @@ export async function evaluateAgentDecision<T = any>(
   telemetry: Record<string, any>
 ): Promise<T> {
   const greenhouseId = getActiveGreenhouseIdForAi(telemetry?.dataSource);
-  const res = await fetch('/api/ai/agent-decision', {
+  const res = await apiFetch('/api/ai/agent-decision', {
     method: 'POST',
-    headers: buildAiRequestHeaders(),
-    credentials: 'include',
     body: JSON.stringify({ greenhouseId, agentType, telemetry })
   });
 
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data?.result) {
-    throw new Error(data?.message || `Agent decision failed with HTTP ${res.status}`);
+  const parsed = await parseApiJsonResponse<{ result?: T }>(res);
+  if (!parsed.ok || !parsed.data?.result) {
+    throw new Error(
+      !parsed.ok ? parsed.message : `Agent decision failed with HTTP ${res.status}`
+    );
   }
-  return data.result as T;
+  return parsed.data.result;
 }
 
 /**
@@ -461,10 +446,8 @@ export async function consultAgronomist(
 ): Promise<string> {
   try {
     const greenhouseId = getActiveGreenhouseIdForAi(contextData?.dataSource);
-    const res = await fetch('/api/ai/chat', {
+    const res = await apiFetch('/api/ai/chat', {
       method: 'POST',
-      headers: buildAiRequestHeaders(),
-      credentials: 'include',
       body: JSON.stringify({
         greenhouseId,
         message,
@@ -474,20 +457,19 @@ export async function consultAgronomist(
       })
     });
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data.reply) return data.reply;
+    const parsed = await parseApiJsonResponse<{ reply?: string }>(res);
+    if (parsed.ok) {
+      if (parsed.data?.reply) return parsed.data.reply;
       throw new Error('Empty reply from AI consultation endpoint.');
     }
 
-    const errJson = await res.json().catch(() => ({}));
-    if (res.status === 503) {
+    if (res.status === 503 && parsed.errorCode === 'AI_SERVICE_UNCONFIGURED') {
       throw new Error(
-        errJson.message ||
+        parsed.message ||
           'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard environment variables.'
       );
     }
-    throw new Error(errJson.message || `AI consultation failed with HTTP ${res.status}`);
+    throw new Error(parsed.message || `AI consultation failed with HTTP ${res.status}`);
   } catch (fetchErr: any) {
     if (
       fetchErr.message &&

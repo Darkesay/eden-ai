@@ -13,8 +13,8 @@ export function HarvestWidget() {
   if (!predictionJson) {
     if (recordedNotice) {
       return (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900 text-sm font-medium flex items-center gap-2">
-          <CheckCircle2 size={16} className="text-emerald-700 shrink-0" />
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200 px-4 py-3 text-sm font-medium flex items-center gap-2">
+          <CheckCircle2 size={16} className="text-emerald-700 dark:text-emerald-400 shrink-0" />
           Harvest recorded in your crop log and planting date reset for the new cycle.
         </div>
       );

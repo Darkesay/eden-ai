@@ -15,22 +15,27 @@ import {
   Globe,
   KeyRound,
   Loader2,
+  Monitor,
+  Moon,
   QrCode,
   RefreshCw,
   ShieldCheck,
   Sliders,
   Sprout,
+  Sun,
   Trash2,
   Upload,
   User,
   Wrench
 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
+import { parseApiJsonResponse } from '../lib/api';
 import { useCameraConnection } from '../lib/cameraConnectionManager';
 import { NIGERIAN_LANGUAGES } from '../lib/gemini';
 import { formatExplicitDeviceState } from '../lib/greenhouseState';
 import { DEFAULT_CROPS, hardwareService } from '../lib/hardwareService';
 import { store, useStoreTable, useStoreValue } from '../lib/store';
+import { type ThemeMode, useTheme } from '../lib/theme';
 import { QrScannerModal } from '../components/QrScannerModal';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -49,6 +54,7 @@ const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ size?:
 export default function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user, activeGreenhouse, greenhouses, setActiveGreenhouseId, refreshSession } = useAuth();
+  const { themeMode, setThemeMode } = useTheme();
   const camera = useCameraConnection();
 
   const rawTab = searchParams.get('tab') as SettingsTab | null;
@@ -158,9 +164,9 @@ export default function SettingsPage() {
     }
     try {
       const res = await apiFetch(`/api/greenhouses/${activeGreenhouse.id}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setGhDevices(Array.isArray(data.devices) ? data.devices : []);
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok) return;
+      setGhDevices(Array.isArray(parsed.data.devices) ? parsed.data.devices : []);
     } catch {}
   }, [activeGreenhouse?.id]);
 
@@ -276,12 +282,12 @@ export default function SettingsPage() {
           body: JSON.stringify({})
         }
       );
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setErrorBanner(data.message || 'Could not issue device key.');
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok || !parsed.data?.success) {
+        setErrorBanner(!parsed.ok ? parsed.message : parsed.data?.message || 'Could not issue device key.');
         return;
       }
-      setIssuedCredentials((prev) => ({ ...prev, [deviceId]: data }));
+      setIssuedCredentials((prev) => ({ ...prev, [deviceId]: parsed.data }));
       await loadEnrolledDevices();
       await refreshSession();
     } finally {
@@ -335,10 +341,11 @@ export default function SettingsPage() {
       method: 'POST',
       body: JSON.stringify({ qrPayload: rawCodeOrUri })
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'QR code could not be redeemed.');
+    const parsed = await parseApiJsonResponse<any>(res);
+    if (!parsed.ok || !parsed.data?.success) {
+      throw new Error(!parsed.ok ? parsed.message : parsed.data?.message || 'QR code could not be redeemed.');
     }
+    const data = parsed.data;
     setScannerOpen(false);
     await refreshSession();
     if (data.greenhouse?.id) {
@@ -357,11 +364,11 @@ export default function SettingsPage() {
         method: 'POST',
         body: JSON.stringify({})
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setConnCheckResult(data);
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (parsed.ok && parsed.data?.success) {
+        setConnCheckResult(parsed.data);
       } else {
-        setErrorBanner(data.message || 'Connection check failed.');
+        setErrorBanner(!parsed.ok ? parsed.message : parsed.data?.message || 'Connection check failed.');
       }
     } finally {
       setBusy(false);
@@ -458,15 +465,15 @@ export default function SettingsPage() {
       </div>
 
       {savedBanner && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-900 flex items-center gap-2">
-          <CheckCircle2 size={16} className="text-emerald-700 shrink-0" />
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200 px-4 py-3 text-xs font-medium flex items-center gap-2">
+          <CheckCircle2 size={16} className="text-emerald-700 dark:text-emerald-400 shrink-0" />
           <span>{savedBanner}</span>
         </div>
       )}
 
       {errorBanner && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-medium text-red-900 flex items-center gap-2">
-          <AlertTriangle size={16} className="text-red-700 shrink-0" />
+        <div className="rounded-xl border border-red-200 bg-red-50 text-red-900 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-200 px-4 py-3 text-xs font-medium flex items-center gap-2">
+          <AlertTriangle size={16} className="text-red-700 dark:text-red-400 shrink-0 mt-0.5" />
           <span>{errorBanner}</span>
         </div>
       )}
@@ -563,8 +570,53 @@ export default function SettingsPage() {
             </div>
           </form>
 
-          {/* Operating Mode & Quick Walkthrough */}
+          {/* Appearance, Operating Mode & Quick Walkthrough */}
           <div className="lg:col-span-5 space-y-6">
+            <section className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+              <div>
+                <h2 className="text-base font-semibold text-foreground">Appearance</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Choose Light Mode for bright outdoor daylight or Dark Mode for evening greenhouse checks.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                {(
+                  [
+                    { id: 'light' as ThemeMode, label: 'Light', icon: Sun },
+                    { id: 'dark' as ThemeMode, label: 'Dark', icon: Moon },
+                    { id: 'system' as ThemeMode, label: 'System', icon: Monitor }
+                  ] as const
+                ).map((option) => {
+                  const Icon = option.icon;
+                  const selected = themeMode === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => {
+                        setThemeMode(option.id);
+                        showSaved(
+                          option.id === 'system'
+                            ? 'Appearance set to match your device preference.'
+                            : `Switched to ${option.label} Mode.`
+                        );
+                      }}
+                      className={cn(
+                        'h-11 rounded-xl border px-3 flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer',
+                        selected
+                          ? 'border-primary bg-accent text-accent-foreground'
+                          : 'border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                      )}
+                    >
+                      <Icon size={15} className={selected ? 'text-primary' : 'text-muted-foreground'} />
+                      <span>{option.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
             <section className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
               <div>
                 <h2 className="text-base font-semibold text-foreground">Data Mode</h2>
@@ -604,17 +656,17 @@ export default function SettingsPage() {
                   className={cn(
                     'w-full rounded-xl border p-4 text-left transition-colors cursor-pointer',
                     hwConfig.mode === 'simulation'
-                      ? 'border-indigo-400 bg-indigo-50/70'
+                      ? 'border-indigo-400 bg-indigo-50/70 dark:border-indigo-700/70 dark:bg-indigo-950/40'
                       : 'border-border bg-background hover:bg-muted/50'
                   )}
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                      <FlaskConical size={15} className="text-indigo-700" />
+                      <FlaskConical size={15} className="text-indigo-700 dark:text-indigo-300" />
                       Practice Simulation Mode
                     </span>
                     {hwConfig.mode === 'simulation' && (
-                      <CheckCircle2 size={15} className="text-indigo-700" />
+                      <CheckCircle2 size={15} className="text-indigo-700 dark:text-indigo-300" />
                     )}
                   </div>
                   <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
@@ -1045,7 +1097,7 @@ export default function SettingsPage() {
                                 type="button"
                                 variant="outline"
                                 onClick={() => setConfirmRevokeId(dev.id)}
-                                className="h-9 px-3 text-xs font-semibold text-red-700 hover:text-red-800 cursor-pointer"
+                                className="h-9 px-3 text-xs font-semibold text-red-700 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 cursor-pointer"
                               >
                                 Revoke
                               </Button>
@@ -1055,11 +1107,11 @@ export default function SettingsPage() {
                       </div>
 
                       {issued && (
-                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3.5 space-y-2 text-xs">
-                          <p className="font-semibold text-emerald-950">
+                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 dark:border-emerald-800/60 dark:bg-emerald-950/40 p-3.5 space-y-2 text-xs">
+                          <p className="font-semibold text-emerald-950 dark:text-emerald-100">
                             One-Time Key (Shown Once — Download Header Now)
                           </p>
-                          <div className="flex items-center justify-between gap-2 bg-white border border-border rounded-lg px-2.5 py-1.5 font-mono text-[11px]">
+                          <div className="flex items-center justify-between gap-2 bg-background border border-border rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-foreground">
                             <span className="truncate">{issued.oneTimeDeviceKey}</span>
                             <button
                               type="button"
@@ -1252,7 +1304,7 @@ export default function SettingsPage() {
               </div>
 
               {testUploadMsg && (
-                <p className="text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-3.5 py-2">
+                <p className="text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 dark:text-emerald-200 dark:bg-emerald-950/45 dark:border-emerald-800/60 rounded-xl px-3.5 py-2">
                   {testUploadMsg}
                 </p>
               )}
@@ -1261,20 +1313,20 @@ export default function SettingsPage() {
 
           {/* Practice Mode Sandbox (Only shown when Practice Mode is enabled) */}
           {hwConfig.mode === 'simulation' && (
-            <section className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-6 space-y-4">
+            <section className="rounded-2xl border border-indigo-200 bg-indigo-50/50 dark:border-indigo-800/60 dark:bg-indigo-950/30 p-6 space-y-4">
               <div>
-                <h2 className="text-base font-semibold text-indigo-950 flex items-center gap-2">
-                  <FlaskConical size={18} className="text-indigo-700" />
+                <h2 className="text-base font-semibold text-indigo-950 dark:text-indigo-100 flex items-center gap-2">
+                  <FlaskConical size={18} className="text-indigo-700 dark:text-indigo-300" />
                   Practice Mode Test Sliders
                 </h2>
-                <p className="text-xs text-indigo-900 mt-0.5">
+                <p className="text-xs text-indigo-900 dark:text-indigo-200/90 mt-0.5">
                   Test how EDENS AI safety locks and alerts respond to simulated rain, heat, or low tank water.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-                <div className="rounded-xl bg-white p-4 border border-indigo-200 space-y-2">
-                  <div className="flex justify-between font-semibold">
+                <div className="rounded-xl bg-card p-4 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
+                  <div className="flex justify-between font-semibold text-foreground">
                     <span>Simulated Temperature</span>
                     <span className="font-mono tabular-nums">{simTemp.toFixed(1)}°C</span>
                   </div>
@@ -1289,8 +1341,8 @@ export default function SettingsPage() {
                   />
                 </div>
 
-                <div className="rounded-xl bg-white p-4 border border-indigo-200 space-y-2">
-                  <div className="flex justify-between font-semibold">
+                <div className="rounded-xl bg-card p-4 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
+                  <div className="flex justify-between font-semibold text-foreground">
                     <span>Simulated Water Tank</span>
                     <span className="font-mono tabular-nums">{Math.round(simWater)}%</span>
                   </div>
@@ -1305,9 +1357,9 @@ export default function SettingsPage() {
                   />
                 </div>
 
-                <div className="rounded-xl bg-white p-4 border border-indigo-200 flex items-center justify-between gap-2">
+                <div className="rounded-xl bg-card p-4 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-between gap-2">
                   <div>
-                    <p className="font-semibold">Simulated Rain Sensor</p>
+                    <p className="font-semibold text-foreground">Simulated Rain Sensor</p>
                     <p className="text-[11px] text-muted-foreground">Tests roof rain interlock</p>
                   </div>
                   <Button
@@ -1397,10 +1449,10 @@ export default function SettingsPage() {
                         className={cn(
                           'px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0',
                           log.status === 'SUCCESS'
-                            ? 'bg-emerald-50 text-emerald-800'
+                            ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
                             : log.status === 'WARNING'
-                              ? 'bg-amber-50 text-amber-800'
-                              : 'bg-red-50 text-red-800'
+                              ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                              : 'bg-red-50 text-red-800 dark:bg-red-950/50 dark:text-red-300'
                         )}
                       >
                         {log.status}

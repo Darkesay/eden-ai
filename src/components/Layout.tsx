@@ -6,12 +6,15 @@ import {
   Home,
   LogOut,
   MessageSquare,
+  Moon,
   Settings,
-  Sprout
+  Sprout,
+  Sun
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useAuth } from '../lib/auth';
+import { useTheme } from '../lib/theme';
 import { OnboardingTour } from './OnboardingTour';
 import { DataSourceBadge } from './DataSourceBadge';
 import { Button } from './ui/button';
@@ -89,12 +92,8 @@ export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, activeGreenhouse, greenhouses, setActiveGreenhouseId, logout } = useAuth();
+  const { resolvedTheme, toggleTheme } = useTheme();
   const [forceTour, setForceTour] = useState(false);
-
-  useEffect(() => {
-    // Enforce clean light-first agricultural SaaS theme by default
-    document.documentElement.classList.remove('dark');
-  }, []);
 
   useEffect(() => {
     const handleReplay = () => setForceTour(true);
@@ -236,7 +235,7 @@ export default function Layout() {
               onClick={handleLogout}
               title="Sign out"
               aria-label="Sign out"
-              className="h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive hover:border-destructive/30 hover:bg-red-50 transition-colors shrink-0 cursor-pointer"
+              className="h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive hover:border-destructive/30 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors shrink-0 cursor-pointer"
             >
               <LogOut size={16} />
             </button>
@@ -272,11 +271,31 @@ export default function Layout() {
             </div>
           </div>
 
-          {/* Right: Max 1-2 Actions */}
-          <div className="flex items-center gap-2.5 shrink-0">
+          {/* Right: Theme Toggle & Primary Assistant Action */}
+          <div className="flex items-center gap-2 shrink-0">
             <div className="md:hidden">
               <DataSourceBadge showFreshness={false} />
             </div>
+
+            <button
+              type="button"
+              onClick={toggleTheme}
+              title={resolvedTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              aria-label={resolvedTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              className="h-9 md:h-10 px-2.5 sm:px-3 rounded-lg border border-border bg-background hover:bg-muted text-foreground inline-flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              {resolvedTheme === 'dark' ? (
+                <>
+                  <Sun size={15} className="text-amber-400 shrink-0" />
+                  <span className="hidden sm:inline">Light</span>
+                </>
+              ) : (
+                <>
+                  <Moon size={15} className="text-muted-foreground shrink-0" />
+                  <span className="hidden sm:inline">Dark</span>
+                </>
+              )}
+            </button>
 
             {!isOnAssistant && (
               <Button
@@ -294,7 +313,7 @@ export default function Layout() {
               onClick={handleLogout}
               title="Sign out"
               aria-label="Sign out"
-              className="md:hidden h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive shrink-0"
+              className="md:hidden h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive shrink-0 cursor-pointer"
             >
               <LogOut size={16} />
             </button>

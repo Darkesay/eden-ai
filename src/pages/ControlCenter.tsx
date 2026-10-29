@@ -23,6 +23,7 @@ import {
   X
 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
+import { parseApiJsonResponse } from '../lib/api';
 import {
   type EnvironmentalMetricSummary,
   formatRelativeAge,
@@ -68,9 +69,9 @@ function MetricCard({
 
   const statusTone =
     metric.status === 'within'
-      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+      ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60'
       : metric.status === 'low' || metric.status === 'high'
-        ? 'bg-amber-50 text-amber-800 border-amber-200'
+        ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/45 dark:text-amber-300 dark:border-amber-800/60'
         : 'bg-muted text-muted-foreground border-border';
 
   return (
@@ -136,8 +137,8 @@ function MetricCard({
             {markerPct !== null && (
               <div
                 className={cn(
-                  'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full border-2 border-white shadow-xs transition-all duration-200',
-                  metric.status === 'within' ? 'bg-primary' : 'bg-amber-600'
+                  'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full border-2 border-white dark:border-card shadow-xs transition-all duration-200',
+                  metric.status === 'within' ? 'bg-primary' : 'bg-amber-600 dark:bg-amber-400'
                 )}
                 style={{ left: `${markerPct}%` }}
               />
@@ -176,8 +177,9 @@ export default function ControlCenter() {
 
     if (activeId) {
       apiFetch(`/api/greenhouses/${activeId}`)
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
+        .then((res) => parseApiJsonResponse<any>(res))
+        .then((parsed) => {
+          const data = parsed.ok ? parsed.data : null;
           if (cancelled || !data) return;
           const camAnalysis = data.latestCamera?.analysis;
           if (camAnalysis && camAnalysis.healthStatus) {
@@ -246,10 +248,11 @@ export default function ControlCenter() {
       method: 'POST',
       body: JSON.stringify({ qrPayload: rawCodeOrUri })
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'QR code could not be verified.');
+    const parsed = await parseApiJsonResponse<any>(res);
+    if (!parsed.ok || !parsed.data?.success) {
+      throw new Error(!parsed.ok ? parsed.message : parsed.data?.message || 'QR code could not be verified.');
     }
+    const data = parsed.data;
     setScannerOpen(false);
     await refreshSession();
     if (data.greenhouse?.id) {
@@ -297,15 +300,15 @@ export default function ControlCenter() {
       {ghState.provenance !== 'REAL_HARDWARE' && <DataSourceBadge variant="banner" />}
 
       {qrBanner && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 flex items-center justify-between gap-3">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200 px-4 py-3 text-sm flex items-center justify-between gap-3">
           <span className="flex items-center gap-2 font-medium">
-            <CheckCircle2 size={17} className="text-emerald-700 shrink-0" />
+            <CheckCircle2 size={17} className="text-emerald-700 dark:text-emerald-400 shrink-0" />
             {qrBanner}
           </span>
           <button
             type="button"
             onClick={() => setQrBanner(null)}
-            className="text-emerald-800 hover:text-emerald-950 cursor-pointer"
+            className="text-emerald-800 hover:text-emerald-950 dark:text-emerald-300 dark:hover:text-emerald-100 cursor-pointer"
             aria-label="Dismiss message"
           >
             <X size={16} />
@@ -322,11 +325,11 @@ export default function ControlCenter() {
                 className={cn(
                   'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border whitespace-nowrap shrink-0',
                   connectionIsGood
-                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60'
                     : connectionIsWarn
-                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                      ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/45 dark:text-amber-300 dark:border-amber-800/60'
                       : ghState.overallConnectionState === 'SIMULATION'
-                        ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                        ? 'bg-indigo-50 text-indigo-800 border-indigo-200 dark:bg-indigo-950/45 dark:text-indigo-300 dark:border-indigo-800/60'
                         : 'bg-muted text-muted-foreground border-border'
                 )}
               >
@@ -400,7 +403,7 @@ export default function ControlCenter() {
           </div>
           <div className="flex items-center justify-between sm:justify-start sm:gap-2">
             <span className="text-muted-foreground flex items-center gap-1">
-              <Sun size={13} className="text-amber-600" /> Sunlight:
+              <Sun size={13} className="text-amber-600 dark:text-amber-400" /> Sunlight:
             </span>
             <span className="font-mono tabular-nums font-semibold text-foreground">
               {ghState.secondaryReadings.sunlight !== null
@@ -482,11 +485,11 @@ export default function ControlCenter() {
               {Object.entries(pendingActions).map(([id, act]: [string, any]) => (
                 <div
                   key={id}
-                  className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  className="rounded-xl border border-amber-200 bg-amber-50/70 dark:border-amber-800/60 dark:bg-amber-950/40 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                 >
                   <div className="space-y-1">
-                    <p className="text-sm font-semibold text-amber-950">{act.action}</p>
-                    <p className="text-xs text-amber-900">{act.reason}</p>
+                    <p className="text-sm font-semibold text-amber-950 dark:text-amber-100">{act.action}</p>
+                    <p className="text-xs text-amber-900 dark:text-amber-200/90">{act.reason}</p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Button
@@ -515,7 +518,7 @@ export default function ControlCenter() {
           {ghState.alerts.filter((a) => !a.id.startsWith('pending-')).length === 0 &&
           Object.keys(pendingActions).length === 0 ? (
             <div className="rounded-xl bg-muted/50 p-6 text-center space-y-2">
-              <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-primary flex items-center justify-center mx-auto">
+              <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/45 dark:border-emerald-800/60 text-primary flex items-center justify-center mx-auto">
                 <ShieldCheck size={20} />
               </div>
               <p className="text-sm font-semibold text-foreground">
@@ -540,9 +543,9 @@ export default function ControlCenter() {
                       : Info;
                   const iconColor =
                     alert.severity === 'critical'
-                      ? 'text-red-600 bg-red-50 border-red-200'
+                      ? 'text-red-600 bg-red-50 border-red-200 dark:text-red-300 dark:bg-red-950/45 dark:border-red-800/60'
                       : alert.severity === 'warning'
-                        ? 'text-amber-700 bg-amber-50 border-amber-200'
+                        ? 'text-amber-700 bg-amber-50 border-amber-200 dark:text-amber-300 dark:bg-amber-950/45 dark:border-amber-800/60'
                         : 'text-primary bg-accent border-primary/20';
 
                   return (

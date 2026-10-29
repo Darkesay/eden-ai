@@ -18,6 +18,7 @@ import {
   Wrench
 } from 'lucide-react';
 import { apiFetch, type GreenhouseSummary, useAuth } from '../lib/auth';
+import { parseApiJsonResponse } from '../lib/api';
 import { formatExplicitDeviceState, formatRelativeAge } from '../lib/greenhouseState';
 import { QrCodeCard, QrScannerModal } from '../components/QrScannerModal';
 import { Button } from '../components/ui/button';
@@ -29,17 +30,17 @@ function overallStatusBadge(status: GreenhouseSummary['overallStatus']) {
     case 'ONLINE':
       return {
         label: 'Connected',
-        cls: 'bg-emerald-50 text-emerald-800 border-emerald-200'
+        cls: 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60'
       };
     case 'PARTIAL':
       return {
         label: 'Partial Signal',
-        cls: 'bg-amber-50 text-amber-800 border-amber-200'
+        cls: 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/45 dark:text-amber-300 dark:border-amber-800/60'
       };
     case 'STALE':
       return {
         label: 'Delayed Signal',
-        cls: 'bg-amber-50 text-amber-800 border-amber-200'
+        cls: 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/45 dark:text-amber-300 dark:border-amber-800/60'
       };
     case 'SETUP_INCOMPLETE':
       return {
@@ -49,7 +50,7 @@ function overallStatusBadge(status: GreenhouseSummary['overallStatus']) {
     default:
       return {
         label: 'Offline',
-        cls: 'bg-red-50 text-red-800 border-red-200'
+        cls: 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/45 dark:text-red-300 dark:border-red-800/60'
       };
   }
 }
@@ -93,10 +94,11 @@ export default function Greenhouses() {
       method: 'POST',
       body: JSON.stringify({ qrPayload: rawCodeOrUri })
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'QR code verification failed.');
+    const parsed = await parseApiJsonResponse<any>(res);
+    if (!parsed.ok || !parsed.data?.success) {
+      throw new Error(!parsed.ok ? parsed.message : parsed.data?.message || 'QR code verification failed.');
     }
+    const data = parsed.data;
     setScannerOpen(false);
     await refreshSession();
     if (data.greenhouse?.id) {
@@ -118,11 +120,15 @@ export default function Greenhouses() {
         method: 'POST',
         body: JSON.stringify({ kitSerial, ttlMinutes: 60 })
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setFeedback({ type: 'err', text: data.message || 'Could not generate kit QR code.' });
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok || !parsed.data?.success) {
+        setFeedback({
+          type: 'err',
+          text: !parsed.ok ? parsed.message : parsed.data?.message || 'Could not generate kit QR code.'
+        });
         return;
       }
+      const data = parsed.data;
       setGeneratedKitQr({
         qrDataUrl: data.qrDataUrl,
         enrollmentCode: data.enrollmentCode,
@@ -183,8 +189,8 @@ export default function Greenhouses() {
           className={cn(
             'rounded-xl border px-4 py-3 text-sm',
             feedback.type === 'ok'
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-              : 'border-red-200 bg-red-50 text-red-800'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200'
+              : 'border-red-200 bg-red-50 text-red-800 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-200'
           )}
         >
           {feedback.text}

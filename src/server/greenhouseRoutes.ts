@@ -15,7 +15,8 @@ import {
   type GreenhouseMemberRole,
   SlidingWindowRateLimiter,
   computeExplicitDeviceState,
-  hasDisallowedQuerySecret
+  hasDisallowedQuerySecret,
+  redactSecretsFromText
 } from './telemetryContract.ts';
 
 const SESSION_COOKIE_NAME = 'edens_session';
@@ -53,28 +54,43 @@ export function extractSessionToken(req: express.Request): string | null {
   return null;
 }
 
+function isSecureHttpsRequest(req: express.Request): boolean {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  const forwardedHeader = String(req.headers['forwarded'] || '').toLowerCase();
+  const forwardedSsl = String(req.headers['x-forwarded-ssl'] || '').trim().toLowerCase();
+  const originHeader = String(req.headers['origin'] || '').trim().toLowerCase();
+  const refererHeader = String(req.headers['referer'] || '').trim().toLowerCase();
+
+  return (
+    Boolean(req.secure) ||
+    forwardedProto === 'https' ||
+    forwardedSsl === 'on' ||
+    forwardedHeader.includes('proto=https') ||
+    originHeader.startsWith('https://') ||
+    refererHeader.startsWith('https://') ||
+    Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.K_SERVICE)
+  );
+}
+
 function setSessionCookie(req: express.Request, res: express.Response, token: string, expiresAt: string): void {
-  const isSecure =
-    req.secure ||
-    req.headers['x-forwarded-proto'] === 'https' ||
-    Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+  const isSecure = isSecureHttpsRequest(req);
   const maxAgeSec = Math.max(60, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
-  const sameSite = isSecure ? 'None; Secure' : 'Lax';
+  const sameSiteAndFlags = isSecure ? 'None; Secure; Partitioned' : 'Lax';
   res.setHeader(
     'Set-Cookie',
-    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; HttpOnly; Path=/; Max-Age=${maxAgeSec}; SameSite=${sameSite}`
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; HttpOnly; Path=/; Max-Age=${maxAgeSec}; SameSite=${sameSiteAndFlags}`
   );
 }
 
 function clearSessionCookie(req: express.Request, res: express.Response): void {
-  const isSecure =
-    req.secure ||
-    req.headers['x-forwarded-proto'] === 'https' ||
-    Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
-  const sameSite = isSecure ? 'None; Secure' : 'Lax';
+  const isSecure = isSecureHttpsRequest(req);
+  const sameSiteAndFlags = isSecure ? 'None; Secure; Partitioned' : 'Lax';
   res.setHeader(
     'Set-Cookie',
-    `${SESSION_COOKIE_NAME}=; HttpOnly; Path=/; Max-Age=0; SameSite=${sameSite}`
+    `${SESSION_COOKIE_NAME}=; HttpOnly; Path=/; Max-Age=0; SameSite=${sameSiteAndFlags}`
   );
 }
 
@@ -313,26 +329,69 @@ export function registerSelfServiceGreenhouseRoutes(
   // AUTHENTICATION ROUTES
   // ------------------------------------------------------------------
 
+  const isCookieOnlyBrowserRequest = (req: express.Request): boolean =>
+    String(req.headers['x-edens-auth-mode'] || '').trim().toLowerCase() === 'cookie';
+
+  const logAuthDiagnostic = (
+    action: 'register' | 'login' | 'logout',
+    statusCode: number,
+    outcome: string,
+    req: express.Request,
+    extra: Record<string, string | number | boolean | null | undefined> = {}
+  ): void => {
+    const safeOrigin = redactSecretsFromText(String(req.headers.origin || req.headers.host || 'local'));
+    const metaPairs = Object.entries(extra)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => `${k}=${redactSecretsFromText(String(v))}`)
+      .join(' ');
+    console.info(
+      `[EDENS Auth] ${action.toUpperCase()} status=${statusCode} outcome=${outcome} ip=${extractClientIp(req)} origin=${safeOrigin}${metaPairs ? ` ${metaPairs}` : ''}`
+    );
+  };
+
   app.post('/api/auth/register', async (req, res) => {
     await platformDb.init();
     const ip = extractClientIp(req);
     const rate = authLimiter.check(`reg:${ip}`);
     if (!rate.allowed) {
+      res.setHeader('Retry-After', String(rate.retryAfterSeconds));
+      logAuthDiagnostic('register', 429, 'RATE_LIMITED', req, {
+        retryAfterSeconds: rate.retryAfterSeconds
+      });
       return res.status(429).json({
         error: 'RATE_LIMITED',
-        message: `Too many registration attempts. Retry in ${rate.retryAfterSeconds}s.`
+        retryAfterSeconds: rate.retryAfterSeconds,
+        message: `Too many registration attempts. Please wait ${rate.retryAfterSeconds} seconds and try again.`
+      });
+    }
+
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      logAuthDiagnostic('register', 400, 'INVALID_REQUEST_BODY', req);
+      return res.status(400).json({
+        error: 'INVALID_REQUEST_BODY',
+        message: 'Expected a JSON registration payload with displayName, email, and password.'
+      });
+    }
+
+    const rawPassword = typeof req.body.password === 'string' ? req.body.password : '';
+    if (rawPassword.length > 256) {
+      logAuthDiagnostic('register', 400, 'PASSWORD_TOO_LONG', req);
+      return res.status(400).json({
+        error: 'INVALID_PASSWORD_LENGTH',
+        message: 'Password must be between 8 and 256 characters.'
       });
     }
 
     const result = platformDb.registerUser({
       email: req.body?.email,
-      password: req.body?.password,
+      password: rawPassword,
       displayName: req.body?.displayName,
       userAgent: req.headers['user-agent'],
       ipAddress: ip
     });
 
     if ('errorCode' in result) {
+      logAuthDiagnostic('register', result.statusCode, result.errorCode, req);
       return res.status(result.statusCode).json({
         error: result.errorCode,
         message: result.message
@@ -340,6 +399,20 @@ export function registerSelfServiceGreenhouseRoutes(
     }
 
     setSessionCookie(req, res, result.sessionToken, result.expiresAt);
+    const cookieOnly = isCookieOnlyBrowserRequest(req);
+    logAuthDiagnostic('register', 201, 'REGISTERED', req, {
+      userId: result.user.id,
+      cookieOnly
+    });
+
+    if (cookieOnly) {
+      return res.status(201).json({
+        success: true,
+        user: result.user,
+        expiresAt: result.expiresAt
+      });
+    }
+
     return res.status(201).json({
       success: true,
       user: result.user,
@@ -353,20 +426,44 @@ export function registerSelfServiceGreenhouseRoutes(
     const ip = extractClientIp(req);
     const rate = authLimiter.check(`login:${ip}`);
     if (!rate.allowed) {
+      res.setHeader('Retry-After', String(rate.retryAfterSeconds));
+      logAuthDiagnostic('login', 429, 'RATE_LIMITED', req, {
+        retryAfterSeconds: rate.retryAfterSeconds
+      });
       return res.status(429).json({
         error: 'RATE_LIMITED',
-        message: `Too many sign-in attempts. Retry in ${rate.retryAfterSeconds}s.`
+        retryAfterSeconds: rate.retryAfterSeconds,
+        message: `Too many sign-in attempts. Please wait ${rate.retryAfterSeconds} seconds and try again.`
+      });
+    }
+
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      logAuthDiagnostic('login', 400, 'INVALID_REQUEST_BODY', req);
+      return res.status(400).json({
+        error: 'INVALID_REQUEST_BODY',
+        message: 'Expected a JSON sign-in payload with email and password.'
+      });
+    }
+
+    const emailInput = typeof req.body.email === 'string' ? req.body.email.trim() : '';
+    const passwordInput = typeof req.body.password === 'string' ? req.body.password : '';
+    if (!emailInput || !passwordInput) {
+      logAuthDiagnostic('login', 400, 'MISSING_CREDENTIALS', req);
+      return res.status(400).json({
+        error: 'MISSING_CREDENTIALS',
+        message: 'Enter both your email address and password.'
       });
     }
 
     const result = platformDb.authenticateUser({
-      email: req.body?.email,
-      password: req.body?.password,
+      email: emailInput,
+      password: passwordInput,
       userAgent: req.headers['user-agent'],
       ipAddress: ip
     });
 
     if ('errorCode' in result) {
+      logAuthDiagnostic('login', result.statusCode, result.errorCode, req);
       return res.status(result.statusCode).json({
         error: result.errorCode,
         message: result.message
@@ -374,6 +471,20 @@ export function registerSelfServiceGreenhouseRoutes(
     }
 
     setSessionCookie(req, res, result.sessionToken, result.expiresAt);
+    const cookieOnly = isCookieOnlyBrowserRequest(req);
+    logAuthDiagnostic('login', 200, 'AUTHENTICATED', req, {
+      userId: result.user.id,
+      cookieOnly
+    });
+
+    if (cookieOnly) {
+      return res.status(200).json({
+        success: true,
+        user: result.user,
+        expiresAt: result.expiresAt
+      });
+    }
+
     return res.status(200).json({
       success: true,
       user: result.user,
@@ -387,7 +498,29 @@ export function registerSelfServiceGreenhouseRoutes(
     const token = extractSessionToken(req);
     platformDb.revokeSession(token);
     clearSessionCookie(req, res);
+    logAuthDiagnostic('logout', 200, 'SIGNED_OUT', req);
     return res.json({ success: true });
+  });
+
+  app.get('/api/auth/session', async (req, res) => {
+    await platformDb.init();
+    const hasRegisteredUsers = platformDb.hasAnyUsers();
+    const user = getAuthUser(req);
+    if (!user) {
+      return res.status(200).json({
+        authenticated: false,
+        hasRegisteredUsers
+      });
+    }
+    const greenhouses = platformDb
+      .listGreenhousesForUser(user.id)
+      .map((gh) => buildGreenhouseSummary(gh, platformDb, cameraRegistry));
+    return res.status(200).json({
+      authenticated: true,
+      hasRegisteredUsers: true,
+      user,
+      greenhouses
+    });
   });
 
   app.get('/api/auth/me', async (req, res) => {

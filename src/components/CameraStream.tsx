@@ -101,9 +101,9 @@ export function CameraStream({
             className={cn(
               'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-medium',
               connectionBadge === 'CONNECTED'
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/45 dark:border-emerald-800/60 dark:text-emerald-300'
                 : connectionBadge === 'RECONNECTING'
-                  ? 'bg-amber-50 border-amber-200 text-amber-800'
+                  ? 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/45 dark:border-amber-800/60 dark:text-amber-300'
                   : 'bg-muted border-border text-muted-foreground'
             )}
           >
@@ -126,8 +126,8 @@ export function CameraStream({
               className={cn(
                 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-medium',
                 freshnessBadge === 'FRESH'
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                  : 'bg-amber-50 border-amber-200 text-amber-800'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/45 dark:border-emerald-800/60 dark:text-emerald-300'
+                  : 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/45 dark:border-amber-800/60 dark:text-amber-300'
               )}
             >
               {freshnessBadge === 'FRESH' ? <FileCheck size={13} /> : <AlertTriangle size={13} />}
@@ -149,7 +149,7 @@ export function CameraStream({
       </div>
 
       {/* Camera Frame */}
-      <div className="w-full aspect-video rounded-xl overflow-hidden relative border border-border bg-stone-100">
+      <div className="w-full aspect-video rounded-xl overflow-hidden relative border border-border bg-stone-100 dark:bg-stone-950">
         {liveStreamCandidateUrl ? (
           <img
             src={liveStreamCandidateUrl}
@@ -194,8 +194,8 @@ export function CameraStream({
       </div>
 
       {latestFrame && !latestFrame.isFresh && !camera.isLiveStreamVerified && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-amber-900 text-xs flex items-start gap-2">
-          <AlertTriangle size={15} className="text-amber-700 shrink-0 mt-0.5" />
+        <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/45 dark:text-amber-200 px-3.5 py-2.5 text-xs flex items-start gap-2">
+          <AlertTriangle size={15} className="text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
           <span>
             This photograph was captured on{' '}
             <strong className="font-mono tabular-nums">
@@ -207,14 +207,14 @@ export function CameraStream({
       )}
 
       {uploadSuccessMessage && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-emerald-900 text-xs font-medium flex items-center gap-2">
-          <Check size={14} className="text-emerald-700" /> {uploadSuccessMessage}
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200 px-3.5 py-2 text-xs font-medium flex items-center gap-2">
+          <Check size={14} className="text-emerald-700 dark:text-emerald-400" /> {uploadSuccessMessage}
         </div>
       )}
 
       {uploadError && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-red-800 text-xs font-medium flex items-center gap-2">
-          <AlertTriangle size={14} className="text-red-700" /> {uploadError}
+        <div className="rounded-xl border border-red-200 bg-red-50 text-red-800 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-200 px-3.5 py-2 text-xs font-medium flex items-center gap-2">
+          <AlertTriangle size={14} className="text-red-700 dark:text-red-400" /> {uploadError}
         </div>
       )}
 

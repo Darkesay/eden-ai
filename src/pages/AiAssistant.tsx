@@ -55,7 +55,7 @@ function formatMessageText(raw: string): React.ReactNode {
         key={i}
         className={cn(
           'leading-relaxed',
-          isBullet && 'pl-3 border-l-2 border-primary/30 py-0.5 my-1'
+          isBullet && 'pl-3 py-0.5 my-0.5'
         )}
       >
         {cleaned}
@@ -552,12 +552,12 @@ export default function AiAssistant() {
       </div>
 
       {micHintBanner && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900 flex items-center justify-between gap-2">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200 px-4 py-3 text-xs flex items-center justify-between gap-2">
           <span className="font-medium">{micHintBanner}</span>
           <button
             type="button"
             onClick={() => setMicHintBanner(null)}
-            className="text-emerald-800 cursor-pointer"
+            className="text-emerald-800 dark:text-emerald-300 cursor-pointer"
           >
             <X size={15} />
           </button>
@@ -565,15 +565,15 @@ export default function AiAssistant() {
       )}
 
       {errorBanner && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-900 flex items-start justify-between gap-3">
+        <div className="rounded-xl border border-red-200 bg-red-50 text-red-900 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-200 px-4 py-3 text-xs flex items-start justify-between gap-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle size={15} className="text-red-700 shrink-0 mt-0.5" />
+            <AlertTriangle size={15} className="text-red-700 dark:text-red-400 shrink-0 mt-0.5" />
             <span>{errorBanner}</span>
           </div>
           <button
             type="button"
             onClick={() => setErrorBanner(null)}
-            className="text-red-800 cursor-pointer"
+            className="text-red-800 dark:text-red-300 cursor-pointer"
           >
             <X size={15} />
           </button>
@@ -709,11 +709,11 @@ export default function AiAssistant() {
 
           {/* Active Voice Recording Bar */}
           {isRecording ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5 text-sm font-semibold text-red-900">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse" />
+            <div className="rounded-xl border border-red-200 bg-red-50 dark:border-red-800/60 dark:bg-red-950/45 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 text-sm font-semibold text-red-900 dark:text-red-200">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-600 dark:bg-red-400 animate-pulse" />
                 <span>Speaking in {selectedLang.name}...</span>
-                <span className="font-mono tabular-nums text-xs bg-white px-2 py-0.5 rounded border border-red-200">
+                <span className="font-mono tabular-nums text-xs bg-card text-foreground px-2 py-0.5 rounded border border-red-200 dark:border-red-800/60">
                   {Math.floor(recordingSeconds / 60)}:
                   {String(recordingSeconds % 60).padStart(2, '0')}
                 </span>
@@ -723,7 +723,7 @@ export default function AiAssistant() {
                   type="button"
                   variant="outline"
                   onClick={handleCancelRecording}
-                  className="h-10 px-3.5 text-xs font-semibold bg-white cursor-pointer"
+                  className="h-10 px-3.5 text-xs font-semibold bg-card cursor-pointer"
                 >
                   Cancel
                 </Button>

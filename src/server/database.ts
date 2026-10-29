@@ -256,7 +256,7 @@ CREATE TABLE IF NOT EXISTS ai_observations (
 `;
 
 export class PlatformDatabase {
-  private readonly dbFilePath: string;
+  private dbFilePath: string;
   private readonly inMemoryOnly: boolean;
   private readonly sessionTtlHours: number;
   private db: SqlJsDatabase | null = null;
@@ -264,13 +264,17 @@ export class PlatformDatabase {
 
   constructor(options: PlatformDatabaseOptions = {}) {
     this.inMemoryOnly = Boolean(options.inMemoryOnly);
-    this.dbFilePath =
-      options.dbFilePath ||
-      process.env.DATABASE_PATH ||
-      path.join(process.cwd(), 'data', 'edens_platform.sqlite');
+    const defaultDbPath = path.join(process.cwd(), 'data', 'edens_platform.sqlite');
+    const rawEnvDbPath = (process.env.DATABASE_PATH || '').trim();
+    const isValidEnvDbPath =
+      rawEnvDbPath.length > 0 &&
+      !/^(secret value|replace_with|undefined|null)$/i.test(rawEnvDbPath) &&
+      !rawEnvDbPath.startsWith('REPLACE_WITH');
+    this.dbFilePath = options.dbFilePath || (isValidEnvDbPath ? rawEnvDbPath : defaultDbPath);
+
+    const parsedTtl = parseInt(process.env.SESSION_TTL_HOURS || '168', 10);
     this.sessionTtlHours =
-      options.sessionTtlHours ??
-      Math.max(1, parseInt(process.env.SESSION_TTL_HOURS || '168', 10));
+      options.sessionTtlHours ?? (Number.isFinite(parsedTtl) && parsedTtl >= 1 ? parsedTtl : 168);
   }
 
   public isInitialized(): boolean {
@@ -402,14 +406,26 @@ export class PlatformDatabase {
 
   public persistToDisk(): void {
     if (this.inMemoryOnly || !this.db) return;
-    try {
-      const dir = path.dirname(this.dbFilePath);
+    const writeSnapshot = (targetPath: string) => {
+      const dir = path.dirname(targetPath);
       fs.mkdirSync(dir, { recursive: true });
-      const data = this.db.export();
-      const tmpPath = `${this.dbFilePath}.sqlite-tmp`;
+      const data = this.db!.export();
+      const tmpPath = `${targetPath}.sqlite-tmp`;
       fs.writeFileSync(tmpPath, Buffer.from(data));
-      fs.renameSync(tmpPath, this.dbFilePath);
+      fs.renameSync(tmpPath, targetPath);
+    };
+
+    try {
+      writeSnapshot(this.dbFilePath);
     } catch (err: any) {
+      const fallbackPath = path.join(process.cwd(), 'data', 'edens_platform.sqlite');
+      if (this.dbFilePath !== fallbackPath) {
+        try {
+          writeSnapshot(fallbackPath);
+          this.dbFilePath = fallbackPath;
+          return;
+        } catch {}
+      }
       console.error('SQLite persistence warning:', err?.message || err);
     }
   }
@@ -577,6 +593,11 @@ export class PlatformDatabase {
   // ------------------------------------------------------------------
   // USER REGISTRATION, LOGIN & SESSION MANAGEMENT
   // ------------------------------------------------------------------
+
+  public hasAnyUsers(): boolean {
+    const row = this.queryOne<{ id: string }>('SELECT id FROM users LIMIT 1');
+    return Boolean(row?.id);
+  }
 
   public registerUser(params: {
     email: string;

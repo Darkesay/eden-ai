@@ -11,6 +11,21 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('edens_theme');
+          var mode = stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
+          var isDark =
+            mode === 'dark' ||
+            (mode === 'system' &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', isDark);
+          document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

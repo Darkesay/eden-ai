@@ -13,4 +13,6 @@ data/
 **/camera_secrets.h
 **/secrets.h
 **/controller_secrets.h
+public/assets/aistudio/
+
 

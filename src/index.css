@@ -91,11 +91,11 @@
   --popover: #121A15;
   --popover-foreground: #F1F5F2;
   --primary: #22C55E;
-  --primary-foreground: #07170C;
+  --primary-foreground: #05180B;
   --secondary: #1A261E;
   --secondary-foreground: #E2ECE5;
   --muted: #18221B;
-  --muted-foreground: #9BB0A3;
+  --muted-foreground: #A3B8AB;
   --accent: #1A2B20;
   --accent-foreground: #86EFAC;
   --destructive: #EF4444;
@@ -106,11 +106,16 @@
   --sidebar: #101712;
   --sidebar-foreground: #F1F5F2;
   --sidebar-primary: #22C55E;
-  --sidebar-primary-foreground: #07170C;
+  --sidebar-primary-foreground: #05180B;
   --sidebar-accent: #1A261E;
   --sidebar-accent-foreground: #86EFAC;
   --sidebar-border: #233128;
   --sidebar-ring: #22C55E;
+  --chart-1: #22C55E;
+  --chart-2: #38BDF8;
+  --chart-3: #FBBF24;
+  --chart-4: #818CF8;
+  --chart-5: #2DD4BF;
 }
 
 @layer base {
@@ -127,9 +132,18 @@
     color-scheme: dark;
   }
 
+  html.dark body {
+    letter-spacing: 0.005em;
+  }
+
   body {
     @apply bg-background text-foreground leading-normal;
     margin: 0;
+  }
+
+  select option {
+    background-color: var(--card);
+    color: var(--foreground);
   }
 }
 
