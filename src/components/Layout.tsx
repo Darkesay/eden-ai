@@ -1,31 +1,42 @@
 import React, { useEffect, useState } from 'react';
-import { Link, Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { Link, Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useMqtt } from '../lib/mqtt';
 import { useAuth } from '../lib/auth';
+import { useTheme } from '../lib/theme';
 import {
+  Leaf,
+  Home,
+  Sprout,
+  MessageSquare,
+  Camera,
+  Settings,
+  PanelLeftClose,
+  PanelLeftOpen,
+  LogOut,
   Sun,
   Moon,
-  LogOut,
-  LayoutDashboard,
-  Brain,
-  Cpu,
-  Sliders,
-  Sprout,
-  Leaf,
-  PanelLeftClose,
-  PanelLeftOpen
+  ChevronRight
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { OnboardingTour } from './OnboardingTour';
 import { DataSourceBadge } from './DataSourceBadge';
+import { Button } from './ui/button';
 
-const NAV_ITEMS = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/greenhouses', label: 'Greenhouses', icon: Sprout, end: false },
-  { to: '/ai-lab', label: 'AI Lab', icon: Brain, end: false },
-  { to: '/devices', label: 'Devices', icon: Cpu, end: false },
-  { to: '/hardware', label: 'Hardware', icon: Sliders, end: false }
-] as const;
+interface PrimaryNavItem {
+  to: string;
+  label: string;
+  shortLabel: string;
+  icon: React.ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
+  end?: boolean;
+}
+
+const NAV_ITEMS: PrimaryNavItem[] = [
+  { to: '/', label: 'Home', shortLabel: 'Home', icon: Home, end: true },
+  { to: '/greenhouses', label: 'My Greenhouse', shortLabel: 'Greenhouse', icon: Sprout },
+  { to: '/assistant', label: 'AI Assistant', shortLabel: 'Assistant', icon: MessageSquare },
+  { to: '/vision', label: 'Plant Vision', shortLabel: 'Vision', icon: Camera },
+  { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings }
+];
 
 const MQTT_LABEL: Record<string, string> = {
   connected: 'Online',
@@ -40,41 +51,46 @@ function StatusDot({ className }: { className?: string }) {
   return <span className={cn('size-1.5 rounded-full', className)} aria-hidden="true" />;
 }
 
+function getBreadcrumbLabel(pathname: string, activeGhName?: string): { section: string; detail?: string } {
+  if (pathname === '/') return { section: 'Home', detail: 'Overview' };
+  if (pathname.startsWith('/greenhouses/setup') || pathname.endsWith('/setup')) {
+    return { section: 'My Greenhouse', detail: 'Guided setup' };
+  }
+  if (pathname.startsWith('/greenhouses/')) {
+    return { section: 'My Greenhouse', detail: activeGhName || 'Greenhouse monitor' };
+  }
+  if (pathname.startsWith('/greenhouses')) return { section: 'My Greenhouse' };
+  if (pathname.startsWith('/assistant') || pathname.startsWith('/ai-lab')) {
+    return { section: 'AI Assistant', detail: 'Crop & climate advisor' };
+  }
+  if (pathname.startsWith('/vision')) return { section: 'Plant Vision', detail: 'Leaf & camera inspection' };
+  if (pathname.startsWith('/settings') || pathname.startsWith('/hardware') || pathname.startsWith('/devices')) {
+    return { section: 'Settings' };
+  }
+  return { section: 'Home' };
+}
+
 export default function Layout() {
-  const [isDark, setIsDark] = useState(true);
   const [navCollapsed, setNavCollapsed] = useState(
     () => typeof window !== 'undefined' && localStorage.getItem(SIDEBAR_KEY) === '1'
   );
   const navigate = useNavigate();
+  const location = useLocation();
   const { status } = useMqtt();
-  const { user, logout } = useAuth();
+  const { user, logout, activeGreenhouse, greenhouses, setActiveGreenhouseId } = useAuth();
+  const { resolvedTheme, toggleTheme } = useTheme();
   const [forceTour, setForceTour] = useState(false);
 
-  // Listen for custom event to trigger tour from anywhere
+  // Listen for custom events to trigger the tour from anywhere
   useEffect(() => {
     const handleReplay = () => setForceTour(true);
     window.addEventListener('replay-tour', handleReplay);
-    return () => window.removeEventListener('replay-tour', handleReplay);
+    window.addEventListener('edens-open-tour', handleReplay);
+    return () => {
+      window.removeEventListener('replay-tour', handleReplay);
+      window.removeEventListener('edens-open-tour', handleReplay);
+    };
   }, []);
-
-  useEffect(() => {
-    // initialize theme
-    const stored = localStorage.getItem('botanix_theme');
-    if (stored === 'light') {
-      setIsDark(false);
-      document.documentElement.classList.remove('dark');
-    } else {
-      setIsDark(true);
-      document.documentElement.classList.add('dark');
-    }
-  }, []);
-
-  const toggleTheme = () => {
-    const next = !isDark;
-    setIsDark(next);
-    document.documentElement.classList.toggle('dark', next);
-    localStorage.setItem('botanix_theme', next ? 'dark' : 'light');
-  };
 
   const toggleNav = () => {
     setNavCollapsed((c) => {
@@ -93,13 +109,10 @@ export default function Layout() {
   const statusDotClass =
     status === 'connected'
       ? 'bg-success'
-      : status === 'connecting'
+      : status === 'connecting' || status === 'demo'
         ? 'bg-warning'
-        : status === 'demo'
-          ? 'bg-warning'
-          : 'bg-destructive';
+        : 'bg-destructive';
 
-  // Avatar initials for the signed-in account shown in the sidebar footer
   const initials = user
     ? (user.displayName
         .split(' ')
@@ -109,6 +122,9 @@ export default function Layout() {
         .join('')
         .toUpperCase() || user.email[0]?.toUpperCase() || '?')
     : '';
+
+  const breadcrumb = getBreadcrumbLabel(location.pathname, activeGreenhouse?.name);
+  const isOnAssistant = location.pathname.startsWith('/assistant') || location.pathname.startsWith('/ai-lab');
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -131,7 +147,7 @@ export default function Layout() {
           <Link
             to="/"
             className="flex items-center gap-2.5"
-            title={navCollapsed ? 'EDENS AI — Dashboard' : undefined}
+            title={navCollapsed ? 'EDENS AI — Home' : undefined}
           >
             <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <Leaf size={17} aria-hidden="true" />
@@ -141,6 +157,63 @@ export default function Layout() {
             )}
           </Link>
         </div>
+
+        {/* Active greenhouse context — expanded only */}
+        {!navCollapsed && (
+          <div className="shrink-0 border-b border-border px-3 py-3">
+            {greenhouses.length > 1 ? (
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="sidebar-gh-select"
+                  className="block px-1 text-[11px] font-medium text-muted-foreground"
+                >
+                  Active greenhouse
+                </label>
+                <select
+                  id="sidebar-gh-select"
+                  value={activeGreenhouse?.id || ''}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setActiveGreenhouseId(id);
+                    if (location.pathname.startsWith('/greenhouses/') && !location.pathname.endsWith('/setup')) {
+                      navigate(`/greenhouses/${id}`);
+                    }
+                  }}
+                  className="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-xs font-medium text-foreground focus:border-ring focus:outline-none focus:ring-3 focus:ring-ring/50"
+                >
+                  {greenhouses.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name} ({g.cropType})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : activeGreenhouse ? (
+              <Link
+                to={`/greenhouses/${activeGreenhouse.id}`}
+                className="block rounded-lg border border-border bg-muted/40 px-3 py-2 transition-colors hover:bg-muted/70"
+              >
+                <div className="text-[11px] text-muted-foreground">Active greenhouse</div>
+                <div className="mt-0.5 truncate text-sm font-medium text-foreground">
+                  {activeGreenhouse.name}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {activeGreenhouse.cropType} · {activeGreenhouse.locationLabel}
+                </div>
+              </Link>
+            ) : (
+              <Link
+                to="/greenhouses/setup"
+                className="block rounded-lg border border-dashed border-primary/40 bg-accent/60 px-3 py-2 transition-colors hover:bg-accent"
+              >
+                <div className="text-xs font-medium text-accent-foreground">Set up your greenhouse</div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                  Connect sensors &amp; camera in a few steps
+                </div>
+              </Link>
+            )}
+          </div>
+        )}
 
         {/* Destinations */}
         <nav aria-label="Main" className="custom-scrollbar flex-1 overflow-y-auto p-2">
@@ -169,8 +242,14 @@ export default function Layout() {
           </ul>
         </nav>
 
-        {/* Footer — account context, collapse control, and sign out pinned to the rail bottom */}
+        {/* Footer — data source, account, collapse, and sign out pinned to the bottom */}
         <div className="shrink-0 border-t border-border p-2">
+          {!navCollapsed && (
+            <div className="mb-1 px-1">
+              <DataSourceBadge variant="badge" />
+            </div>
+          )}
+
           {/* Signed-in account — context for the sign-out action */}
           {user && (
             <div
@@ -188,9 +267,7 @@ export default function Layout() {
                   <span className="block truncate text-[13px] font-medium text-foreground">
                     {user.displayName}
                   </span>
-                  <span className="block truncate text-[11px] text-muted-foreground">
-                    {user.email}
-                  </span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{user.email}</span>
                 </span>
               )}
             </div>
@@ -245,7 +322,7 @@ export default function Layout() {
         )}
       >
         <header className="sticky top-0 z-50 border-b border-border bg-background/85 backdrop-blur-lg">
-          <div className="flex h-14 items-center gap-4 px-4 md:px-6">
+          <div className="flex h-14 items-center gap-3 px-4 md:px-6">
             {/* Brand — mobile only (desktop brand lives in the sidebar) */}
             <Link to="/" className="flex shrink-0 items-center gap-2.5 md:hidden">
               <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -254,12 +331,33 @@ export default function Layout() {
               <span className="text-[15px] font-semibold tracking-tight">EDENS AI</span>
             </Link>
 
-            {/* Data source context — desktop only, balances the bar */}
-            <span className="hidden md:block">
-              <DataSourceBadge variant="badge" />
-            </span>
+            {/* Breadcrumb — desktop only */}
+            <div className="hidden min-w-0 items-center gap-2 text-sm md:flex">
+              <span className="font-medium text-muted-foreground">EDENS AI</span>
+              <ChevronRight size={14} className="shrink-0 text-muted-foreground/60" aria-hidden="true" />
+              <span
+                className={cn(
+                  'truncate',
+                  breadcrumb.detail ? 'text-muted-foreground' : 'font-medium text-foreground'
+                )}
+              >
+                {breadcrumb.section}
+              </span>
+              {breadcrumb.detail && (
+                <>
+                  <ChevronRight size={14} className="shrink-0 text-muted-foreground/60" aria-hidden="true" />
+                  <span className="truncate font-medium text-foreground">{breadcrumb.detail}</span>
+                </>
+              )}
+            </div>
 
             <div className="ml-auto flex items-center gap-2">
+              {/* Data source context — desktop only */}
+              <span className="hidden lg:block">
+                <DataSourceBadge variant="badge" />
+              </span>
+
+              {/* Broker status */}
               <span
                 className="hidden h-8 items-center gap-1.5 rounded-full border border-border px-2.5 text-xs text-muted-foreground sm:flex"
                 title={`Message broker status: ${statusLabel}`}
@@ -268,22 +366,30 @@ export default function Layout() {
                 {statusLabel}
               </span>
 
-              {user && (
-                <span className="hidden max-w-[150px] truncate text-xs text-muted-foreground xl:inline">
-                  {user.displayName}
-                </span>
-              )}
-
+              {/* Theme toggle */}
               <button
                 type="button"
                 onClick={toggleTheme}
-                aria-label={isDark ? 'Switch to light appearance' : 'Switch to dark appearance'}
-                title={isDark ? 'Light appearance' : 'Dark appearance'}
+                aria-label={resolvedTheme === 'dark' ? 'Switch to light appearance' : 'Switch to dark appearance'}
+                title={resolvedTheme === 'dark' ? 'Light appearance' : 'Dark appearance'}
                 className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
-                {isDark ? <Sun size={17} /> : <Moon size={17} />}
+                {resolvedTheme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
               </button>
 
+              {/* Primary assistant action */}
+              {!isOnAssistant && (
+                <Button
+                  type="button"
+                  onClick={() => navigate('/assistant')}
+                  className="hidden h-9 px-3 sm:inline-flex"
+                >
+                  <MessageSquare size={15} aria-hidden="true" />
+                  Ask EDENS AI
+                </Button>
+              )}
+
+              {/* Sign out — mobile only (desktop sign-out lives in the sidebar) */}
               <button
                 type="button"
                 onClick={handleLogout}
@@ -329,7 +435,7 @@ export default function Layout() {
               {({ isActive }) => (
                 <>
                   <item.icon size={20} strokeWidth={isActive ? 2.2 : 1.8} />
-                  <span>{item.label}</span>
+                  <span>{item.shortLabel}</span>
                 </>
               )}
             </NavLink>

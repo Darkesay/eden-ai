@@ -3,7 +3,6 @@
 
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -110,6 +109,8 @@
     --chart-3: #B45309;
     --chart-4: #6B7280;
     --chart-5: #B91C1C;
+
+    color-scheme: light;
 }
 
 .dark {
@@ -153,22 +154,30 @@
     --chart-3: #FBBF24;
     --chart-4: #9AA4A0;
     --chart-5: #F87171;
+
+    color-scheme: dark;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    }
-  body {
-    @apply bg-background text-foreground antialiased;
-    }
+  }
   html {
     @apply font-sans;
-    }
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    margin: 0;
+  }
+  /* Native form controls follow the card surface in either theme */
+  select option {
+    background-color: var(--card);
+    color: var(--foreground);
+  }
   /* Instrument readouts: aligned digits in every telemetry value */
   .tabular {
     font-variant-numeric: tabular-nums;
-    }
+  }
 }
 
 /* Quiet scrollbars — containers scroll, chrome stays out of the way */
@@ -195,5 +204,6 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -17,6 +17,7 @@
  */
 
 import { store } from './store';
+import { apiFetch, parseApiJsonResponse, resolveApiUrl } from './api.ts';
 import {
   HardwareConfig,
   Esp32StatusResponse,
@@ -27,10 +28,19 @@ import {
   SafetyInterlocks,
   ActuatorStates,
   EnvironmentalTelemetry,
+  SensorAvailability,
   LatestUploadedImage,
   CameraUploadResponse,
   CameraUploadInfo
 } from './hardwareTypes';
+
+function redactHardwareLogText(input: string): string {
+  if (!input) return input;
+  return input
+    .replace(/\b(edcam|edctrl)_[A-Za-z0-9_-]+/g, '$1_[REDACTED]')
+    .replace(/([?&](?:auth|key|token|apiKey|api_key|secret)=)[^&\s]+/gi, '$1[REDACTED]')
+    .replace(/((?:X-Camera-Key|X-Hardware-Key|X-API-Key|Authorization)\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]');
+}
 
 // Default standard crops supported by EDENS AI ESP32 firmware
 export const DEFAULT_CROPS: CropProfile[] = [
@@ -207,6 +217,12 @@ class HardwareService {
         if (!parsed.cameraHost || String(parsed.cameraHost).includes('placeholder-ip')) {
           parsed.cameraHost = '';
         }
+        // SECURITY: Never load or retain hardware secrets from browser localStorage
+        const hadLegacyKey = Boolean(parsed.controllerApiKey);
+        parsed.controllerApiKey = '';
+        if (hadLegacyKey) {
+          localStorage.setItem('edens_hardware_config', JSON.stringify(parsed));
+        }
         return parsed;
       }
     } catch (_) {}
@@ -230,8 +246,12 @@ class HardwareService {
 
   private saveConfig() {
     try {
-      // Store config safely in localStorage
-      localStorage.setItem('edens_hardware_config', JSON.stringify(this.config));
+      // SECURITY: Persist non-secret host/polling preferences only; never persist controllerApiKey in localStorage
+      const { controllerApiKey: _omitSecret, ...safeConfig } = this.config;
+      localStorage.setItem(
+        'edens_hardware_config',
+        JSON.stringify({ ...safeConfig, controllerApiKey: '' })
+      );
     } catch (_) {}
   }
 
@@ -272,14 +292,16 @@ class HardwareService {
     statusCode?: number,
     details?: any
   ) {
+    const safeMessage = redactHardwareLogText(message);
+    const safeEndpoint = redactHardwareLogText(endpoint);
     const entry: DiagnosticLog = {
       id: `${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toISOString(),
-      endpoint,
+      endpoint: safeEndpoint,
       status,
       statusCode,
       latencyMs,
-      message,
+      message: safeMessage,
       dataSource: this.getDataSource(),
       details
     };
@@ -294,7 +316,9 @@ class HardwareService {
 
     let baseUrl = '';
     if (this.config.mode === 'proxy') {
-      baseUrl = `${this.config.proxyGatewayUrl}?endpoint=${encodeURIComponent(endpoint)}`;
+      baseUrl = resolveApiUrl(
+        `${this.config.proxyGatewayUrl}?endpoint=${encodeURIComponent(endpoint)}`
+      );
     } else {
       let host = this.config.controllerHost.trim();
       if (!host.startsWith('http://') && !host.startsWith('https://')) {
@@ -310,7 +334,8 @@ class HardwareService {
       }
     }
 
-    const url = new URL(baseUrl, window.location.origin);
+    const fallbackOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    const url = new URL(baseUrl, fallbackOrigin);
 
     if (this.config.mode === 'proxy' && this.config.controllerHost.trim()) {
       url.searchParams.set('host', this.config.controllerHost.trim());
@@ -319,21 +344,17 @@ class HardwareService {
       }
     }
 
-    // Append parameters
+    // Append non-secret command parameters only (NEVER pass secrets in URL query parameters)
     Object.entries(params).forEach(([k, v]) => {
       url.searchParams.set(k, String(v));
     });
-
-    // Append auth parameter if configured
-    if (this.config.controllerApiKey) {
-      url.searchParams.set('auth', this.config.controllerApiKey);
-    }
 
     const headers: Record<string, string> = {
       'Accept': 'application/json'
     };
 
     if (this.config.controllerApiKey) {
+      headers['X-Hardware-Key'] = this.config.controllerApiKey;
       headers['X-API-Key'] = this.config.controllerApiKey;
     }
 
@@ -416,17 +437,19 @@ class HardwareService {
       const res = await fetch(url, {
         method: 'GET',
         headers,
+        credentials: this.config.mode === 'proxy' ? 'include' : 'omit',
         signal: controller.signal
       });
 
       clearTimeout(timeoutId);
       const latencyMs = Math.round(performance.now() - startTime);
 
-      if (!res.ok) {
-        throw new Error(`ESP32 returned HTTP ${res.status}: ${res.statusText}`);
+      const parsedResp = await parseApiJsonResponse<any>(res);
+      if (!parsedResp.ok) {
+        throw new Error(parsedResp.message || `ESP32 returned HTTP ${res.status}`);
       }
 
-      const raw = await res.json();
+      const raw = parsedResp.data;
       const parsed: Esp32StatusResponse = this.normalizeStatusPayload(raw, latencyMs);
 
       this.lastSuccessfulRead = parsed;
@@ -493,12 +516,17 @@ class HardwareService {
     const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
 
     try {
-      const res = await fetch(url, { headers, signal: controller.signal });
+      const res = await fetch(url, {
+        headers,
+        credentials: this.config.mode === 'proxy' ? 'include' : 'omit',
+        signal: controller.signal
+      });
       clearTimeout(timeoutId);
       const latencyMs = Math.round(performance.now() - startTime);
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok) throw new Error(parsed.message || `HTTP ${res.status}`);
+      const data = parsed.data;
       
       this.logDiagnostic('/crops', 'SUCCESS', `Retrieved ${data.length || 0} crop profiles from firmware`, latencyMs, res.status);
       return Array.isArray(data) && data.length > 0 ? data : DEFAULT_CROPS;
@@ -591,7 +619,9 @@ class HardwareService {
     this.verifyCommandAuthorization();
     const { url, headers } = this.buildRequest('/roof', { state: action, override: emergencyOverride });
     const res = await this.executeCommand(url, headers, '/roof');
-    store.setValue('roofActive', action === 'open');
+    if (res.confirmedByController !== false) {
+      store.setValue('roofActive', action === 'open');
+    }
     return res;
   }
 
@@ -602,27 +632,40 @@ class HardwareService {
     device: 'pump' | 'fan' | 'light' | 'heater' | 'peltier' | 'roof',
     state: 'on' | 'off',
     durationSeconds: number = 0
-  ): Promise<{ success: boolean; message: string; interlockTriggered?: boolean }> {
+  ): Promise<{ success: boolean; message: string; interlockTriggered?: boolean; confirmedByController?: boolean }> {
     const isOn = state === 'on';
 
-    // Safety check 1: Pump dry run protection
-    const waterLvl = Number(store.getValue('waterLevel') ?? this.simState.waterLevel);
-    if (device === 'pump' && isOn && waterLvl < 10) {
+    // Safety check 1: Pump dry run protection (respecting 0% vs unreported sensor)
+    const waterAvailable = this.config.mode === 'simulation' || store.getValue('hardware_waterLevelAvailable') !== false;
+    const rawStoreWater = store.getValue('waterLevel');
+    const waterLvl = waterAvailable
+      ? (rawStoreWater !== undefined && rawStoreWater !== null ? Number(rawStoreWater) : this.simState.waterLevel)
+      : null;
+    if (device === 'pump' && isOn && waterLvl !== null && Number.isFinite(waterLvl) && waterLvl < 10) {
       const msg = 'SAFETY INTERLOCK BLOCKED: Water reservoir level is critically low (<10%). Pump activation blocked to prevent motor burnout.';
+      this.logDiagnostic('/override', 'WARNING', msg, 0);
+      return { success: false, message: msg, interlockTriggered: true };
+    }
+    if (device === 'pump' && isOn && durationSeconds > 120) {
+      const msg = 'SAFETY INTERLOCK BLOCKED: Manual pump run duration cannot exceed 120 seconds.';
       this.logDiagnostic('/override', 'WARNING', msg, 0);
       return { success: false, message: msg, interlockTriggered: true };
     }
 
     // Safety check 2: Heater thermal interlock
-    const currentTemp = Number(store.getValue('temperature') ?? this.simState.temp);
-    if (device === 'heater' && isOn && currentTemp > 32) {
+    const tempAvailable = this.config.mode === 'simulation' || store.getValue('hardware_temperatureAvailable') !== false;
+    const rawStoreTemp = store.getValue('temperature');
+    const currentTemp = tempAvailable
+      ? (rawStoreTemp !== undefined && rawStoreTemp !== null ? Number(rawStoreTemp) : this.simState.temp)
+      : null;
+    if (device === 'heater' && isOn && currentTemp !== null && Number.isFinite(currentTemp) && currentTemp > 32) {
       const msg = 'SAFETY INTERLOCK BLOCKED: Ambient temperature is already above 32°C. Heater activation blocked.';
       this.logDiagnostic('/override', 'WARNING', msg, 0);
       return { success: false, message: msg, interlockTriggered: true };
     }
 
     // Safety check 3: Roof rain interlock
-    const isRaining = store.getValue('rain') === true || this.simState.rain === true;
+    const isRaining = store.getValue('rain') === true || (this.config.mode === 'simulation' && this.simState.rain === true);
     if (device === 'roof' && isOn && isRaining) {
       const msg = 'SAFETY INTERLOCK BLOCKED: Cannot open roof while rain sensor is triggered.';
       this.logDiagnostic('/override', 'WARNING', msg, 0);
@@ -632,7 +675,11 @@ class HardwareService {
     if (this.config.mode === 'simulation') {
       this.applyActuatorState(device, isOn);
       this.logDiagnostic('/override', 'SUCCESS', `[SIMULATION] Device ${device} set to ${state.toUpperCase()}`, 10);
-      return { success: true, message: `Manual override applied to ${device}: ${state.toUpperCase()} (Simulation)` };
+      return {
+        success: true,
+        confirmedByController: false,
+        message: `Manual override applied to ${device}: ${state.toUpperCase()} (Simulation)`
+      };
     }
 
     this.verifyCommandAuthorization();
@@ -643,7 +690,9 @@ class HardwareService {
     });
 
     const res = await this.executeCommand(url, headers, '/override');
-    this.applyActuatorState(device, isOn);
+    if (res.confirmedByController !== false) {
+      this.applyActuatorState(device, isOn);
+    }
     return res;
   }
 
@@ -789,8 +838,9 @@ class HardwareService {
    */
   public async getLatestUploadedCameraImage(): Promise<LatestUploadedImage> {
     try {
-      const res = await fetch('/api/camera/latest', { cache: 'no-store' });
-      if (!res.ok) {
+      const res = await apiFetch('/api/camera/latest', { cache: 'no-store' });
+      const parsed = await parseApiJsonResponse<LatestUploadedImage>(res);
+      if (!parsed.ok) {
         return {
           exists: false,
           status: 'OFFLINE',
@@ -798,9 +848,12 @@ class HardwareService {
           uploadEndpoint: '/api/camera/upload'
         };
       }
-      const data: LatestUploadedImage = await res.json();
+      const data = parsed.data;
+      if (data.url) {
+        data.url = resolveApiUrl(data.url);
+      }
       return data;
-    } catch (err: any) {
+    } catch {
       return {
         exists: false,
         status: 'OFFLINE',
@@ -815,10 +868,11 @@ class HardwareService {
    */
   public async getCameraUploadInfo(): Promise<CameraUploadInfo | null> {
     try {
-      const res = await fetch('/api/camera/upload-info', { cache: 'no-store' });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch (_) {
+      const res = await apiFetch('/api/camera/upload-info', { cache: 'no-store' });
+      const parsed = await parseApiJsonResponse<CameraUploadInfo>(res);
+      if (!parsed.ok) return null;
+      return parsed.data;
+    } catch {
       return null;
     }
   }
@@ -837,18 +891,18 @@ class HardwareService {
       headers['X-Camera-Key'] = token;
     }
 
-    const res = await fetch('/api/camera/upload', {
+    const res = await apiFetch('/api/camera/upload', {
       method: 'POST',
       headers,
       body: imageData
     });
 
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.message || `Upload failed with HTTP ${res.status}`);
+    const parsed = await parseApiJsonResponse<CameraUploadResponse>(res);
+    if (!parsed.ok) {
+      throw new Error(parsed.message || `Upload failed with HTTP ${res.status}`);
     }
     this.notify();
-    return data;
+    return parsed.data;
   }
 
   /**
@@ -856,9 +910,8 @@ class HardwareService {
    */
   public async markCameraImageAnalyzed(id: string, analysis: any): Promise<void> {
     try {
-      await fetch('/api/camera/mark-analyzed', {
+      await apiFetch('/api/camera/mark-analyzed', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, analysis })
       });
     } catch (_) {}
@@ -1042,23 +1095,28 @@ class HardwareService {
     const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
 
     try {
-      const res = await fetch(url, { headers, signal: controller.signal });
+      const res = await fetch(url, { headers, credentials: 'include', signal: controller.signal });
       clearTimeout(timeoutId);
       const latencyMs = Math.round(performance.now() - startTime);
-
-      if (!res.ok) {
-        throw new Error(`Command ${endpoint} failed with HTTP ${res.status}: ${res.statusText}`);
-      }
 
       let data: any = {};
       try {
         data = await res.json();
       } catch (_) {
-        data = { message: 'Command accepted' };
+        data = {};
       }
 
-      this.logDiagnostic(endpoint, 'SUCCESS', data.message || `Command ${endpoint} succeeded`, latencyMs, res.status);
-      return { success: true, message: data.message || `Command ${endpoint} executed successfully` };
+      if (!res.ok) {
+        throw new Error(data.message || `Command ${endpoint} failed with HTTP ${res.status}: ${res.statusText}`);
+      }
+
+      const confirmedByController = data.confirmedByController !== false;
+      this.logDiagnostic(endpoint, 'SUCCESS', data.message || `Command ${endpoint} confirmed by controller`, latencyMs, res.status);
+      return {
+        success: true,
+        confirmedByController,
+        message: data.message || `Command ${endpoint} confirmed by controller`
+      };
     } catch (err: any) {
       clearTimeout(timeoutId);
       const latencyMs = Math.round(performance.now() - startTime);
@@ -1143,40 +1201,47 @@ class HardwareService {
       throw new Error(raw.message || 'Controller telemetry reported DISCONNECTED state.');
     }
 
+    const hasFinite = (val: unknown): val is number | string =>
+      val !== undefined && val !== null && val !== '' && typeof val !== 'boolean' && Number.isFinite(Number(val));
+
     const rawTemp = raw.telemetry?.temperature ?? raw.temperature;
     const rawHum = raw.telemetry?.humidity ?? raw.humidity;
     const rawSoil = raw.telemetry?.soilMoisture ?? raw.soilMoisture;
+    const rawSun = raw.telemetry?.sunlight ?? raw.sunlight;
+    const rawGrow = raw.telemetry?.growLight ?? raw.growLight;
+    const rawRain = raw.telemetry?.rain ?? raw.rain;
+    const rawRainGauge = raw.telemetry?.rainGaugeLevel ?? raw.rainGauge;
+    const rawWater = raw.telemetry?.waterLevel ?? raw.waterLevel;
+    const rawBatt = raw.telemetry?.batteryVoltage ?? raw.battery;
 
-    if (
-      rawTemp === undefined || rawTemp === null || !Number.isFinite(Number(rawTemp)) ||
-      rawHum === undefined || rawHum === null || !Number.isFinite(Number(rawHum)) ||
-      rawSoil === undefined || rawSoil === null || !Number.isFinite(Number(rawSoil))
-    ) {
+    const sensorAvailability: SensorAvailability = {
+      temperature: hasFinite(rawTemp),
+      humidity: hasFinite(rawHum),
+      soilMoisture: hasFinite(rawSoil),
+      sunlight: hasFinite(rawSun),
+      growLight: hasFinite(rawGrow),
+      rain: rawRain !== undefined && rawRain !== null,
+      rainGaugeLevel: hasFinite(rawRainGauge),
+      waterLevel: hasFinite(rawWater),
+      batteryVoltage: hasFinite(rawBatt)
+    };
+
+    if (!sensorAvailability.temperature && !sensorAvailability.humidity && !sensorAvailability.soilMoisture) {
       throw new Error(
-        'Malformed telemetry payload: numeric temperature, humidity, and soilMoisture readings are required.'
+        'Malformed telemetry payload: at least one numeric temperature, humidity, or soilMoisture reading is required.'
       );
     }
 
     const telemetry: EnvironmentalTelemetry = {
-      temperature: Number(rawTemp),
-      humidity: Number(rawHum),
-      soilMoisture: Number(rawSoil),
-      sunlight: Number.isFinite(Number(raw.telemetry?.sunlight ?? raw.sunlight))
-        ? Number(raw.telemetry?.sunlight ?? raw.sunlight)
-        : 0,
-      growLight: Number.isFinite(Number(raw.telemetry?.growLight ?? raw.growLight))
-        ? Number(raw.telemetry?.growLight ?? raw.growLight)
-        : 0,
-      rain: Boolean(raw.telemetry?.rain ?? raw.rain ?? false),
-      rainGaugeLevel: Number.isFinite(Number(raw.telemetry?.rainGaugeLevel ?? raw.rainGauge))
-        ? Number(raw.telemetry?.rainGaugeLevel ?? raw.rainGauge)
-        : 0,
-      waterLevel: Number.isFinite(Number(raw.telemetry?.waterLevel ?? raw.waterLevel))
-        ? Number(raw.telemetry?.waterLevel ?? raw.waterLevel)
-        : 0,
-      batteryVoltage: Number.isFinite(Number(raw.telemetry?.batteryVoltage ?? raw.battery))
-        ? Number(raw.telemetry?.batteryVoltage ?? raw.battery)
-        : 0
+      temperature: sensorAvailability.temperature ? Number(rawTemp) : 0,
+      humidity: sensorAvailability.humidity ? Number(rawHum) : 0,
+      soilMoisture: sensorAvailability.soilMoisture ? Number(rawSoil) : 0,
+      sunlight: sensorAvailability.sunlight ? Number(rawSun) : 0,
+      growLight: sensorAvailability.growLight ? Number(rawGrow) : 0,
+      rain: sensorAvailability.rain ? Boolean(rawRain) : false,
+      rainGaugeLevel: sensorAvailability.rainGaugeLevel ? Number(rawRainGauge) : 0,
+      waterLevel: sensorAvailability.waterLevel ? Number(rawWater) : 0,
+      batteryVoltage: sensorAvailability.batteryVoltage ? Number(rawBatt) : 0
     };
 
     const actuators: ActuatorStates = {
@@ -1190,11 +1255,12 @@ class HardwareService {
       roofActive: Boolean(raw.actuators?.roofActive ?? raw.roofActive ?? false)
     };
 
-    const interlocks: SafetyInterlocks = raw.interlocks || this.calculateInterlocks(
-      telemetry.rain,
-      telemetry.waterLevel,
-      telemetry.temperature
-    );
+    const interlocks: SafetyInterlocks = raw.interlocks || {
+      rainLocked: sensorAvailability.rain ? telemetry.rain : false,
+      waterLowLocked: sensorAvailability.waterLevel ? telemetry.waterLevel < 10 : false,
+      thermalLocked: sensorAvailability.temperature ? telemetry.temperature > 32 : false,
+      overIrrigationLocked: false
+    };
 
     const hasValidUpstreamTimestamp =
       typeof raw.timestamp === 'string' && !Number.isNaN(new Date(raw.timestamp).getTime());
@@ -1210,7 +1276,7 @@ class HardwareService {
     let resolvedDataSource: DataSource = 'REAL_HARDWARE';
     if (raw.dataSource === 'SIMULATED') {
       resolvedDataSource = 'SIMULATED';
-    } else if (raw.dataSource === 'STALE' || ageMs > 25000) {
+    } else if (raw.dataSource === 'STALE' || ageMs > 45000) {
       resolvedDataSource = 'STALE';
     } else if (raw.dataSource === 'CACHED' || ageMs > 15000) {
       resolvedDataSource = 'CACHED';
@@ -1223,6 +1289,7 @@ class HardwareService {
       wifiRssi: Number(raw.wifiRssi ?? raw.rssi ?? -60),
       freeHeapBytes: Number(raw.freeHeapBytes ?? raw.heap ?? 160000),
       telemetry,
+      sensorAvailability,
       actuators,
       interlocks,
       activeCropId: String(raw.activeCropId ?? raw.crop ?? 'tomato'),
@@ -1236,16 +1303,25 @@ class HardwareService {
   }
 
   private syncToStore(status: Esp32StatusResponse) {
-    // Update TinyBase store keys
-    store.setValue('temperature', status.telemetry.temperature);
-    store.setValue('humidity', status.telemetry.humidity);
-    store.setValue('soilMoisture', status.telemetry.soilMoisture);
-    store.setValue('sunlight', status.telemetry.sunlight);
-    store.setValue('growLight', status.telemetry.growLight);
-    store.setValue('rain', status.telemetry.rain);
-    store.setValue('rainGaugeLevel', status.telemetry.rainGaugeLevel);
-    store.setValue('waterLevel', status.telemetry.waterLevel);
-    store.setValue('batteryVoltage', status.telemetry.batteryVoltage);
+    const avail = status.sensorAvailability;
+    const isSim = status.dataSource === 'SIMULATED';
+
+    store.setValue('hardware_temperatureAvailable', isSim ? true : (avail?.temperature ?? true));
+    store.setValue('hardware_humidityAvailable', isSim ? true : (avail?.humidity ?? true));
+    store.setValue('hardware_soilMoistureAvailable', isSim ? true : (avail?.soilMoisture ?? true));
+    store.setValue('hardware_sunlightAvailable', isSim ? true : (avail?.sunlight ?? true));
+    store.setValue('hardware_waterLevelAvailable', isSim ? true : (avail?.waterLevel ?? true));
+    store.setValue('hardware_batteryAvailable', isSim ? true : (avail?.batteryVoltage ?? true));
+
+    if (isSim || avail?.temperature !== false) store.setValue('temperature', status.telemetry.temperature);
+    if (isSim || avail?.humidity !== false) store.setValue('humidity', status.telemetry.humidity);
+    if (isSim || avail?.soilMoisture !== false) store.setValue('soilMoisture', status.telemetry.soilMoisture);
+    if (isSim || avail?.sunlight !== false) store.setValue('sunlight', status.telemetry.sunlight);
+    if (isSim || avail?.growLight !== false) store.setValue('growLight', status.telemetry.growLight);
+    if (isSim || avail?.rain !== false) store.setValue('rain', status.telemetry.rain);
+    if (isSim || avail?.rainGaugeLevel !== false) store.setValue('rainGaugeLevel', status.telemetry.rainGaugeLevel);
+    if (isSim || avail?.waterLevel !== false) store.setValue('waterLevel', status.telemetry.waterLevel);
+    if (isSim || avail?.batteryVoltage !== false) store.setValue('batteryVoltage', status.telemetry.batteryVoltage);
 
     store.setValue('pumpActive', status.actuators.pumpActive);
     store.setValue('fanActive', status.actuators.fanActive);

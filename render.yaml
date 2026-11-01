@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: edens-ai
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22.18.0
+      - key: APP_URL
+        value: https://edens-ai.onrender.com
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://eden-ai.vercel.app,https://edens-ai.onrender.com
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: CAMERA_UPLOAD_KEY
+        sync: false
+      - key: HARDWARE_API_KEY
+        sync: false
+      # Optional when attaching a Render Persistent Disk at /var/data:
+      # - key: DATABASE_PATH
+      #   value: /var/data/edens_platform.sqlite
+      # - key: CAMERA_STORAGE_PATH
+      #   value: /var/data/camera_uploads

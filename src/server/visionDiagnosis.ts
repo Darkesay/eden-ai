@@ -104,14 +104,23 @@ export function createVisionDiagnosisHandler(deps: {
   resolveRequestStore?: (
     req: express.Request
   ) =>
-    | { ok: true; store: CameraImageStore; greenhouseId?: string }
+    | { ok: true; store: CameraImageStore; greenhouseId?: string; actorUserId?: string }
     | { ok: false; statusCode: number; errorCode: string; message: string };
+  onDiagnosisComplete?: (info: {
+    greenhouseId?: string;
+    actorUserId?: string;
+    imageSource: string;
+    frameId?: string;
+    frameTimestamp?: string;
+    result: Record<string, unknown>;
+  }) => void;
 }): express.RequestHandler {
-  const { imageStore, languages, isAiConfigured, runVisionModel, resolveRequestStore } = deps;
+  const { imageStore, languages, isAiConfigured, runVisionModel, resolveRequestStore, onDiagnosisComplete } = deps;
 
   return async (req, res) => {
     let activeStore = imageStore;
     let resolvedGreenhouseId: string | undefined;
+    let resolvedActorUserId: string | undefined;
 
     if (resolveRequestStore) {
       const storeCheck = resolveRequestStore(req);
@@ -123,6 +132,7 @@ export function createVisionDiagnosisHandler(deps: {
       }
       activeStore = storeCheck.store;
       resolvedGreenhouseId = storeCheck.greenhouseId;
+      resolvedActorUserId = storeCheck.actorUserId;
     }
 
     const {
@@ -299,6 +309,15 @@ In the JSON response:
         activeStore.markAnalyzed(cameraFrameMeta.id, parsed);
       }
 
+      onDiagnosisComplete?.({
+        greenhouseId: resolvedGreenhouseId,
+        actorUserId: resolvedActorUserId,
+        imageSource: resolvedSource,
+        frameId: cameraFrameMeta?.id,
+        frameTimestamp: cameraFrameMeta?.timestamp,
+        result: parsed
+      });
+
       return res.json({
         success: true,
         greenhouseId: resolvedGreenhouseId,
@@ -307,7 +326,9 @@ In the JSON response:
         cameraFrame: cameraFrameMeta,
         imageBytesVerified: imgBuffer.length,
         mimeType: baseMime,
-        modelUsed
+        modelUsed,
+        advisoryOnly: true,
+        actuationExecuted: false
       });
     } catch (err: any) {
       console.error('Plant diagnosis error on server:', err.message);

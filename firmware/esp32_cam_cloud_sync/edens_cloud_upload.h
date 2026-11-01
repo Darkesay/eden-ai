@@ -204,7 +204,7 @@ inline bool edensUploadSingleSnapshot() {
   }
 
   const char* uploadKey = EDENS_CAMERA_UPLOAD_KEY;
-  if (!uploadKey || strlen(uploadKey) == 0 || strcmp(uploadKey, "REPLACE_WITH_RENDER_CAMERA_UPLOAD_KEY") == 0) {
+  if (!uploadKey || strlen(uploadKey) == 0 || strstr(uploadKey, "REPLACE_WITH_") != nullptr || uploadKey[0] == '<') {
     Serial.println("[EDENS-CAM] Upload skipped: EDENS_CAMERA_UPLOAD_KEY not configured in camera_secrets.h");
     return false;
   }

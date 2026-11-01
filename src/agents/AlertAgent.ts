@@ -13,12 +13,23 @@ export function useAlertAgent() {
         const freshnessSec = hardwareService.getSensorFreshnessSeconds();
         const config = hardwareService.getConfig();
 
-        const temp = Number(store.getValue('temperature') ?? 22);
-        const humidity = Number(store.getValue('humidity') ?? 50);
-        const waterLvl = Number(store.getValue('waterLevel') ?? 80);
-        const batt = Number(store.getValue('batteryVoltage') ?? 12);
-        const rain = store.getValue('rain') === true;
-        const roofOpen = store.getValue('roofActive') === true;
+        const hasLiveSignal = config.mode === 'simulation' || dataSource === 'REAL_HARDWARE' || dataSource === 'CACHED';
+        const tempAvailable = hasLiveSignal && (config.mode === 'simulation' || store.getValue('hardware_temperatureAvailable') !== false);
+        const humAvailable = hasLiveSignal && (config.mode === 'simulation' || store.getValue('hardware_humidityAvailable') !== false);
+        const waterAvailable = hasLiveSignal && (config.mode === 'simulation' || store.getValue('hardware_waterLevelAvailable') !== false);
+        const battAvailable = hasLiveSignal && (config.mode === 'simulation' || store.getValue('hardware_batteryAvailable') !== false);
+
+        const rawTemp = store.getValue('temperature');
+        const rawHum = store.getValue('humidity');
+        const rawWater = store.getValue('waterLevel');
+        const rawBatt = store.getValue('batteryVoltage');
+
+        const temp = tempAvailable && rawTemp !== undefined && rawTemp !== null && Number.isFinite(Number(rawTemp)) ? Number(rawTemp) : null;
+        const humidity = humAvailable && rawHum !== undefined && rawHum !== null && Number.isFinite(Number(rawHum)) ? Number(rawHum) : null;
+        const waterLvl = waterAvailable && rawWater !== undefined && rawWater !== null && Number.isFinite(Number(rawWater)) ? Number(rawWater) : null;
+        const batt = battAvailable && rawBatt !== undefined && rawBatt !== null && Number.isFinite(Number(rawBatt)) ? Number(rawBatt) : null;
+        const rain = hasLiveSignal && store.getValue('rain') === true;
+        const roofOpen = hasLiveSignal && store.getValue('roofActive') === true;
         const plantHealth = store.getValue('plantHealthStatus') as string;
 
         const checkAlert = (id: string, condition: boolean, message: string, severity: 'warning' | 'critical') => {
@@ -64,14 +75,14 @@ export function useAlertAgent() {
           'critical'
         );
 
-        // Environmental condition alerts
-        checkAlert('temp_high', temp > 35, `Temperature critically high (${temp}°C). Heat damage risk.`, 'critical');
-        checkAlert('temp_low', temp < 10, `Temperature critically low (${temp}°C). Cold shock risk.`, 'critical');
-        checkAlert('hum_high', humidity > 90, `Humidity critically high (${humidity}%). Fungal pathogen risk.`, 'warning');
-        checkAlert('hum_low', humidity < 25, `Humidity critically low (${humidity}%). Foliage desiccation risk.`, 'warning');
-        checkAlert('water_crit_low', waterLvl < 10, `Irrigation reservoir critically low (${waterLvl}%). Pump locked off.`, 'critical');
-        checkAlert('water_warn_low', waterLvl >= 10 && waterLvl < 20, `Water reservoir running low (${waterLvl}%). Refill advised.`, 'warning');
-        checkAlert('batt_low', batt < 10.8, `Battery voltage critical (${batt.toFixed(1)}V). Controller brownout risk.`, 'critical');
+        // Environmental condition alerts (only evaluated when the corresponding sensor is genuinely reported)
+        checkAlert('temp_high', temp !== null && temp > 35, `Temperature critically high (${temp ?? 0}°C). Heat damage risk.`, 'critical');
+        checkAlert('temp_low', temp !== null && temp < 10, `Temperature critically low (${temp ?? 0}°C). Cold shock risk.`, 'critical');
+        checkAlert('hum_high', humidity !== null && humidity > 90, `Humidity critically high (${humidity ?? 0}%). Fungal pathogen risk.`, 'warning');
+        checkAlert('hum_low', humidity !== null && humidity < 25, `Humidity critically low (${humidity ?? 0}%). Foliage desiccation risk.`, 'warning');
+        checkAlert('water_crit_low', waterLvl !== null && waterLvl < 10, `Irrigation reservoir critically low (${waterLvl ?? 0}%). Pump locked off.`, 'critical');
+        checkAlert('water_warn_low', waterLvl !== null && waterLvl >= 10 && waterLvl < 20, `Water reservoir running low (${waterLvl ?? 0}%). Refill advised.`, 'warning');
+        checkAlert('batt_low', batt !== null && batt < 10.8, `Battery voltage critical (${batt !== null ? batt.toFixed(1) : '0.0'}V). Controller brownout risk.`, 'critical');
         checkAlert('health_stress', plantHealth === 'Severe stress', 'Plant visual analysis indicates severe foliage stress.', 'critical');
 
         store.setValue('agent_AlertAgent_lastRun', new Date().toISOString());

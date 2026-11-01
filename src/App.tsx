@@ -5,19 +5,20 @@
 
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 import { initStore } from './lib/store';
 import { MqttProvider } from './lib/mqtt';
 import { AuthProvider, useAuth } from './lib/auth';
+import { ThemeProvider } from './lib/theme';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import ControlCenter from './pages/ControlCenter';
-import AiLab from './pages/AiLab';
-import DeviceManagement from './pages/DeviceManagement';
-import HardwareConfigPage from './pages/HardwareConfig';
 import Greenhouses from './pages/Greenhouses';
 import GreenhouseSetupWizard from './pages/GreenhouseSetupWizard';
 import GreenhouseDetails from './pages/GreenhouseDetails';
+import AiAssistant from './pages/AiAssistant';
+import PlantVision from './pages/PlantVision';
+import SettingsPage from './pages/Settings';
 import { AgentManager } from './agents/AgentManager';
 
 interface ErrorBoundaryProps {
@@ -44,14 +45,18 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
       return (
         <div className="flex min-h-screen items-center justify-center bg-background p-4 text-foreground">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-8 text-center">
+            <div className="mx-auto mb-4 flex size-11 items-center justify-center rounded-xl border border-destructive/30 bg-destructive/10 text-destructive">
+              <AlertTriangle size={22} aria-hidden="true" />
+            </div>
             <h1 className="text-lg font-semibold">Something went wrong</h1>
             <p className="mt-2 text-sm text-muted-foreground">
               The app hit an unexpected error. Reloading usually fixes it.
             </p>
             <p className="mt-4 break-words rounded-lg bg-muted p-3 font-mono text-xs text-muted-foreground">
-              {this.state.error?.message}
+              {this.state.error?.message || 'Unexpected display error.'}
             </p>
             <button
+              type="button"
               onClick={() => window.location.reload()}
               className="mt-6 h-11 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             >
@@ -71,9 +76,9 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center gap-2.5 bg-background text-muted-foreground">
-        <Loader2 size={20} className="animate-spin" aria-hidden="true" />
-        <span className="text-sm">Loading…</span>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-2.5 bg-background text-muted-foreground">
+        <Loader2 size={22} className="animate-spin text-primary" aria-hidden="true" />
+        <span className="text-sm">Loading your greenhouse workspace…</span>
       </div>
     );
   }
@@ -94,10 +99,9 @@ export default function App() {
   if (!initialized) return null;
 
   return (
-    <ErrorBoundary>
-      <AuthProvider>
-        <MqttProvider>
-          <AgentManager />
+    <ThemeProvider>
+      <ErrorBoundary>
+        <AuthProvider>
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<Login />} />
@@ -105,7 +109,10 @@ export default function App() {
                 path="/"
                 element={
                   <RequireAuth>
-                    <Layout />
+                    <MqttProvider>
+                      <AgentManager />
+                      <Layout />
+                    </MqttProvider>
                   </RequireAuth>
                 }
               >
@@ -114,14 +121,18 @@ export default function App() {
                 <Route path="greenhouses/setup" element={<GreenhouseSetupWizard />} />
                 <Route path="greenhouses/:greenhouseId" element={<GreenhouseDetails />} />
                 <Route path="greenhouses/:greenhouseId/setup" element={<GreenhouseSetupWizard />} />
-                <Route path="ai-lab" element={<AiLab />} />
-                <Route path="devices" element={<DeviceManagement />} />
-                <Route path="hardware" element={<HardwareConfigPage />} />
+                <Route path="assistant" element={<AiAssistant />} />
+                <Route path="ai-lab" element={<Navigate to="/assistant" replace />} />
+                <Route path="vision" element={<PlantVision />} />
+                <Route path="settings" element={<SettingsPage />} />
+                <Route path="hardware" element={<Navigate to="/settings?tab=hardware" replace />} />
+                <Route path="devices" element={<Navigate to="/settings?tab=diagnostics" replace />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Routes>
           </BrowserRouter>
-        </MqttProvider>
-      </AuthProvider>
-    </ErrorBoundary>
+        </AuthProvider>
+      </ErrorBoundary>
+    </ThemeProvider>
   );
 }

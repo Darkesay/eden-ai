@@ -5,6 +5,15 @@
 
 export type DataSource = 'REAL_HARDWARE' | 'SIMULATED' | 'CACHED' | 'STALE' | 'DISCONNECTED';
 
+export type ExplicitDeviceConnectionState =
+  | 'CONFIGURATION_REQUIRED'
+  | 'WAITING_FOR_FIRST_CONNECTION'
+  | 'ONLINE'
+  | 'STALE'
+  | 'OFFLINE'
+  | 'AUTHENTICATION_ERROR'
+  | 'CONNECTION_ERROR';
+
 export type ConnectionMode = 'direct' | 'proxy' | 'simulation';
 
 export interface EnvironmentalTelemetry {
@@ -17,6 +26,18 @@ export interface EnvironmentalTelemetry {
   rainGaugeLevel: number;   // mm
   waterLevel: number;       // %
   batteryVoltage: number;   // V
+}
+
+export interface SensorAvailability {
+  temperature: boolean;
+  humidity: boolean;
+  soilMoisture: boolean;
+  sunlight: boolean;
+  growLight: boolean;
+  rain: boolean;
+  rainGaugeLevel: boolean;
+  waterLevel: boolean;
+  batteryVoltage: boolean;
 }
 
 export interface ActuatorStates {
@@ -44,6 +65,7 @@ export interface Esp32StatusResponse {
   wifiRssi: number;
   freeHeapBytes: number;
   telemetry: EnvironmentalTelemetry;
+  sensorAvailability?: SensorAvailability;
   actuators: ActuatorStates;
   interlocks: SafetyInterlocks;
   activeCropId: string;
@@ -52,6 +74,7 @@ export interface Esp32StatusResponse {
   pauseRemainingSeconds: number;
   timestamp: string;
   dataSource: DataSource;
+  explicitState?: ExplicitDeviceConnectionState;
   latencyMs?: number;
 }
 

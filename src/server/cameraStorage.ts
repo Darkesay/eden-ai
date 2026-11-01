@@ -418,7 +418,7 @@ export class CameraImageStore {
       return null;
     }
     const state = classifyCameraFrameFreshness(
-      this.latestFrame.timestamp,
+      this.latestFrame.capturedAt || this.latestFrame.timestamp,
       nowMs,
       this.freshMaxSeconds,
       this.cachedMaxSeconds
