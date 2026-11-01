@@ -434,7 +434,7 @@ export default function SettingsPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
           Manage your language, crop profile, environmental alert ranges, and greenhouse hardware connections.
         </p>
@@ -465,15 +465,15 @@ export default function SettingsPage() {
       </div>
 
       {savedBanner && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200 px-4 py-3 text-xs font-medium flex items-center gap-2">
-          <CheckCircle2 size={16} className="text-emerald-700 dark:text-emerald-400 shrink-0" />
+        <div className="rounded-xl border border-success/30 bg-success/10 text-success px-4 py-3 text-xs font-medium flex items-center gap-2">
+          <CheckCircle2 size={16} className="shrink-0" />
           <span>{savedBanner}</span>
         </div>
       )}
 
       {errorBanner && (
-        <div className="rounded-xl border border-red-200 bg-red-50 text-red-900 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-200 px-4 py-3 text-xs font-medium flex items-center gap-2">
-          <AlertTriangle size={16} className="text-red-700 dark:text-red-400 shrink-0 mt-0.5" />
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 text-destructive px-4 py-3 text-xs font-medium flex items-center gap-2">
+          <AlertTriangle size={16} className="shrink-0 mt-0.5" />
           <span>{errorBanner}</span>
         </div>
       )}
@@ -656,17 +656,17 @@ export default function SettingsPage() {
                   className={cn(
                     'w-full rounded-xl border p-4 text-left transition-colors cursor-pointer',
                     hwConfig.mode === 'simulation'
-                      ? 'border-indigo-400 bg-indigo-50/70 dark:border-indigo-700/70 dark:bg-indigo-950/40'
+                      ? 'border-primary bg-accent/60'
                       : 'border-border bg-background hover:bg-muted/50'
                   )}
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                      <FlaskConical size={15} className="text-indigo-700 dark:text-indigo-300" />
+                      <FlaskConical size={15} className="text-primary" />
                       Practice Simulation Mode
                     </span>
                     {hwConfig.mode === 'simulation' && (
-                      <CheckCircle2 size={15} className="text-indigo-700 dark:text-indigo-300" />
+                      <CheckCircle2 size={15} className="text-primary" />
                     )}
                   </div>
                   <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
@@ -1078,7 +1078,7 @@ export default function SettingsPage() {
                                   type="button"
                                   size="sm"
                                   onClick={() => handleRevokeKey(dev.id)}
-                                  className="h-9 px-2.5 bg-red-600 hover:bg-red-700 text-white text-xs cursor-pointer"
+                                  className="h-9 px-2.5 bg-destructive hover:bg-destructive/90 text-destructive-foreground text-xs cursor-pointer"
                                 >
                                   Confirm Revoke
                                 </Button>
@@ -1097,7 +1097,7 @@ export default function SettingsPage() {
                                 type="button"
                                 variant="outline"
                                 onClick={() => setConfirmRevokeId(dev.id)}
-                                className="h-9 px-3 text-xs font-semibold text-red-700 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 cursor-pointer"
+                                className="h-9 px-3 text-xs font-semibold text-destructive hover:bg-destructive/10 cursor-pointer"
                               >
                                 Revoke
                               </Button>
@@ -1107,8 +1107,8 @@ export default function SettingsPage() {
                       </div>
 
                       {issued && (
-                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 dark:border-emerald-800/60 dark:bg-emerald-950/40 p-3.5 space-y-2 text-xs">
-                          <p className="font-semibold text-emerald-950 dark:text-emerald-100">
+                        <div className="rounded-xl border border-success/30 bg-success/10 p-3.5 space-y-2 text-xs">
+                          <p className="font-semibold text-foreground">
                             One-Time Key (Shown Once — Download Header Now)
                           </p>
                           <div className="flex items-center justify-between gap-2 bg-background border border-border rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-foreground">
@@ -1304,7 +1304,7 @@ export default function SettingsPage() {
               </div>
 
               {testUploadMsg && (
-                <p className="text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 dark:text-emerald-200 dark:bg-emerald-950/45 dark:border-emerald-800/60 rounded-xl px-3.5 py-2">
+                <p className="text-xs font-medium text-success bg-success/10 border border-success/30 rounded-xl px-3.5 py-2">
                   {testUploadMsg}
                 </p>
               )}
@@ -1313,19 +1313,19 @@ export default function SettingsPage() {
 
           {/* Practice Mode Sandbox (Only shown when Practice Mode is enabled) */}
           {hwConfig.mode === 'simulation' && (
-            <section className="rounded-2xl border border-indigo-200 bg-indigo-50/50 dark:border-indigo-800/60 dark:bg-indigo-950/30 p-6 space-y-4">
+            <section className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
               <div>
-                <h2 className="text-base font-semibold text-indigo-950 dark:text-indigo-100 flex items-center gap-2">
-                  <FlaskConical size={18} className="text-indigo-700 dark:text-indigo-300" />
+                <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                  <FlaskConical size={18} className="text-primary" />
                   Practice Mode Test Sliders
                 </h2>
-                <p className="text-xs text-indigo-900 dark:text-indigo-200/90 mt-0.5">
+                <p className="text-xs text-muted-foreground mt-0.5">
                   Test how EDENS AI safety locks and alerts respond to simulated rain, heat, or low tank water.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-                <div className="rounded-xl bg-card p-4 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
+                <div className="rounded-xl bg-card p-4 border border-border space-y-2">
                   <div className="flex justify-between font-semibold text-foreground">
                     <span>Simulated Temperature</span>
                     <span className="font-mono tabular-nums">{simTemp.toFixed(1)}°C</span>
@@ -1341,7 +1341,7 @@ export default function SettingsPage() {
                   />
                 </div>
 
-                <div className="rounded-xl bg-card p-4 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
+                <div className="rounded-xl bg-card p-4 border border-border space-y-2">
                   <div className="flex justify-between font-semibold text-foreground">
                     <span>Simulated Water Tank</span>
                     <span className="font-mono tabular-nums">{Math.round(simWater)}%</span>
@@ -1357,7 +1357,7 @@ export default function SettingsPage() {
                   />
                 </div>
 
-                <div className="rounded-xl bg-card p-4 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-between gap-2">
+                <div className="rounded-xl bg-card p-4 border border-border flex items-center justify-between gap-2">
                   <div>
                     <p className="font-semibold text-foreground">Simulated Rain Sensor</p>
                     <p className="text-[11px] text-muted-foreground">Tests roof rain interlock</p>
@@ -1405,7 +1405,7 @@ export default function SettingsPage() {
                       type="button"
                       size="sm"
                       onClick={handleClearActivityLog}
-                      className="h-9 px-3 bg-red-600 hover:bg-red-700 text-white text-xs cursor-pointer"
+                      className="h-9 px-3 bg-destructive hover:bg-destructive/90 text-destructive-foreground text-xs cursor-pointer"
                     >
                       Confirm Clear
                     </Button>
@@ -1447,12 +1447,12 @@ export default function SettingsPage() {
                     <div className="flex items-center gap-2 min-w-0">
                       <span
                         className={cn(
-                          'px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0',
+                          'px-1.5 py-0.5 rounded text-[11px] font-semibold shrink-0',
                           log.status === 'SUCCESS'
-                            ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
+                            ? 'bg-success/10 text-success'
                             : log.status === 'WARNING'
-                              ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
-                              : 'bg-red-50 text-red-800 dark:bg-red-950/50 dark:text-red-300'
+                              ? 'bg-warning/10 text-warning'
+                              : 'bg-destructive/10 text-destructive'
                         )}
                       >
                         {log.status}
