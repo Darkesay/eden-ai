@@ -83,21 +83,21 @@ export function HarvestWidget() {
   return (
     <Card className="border border-border bg-card rounded-2xl shadow-xs">
       <CardHeader className="pb-3 border-b border-border flex flex-row items-center justify-between gap-2">
-        <div className="space-y-0.5">
+        <div className="space-y-0.5 min-w-0">
           <CardTitle className="text-sm font-semibold flex items-center gap-2 text-foreground">
-            <Sprout size={16} className="text-primary" />
-            Harvest Forecast
+            <Sprout size={16} className="text-primary shrink-0" />
+            <span className="truncate">Harvest Forecast</span>
           </CardTitle>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[11px] text-muted-foreground truncate">
             {cropType} · {sourceTag}
           </p>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
             onClick={() => setShowScheduleEditor((v) => !v)}
-            className="text-xs font-semibold text-primary hover:underline px-2 py-1 cursor-pointer"
+            className="text-xs font-semibold text-primary hover:underline px-2 py-1 whitespace-nowrap cursor-pointer"
           >
             {showScheduleEditor ? 'Close' : 'Edit Crop / Date'}
           </button>
@@ -138,7 +138,7 @@ export function HarvestWidget() {
                   id="harvest-crop-select"
                   value={cropType}
                   onChange={(e) => void handleCropOrDateUpdate(e.target.value, plantingDate)}
-                  className="w-full h-9 rounded-lg border border-input bg-background px-2.5 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  className="w-full h-10 sm:h-9 rounded-lg border border-input bg-background px-2.5 text-base sm:text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 >
                   {!SUPPORTED_HARVEST_CROPS.some(
                     (c) => c.label.toLowerCase() === cropType.toLowerCase()
@@ -164,7 +164,7 @@ export function HarvestWidget() {
                   max={new Date().toISOString().split('T')[0]}
                   value={plantingDate}
                   onChange={(e) => void handleCropOrDateUpdate(cropType, e.target.value)}
-                  className="w-full h-9 rounded-lg border border-input bg-background px-2.5 text-xs font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  className="w-full h-10 sm:h-9 rounded-lg border border-input bg-background px-2.5 text-base sm:text-xs font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
             </div>

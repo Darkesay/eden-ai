@@ -199,7 +199,7 @@ export default function Greenhouses() {
 
       {/* Enrolled Greenhouses List or Friendly Empty State */}
       {greenhouses.length === 0 ? (
-        <section className="rounded-2xl border border-border bg-card p-8 md:p-10 text-center shadow-xs max-w-2xl mx-auto space-y-5">
+        <section className="rounded-2xl border border-border bg-card p-5 sm:p-8 md:p-10 text-center shadow-xs max-w-2xl mx-auto space-y-5">
           <div className="w-12 h-12 rounded-2xl bg-accent border border-primary/20 flex items-center justify-center mx-auto text-primary">
             <Sprout size={24} />
           </div>
@@ -210,7 +210,7 @@ export default function Greenhouses() {
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+          <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-center gap-2.5 sm:gap-3 pt-1">
             <Button
               type="button"
               onClick={() => setScannerOpen(true)}
@@ -243,7 +243,7 @@ export default function Greenhouses() {
               <div
                 key={gh.id}
                 className={cn(
-                  'rounded-2xl border bg-card p-6 shadow-xs flex flex-col justify-between gap-5 transition-colors',
+                  'rounded-2xl border bg-card p-4 sm:p-6 shadow-xs flex flex-col justify-between gap-5 transition-colors',
                   isSelected ? 'border-primary/40' : 'border-border'
                 )}
               >
@@ -376,7 +376,7 @@ export default function Greenhouses() {
         <button
           type="button"
           onClick={() => setShowTechTools((prev) => !prev)}
-          className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-muted/40 transition-colors cursor-pointer"
+          className="w-full px-4 sm:px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-muted/40 transition-colors cursor-pointer"
         >
           <div>
             <p className="text-sm font-semibold text-foreground">
@@ -394,7 +394,7 @@ export default function Greenhouses() {
         </button>
 
         {showTechTools && (
-          <div className="px-6 pb-6 pt-2 border-t border-border space-y-4">
+          <div className="px-4 sm:px-6 pb-5 sm:pb-6 pt-2 border-t border-border space-y-4">
             <form onSubmit={handleGenerateKitQr} className="flex flex-col sm:flex-row gap-3 max-w-lg pt-2">
               <Input
                 value={kitSerial}

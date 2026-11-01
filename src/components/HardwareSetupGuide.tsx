@@ -32,26 +32,26 @@ export function HardwareSetupGuide({ variant = "button", children }: { variant?:
            </>
         )}
       </DialogTrigger>
-      <DialogContent className="!w-[95vw] sm:!max-w-[95vw] xl:!max-w-[1200px] max-h-[90vh] overflow-y-auto bg-[#040404] border-[#1A2A1A] text-white p-0 rounded-3xl gap-0 shadow-[0_0_100px_rgba(20,184,166,0.2)] !flex !flex-col">
-        <div className="sticky top-0 z-50 bg-[#040404]/80 backdrop-blur-xl border-b border-[#1A2A1A] p-6 flex justify-between items-center">
-            <div>
-              <DialogTitle className="text-2xl font-bold tracking-tight text-white flex items-center gap-3">
-                 <Cpu className="text-[#14B8A6]" size={28} /> ESP32-CAM AI Plant Monitoring Setup
+      <DialogContent className="!w-[95vw] sm:!max-w-[95vw] xl:!max-w-[1200px] max-h-[90dvh] overflow-y-auto bg-[#040404] border-[#1A2A1A] text-white p-0 rounded-2xl sm:rounded-3xl gap-0 shadow-[0_0_100px_rgba(20,184,166,0.2)] !flex !flex-col">
+        <div className="sticky top-0 z-50 bg-[#040404]/80 backdrop-blur-xl border-b border-[#1A2A1A] p-4 sm:p-6 flex justify-between items-center">
+            <div className="min-w-0 pr-6">
+              <DialogTitle className="text-lg sm:text-2xl font-bold tracking-tight text-white flex items-center gap-2.5 sm:gap-3">
+                 <Cpu className="text-[#14B8A6] shrink-0" size={24} /> <span className="truncate">ESP32-CAM AI Plant Monitoring Setup</span>
               </DialogTitle>
-              <p className="text-gray-400 text-sm mt-1 uppercase tracking-widest font-mono">Live Stream + Capture + AI Analysis Architecture</p>
+              <p className="text-gray-400 text-[11px] sm:text-sm mt-1 uppercase tracking-widest font-mono">Live Stream + Capture + AI Analysis Architecture</p>
             </div>
         </div>
 
-        <div className="p-6 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 gap-6 bg-dots">
+        <div className="p-4 sm:p-6 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6 bg-dots">
           
           {/* HARDWARE CONNECTIONS */}
-          <div className="md:col-span-2 xl:col-span-2 space-y-6">
-             <div className="bg-[#0A0A0A] border border-[#14B8A6]/30 rounded-3xl p-6 relative overflow-hidden group">
+          <div className="md:col-span-2 xl:col-span-2 space-y-4 sm:space-y-6">
+             <div className="bg-[#0A0A0A] border border-[#14B8A6]/30 rounded-2xl sm:rounded-3xl p-4 sm:p-6 relative overflow-hidden group">
                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#14B8A6]/10 rounded-full blur-3xl" />
-                 <h3 className="text-[#14B8A6] text-sm font-bold tracking-widest uppercase mb-6 flex items-center gap-2">
+                 <h3 className="text-[#14B8A6] text-sm font-bold tracking-widest uppercase mb-4 sm:mb-6 flex items-center gap-2">
                     <span className="bg-[#14B8A6]/20 px-2 py-0.5 rounded text-[#14B8A6]">1</span> ESP32-CAM Connections
                  </h3>
-                 <div className="grid grid-cols-2 gap-8 items-center">
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8 items-center">
                     <div className="space-y-3 font-mono text-xs">
                         <div className="flex justify-between items-center bg-[#111] border border-[#222] p-2 rounded-lg">
                            <span className="text-red-500 font-bold px-2 py-1 bg-red-500/10 rounded">5V</span>

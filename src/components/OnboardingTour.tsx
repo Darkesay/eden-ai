@@ -98,12 +98,12 @@ export function OnboardingTour({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-end sm:items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-end sm:items-center justify-center p-4 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))] sm:pb-4">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="onboarding-tour-title"
-        className="w-full max-w-md rounded-2xl border border-border bg-card text-foreground shadow-xl overflow-hidden"
+        className="w-full max-w-md max-h-[85dvh] overflow-y-auto rounded-2xl border border-border bg-card text-foreground shadow-xl"
       >
         <div className="h-1 bg-muted">
           <div
@@ -112,7 +112,7 @@ export function OnboardingTour({
           />
         </div>
 
-        <div className="p-6 space-y-3">
+        <div className="p-5 sm:p-6 space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">

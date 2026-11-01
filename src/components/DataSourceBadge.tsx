@@ -7,12 +7,14 @@ import { formatRelativeAge, useFarmerGreenhouseState } from '../lib/greenhouseSt
 interface DataSourceBadgeProps {
   className?: string;
   showFreshness?: boolean;
+  compact?: boolean;
   variant?: 'badge' | 'banner' | 'pill';
 }
 
 export function DataSourceBadge({
   className,
   showFreshness = true,
+  compact = false,
   variant = 'badge'
 }: DataSourceBadgeProps) {
   const ghState = useFarmerGreenhouseState();
@@ -28,11 +30,11 @@ export function DataSourceBadge({
             className
           )}
         >
-          <div className="flex items-center gap-2.5">
-            <CheckCircle2 size={18} className="text-emerald-700 dark:text-emerald-400 shrink-0" />
-            <div>
-              <span className="font-semibold">Live Greenhouse Hardware Connected</span>
-              <span className="text-emerald-800 dark:text-emerald-200/90 ml-2">
+          <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+            <CheckCircle2 size={18} className="text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5 sm:mt-0" />
+            <div className="min-w-0">
+              <span className="font-semibold block sm:inline">Live Greenhouse Hardware Connected</span>
+              <span className="text-emerald-800 dark:text-emerald-200/90 block sm:inline sm:ml-2 text-xs sm:text-sm mt-0.5 sm:mt-0">
                 Showing verified readings from {ghState.greenhouseName}.
               </span>
             </div>
@@ -54,11 +56,11 @@ export function DataSourceBadge({
             className
           )}
         >
-          <div className="flex items-center gap-2.5">
-            <AlertTriangle size={18} className="text-amber-700 dark:text-amber-400 shrink-0" />
-            <div>
-              <span className="font-semibold">Sensor Update Delayed</span>
-              <span className="text-amber-900 dark:text-amber-200/90 ml-2">
+          <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+            <AlertTriangle size={18} className="text-amber-700 dark:text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
+            <div className="min-w-0">
+              <span className="font-semibold block sm:inline">Sensor Update Delayed</span>
+              <span className="text-amber-900 dark:text-amber-200/90 block sm:inline sm:ml-2 text-xs sm:text-sm mt-0.5 sm:mt-0">
                 Last reading arrived {ageText}. Do not rely on these numbers as live until your controller reconnects.
               </span>
             </div>
@@ -81,11 +83,11 @@ export function DataSourceBadge({
             className
           )}
         >
-          <div className="flex items-center gap-2.5">
-            <FlaskConical size={18} className="text-indigo-700 dark:text-indigo-300 shrink-0" />
-            <div>
-              <span className="font-semibold">Practice Mode Active</span>
-              <span className="text-indigo-900 dark:text-indigo-200/90 ml-2">
+          <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+            <FlaskConical size={18} className="text-indigo-700 dark:text-indigo-300 shrink-0 mt-0.5 sm:mt-0" />
+            <div className="min-w-0">
+              <span className="font-semibold block sm:inline">Practice Mode Active</span>
+              <span className="text-indigo-900 dark:text-indigo-200/90 block sm:inline sm:ml-2 text-xs sm:text-sm mt-0.5 sm:mt-0">
                 Numbers shown are simulated for learning — not live readings from a physical greenhouse.
               </span>
             </div>
@@ -109,11 +111,11 @@ export function DataSourceBadge({
           className
         )}
       >
-        <div className="flex items-center gap-2.5">
-          <WifiOff size={18} className="text-muted-foreground shrink-0" />
-          <div>
-            <span className="font-semibold">No Live Sensor Signal</span>
-            <span className="text-muted-foreground ml-2">
+        <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+          <WifiOff size={18} className="text-muted-foreground shrink-0 mt-0.5 sm:mt-0" />
+          <div className="min-w-0">
+            <span className="font-semibold block sm:inline">No Live Sensor Signal</span>
+            <span className="text-muted-foreground block sm:inline sm:ml-2 text-xs sm:text-sm mt-0.5 sm:mt-0">
               {activeGreenhouse
                 ? `Waiting for ${activeGreenhouse.name} hardware to send verified readings.`
                 : 'Connect your EDENS AI greenhouse kit to view live environmental readings.'}
@@ -151,16 +153,26 @@ export function DataSourceBadge({
             ? FlaskConical
             : WifiOff;
 
+  const compactLabel =
+    provenance === 'REAL_HARDWARE'
+      ? 'Live'
+      : provenance === 'CACHED' || provenance === 'STALE'
+        ? 'Delayed'
+        : provenance === 'SIMULATED'
+          ? 'Practice'
+          : 'Offline';
+
   return (
     <div
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium whitespace-nowrap shrink-0',
+        'inline-flex items-center gap-1.5 rounded-lg border text-xs font-medium whitespace-nowrap shrink-0',
+        compact ? 'px-2 py-1' : 'px-2.5 py-1',
         toneClass,
         className
       )}
     >
       <Icon size={13} className="shrink-0" />
-      <span>{ghState.provenanceLabel}</span>
+      <span>{compact ? compactLabel : ghState.provenanceLabel}</span>
       {showFreshness && provenance === 'REAL_HARDWARE' && lastUpdatedAgeSeconds !== null && (
         <span className="text-[11px] font-mono tabular-nums opacity-80">· {ageText}</span>
       )}

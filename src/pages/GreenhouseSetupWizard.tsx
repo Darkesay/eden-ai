@@ -469,7 +469,7 @@ export default function GreenhouseSetupWizard() {
 
       {/* STEP 1: Create Greenhouse */}
       {step === 1 && (
-        <section className="rounded-2xl border border-border bg-card p-6 md:p-8 shadow-xs space-y-6">
+        <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 md:p-8 shadow-xs space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-border">
             <div>
               <h2 className="text-lg font-bold text-foreground">1. Name Your Greenhouse</h2>
@@ -528,7 +528,7 @@ export default function GreenhouseSetupWizard() {
 
       {/* STEP 2: Select Crop */}
       {step === 2 && (
-        <section className="rounded-2xl border border-border bg-card p-6 md:p-8 shadow-xs space-y-6">
+        <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 md:p-8 shadow-xs space-y-6">
           <div>
             <h2 className="text-lg font-bold text-foreground">2. What Crop Are You Growing?</h2>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -601,7 +601,7 @@ export default function GreenhouseSetupWizard() {
             </div>
           )}
 
-          <div className="flex items-center justify-between pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2">
             <Button type="button" variant="outline" onClick={() => setStep(1)} className="h-10 cursor-pointer">
               Back
             </Button>
@@ -609,11 +609,11 @@ export default function GreenhouseSetupWizard() {
               type="button"
               disabled={busy || (selectedCropId === 'custom' && !customCropName.trim())}
               onClick={handleSaveStep2}
-              className="h-11 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer"
+              className="h-11 px-5 sm:px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-xs sm:text-sm font-semibold cursor-pointer"
             >
               {busy ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
               Save Crop &amp; Continue
-              <ArrowRight size={16} className="ml-2" />
+              <ArrowRight size={16} className="ml-2 shrink-0" />
             </Button>
           </div>
         </section>
@@ -621,7 +621,7 @@ export default function GreenhouseSetupWizard() {
 
       {/* STEP 3: Connect Controller & Camera */}
       {step === 3 && (
-        <section className="rounded-2xl border border-border bg-card p-6 md:p-8 shadow-xs space-y-6">
+        <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 md:p-8 shadow-xs space-y-6">
           <div>
             <h2 className="text-lg font-bold text-foreground">3. Connect Controller &amp; Camera</h2>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -785,7 +785,7 @@ export default function GreenhouseSetupWizard() {
             )}
           </div>
 
-          <div className="flex items-center justify-between pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2">
             <Button type="button" variant="outline" onClick={() => setStep(2)} className="h-10 cursor-pointer">
               Back
             </Button>
@@ -793,10 +793,10 @@ export default function GreenhouseSetupWizard() {
               type="button"
               disabled={busy}
               onClick={handleSaveStep3}
-              className="h-11 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer"
+              className="h-11 px-5 sm:px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-xs sm:text-sm font-semibold cursor-pointer"
             >
               Continue to Sensor Targets
-              <ArrowRight size={16} className="ml-2" />
+              <ArrowRight size={16} className="ml-2 shrink-0" />
             </Button>
           </div>
         </section>
@@ -804,7 +804,7 @@ export default function GreenhouseSetupWizard() {
 
       {/* STEP 4: Review Sensor Readings & Targets */}
       {step === 4 && (
-        <section className="rounded-2xl border border-border bg-card p-6 md:p-8 shadow-xs space-y-6">
+        <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 md:p-8 shadow-xs space-y-6">
           <div>
             <h2 className="text-lg font-bold text-foreground">
               4. Review Readings &amp; Safe Ranges for {resolvedCropName}
@@ -815,15 +815,15 @@ export default function GreenhouseSetupWizard() {
           </div>
 
           {/* Current Incoming Readings Preview */}
-          <div className="rounded-xl bg-muted/50 p-4 space-y-2">
-            <div className="flex items-center justify-between text-xs">
+          <div className="rounded-xl bg-muted/50 p-4 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
               <span className="font-semibold text-foreground">Current Incoming Hardware Readings</span>
               <span className="text-muted-foreground font-mono tabular-nums">
                 {readings ? 'Verified reading received' : 'Waiting for first controller upload'}
               </span>
             </div>
-            <div className="grid grid-cols-3 gap-3 pt-1 text-xs">
-              <div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3 pt-1 text-xs">
+              <div className="flex items-center justify-between sm:block">
                 <span className="text-muted-foreground">Temperature:</span>{' '}
                 <strong className="font-mono tabular-nums">
                   {readings?.temperature !== null && readings?.temperature !== undefined
@@ -831,7 +831,7 @@ export default function GreenhouseSetupWizard() {
                     : 'Unavailable'}
                 </strong>
               </div>
-              <div>
+              <div className="flex items-center justify-between sm:block">
                 <span className="text-muted-foreground">Humidity:</span>{' '}
                 <strong className="font-mono tabular-nums">
                   {readings?.humidity !== null && readings?.humidity !== undefined
@@ -839,7 +839,7 @@ export default function GreenhouseSetupWizard() {
                     : 'Unavailable'}
                 </strong>
               </div>
-              <div>
+              <div className="flex items-center justify-between sm:block">
                 <span className="text-muted-foreground">Soil Moisture:</span>{' '}
                 <strong className="font-mono tabular-nums">
                   {readings?.soilMoisture !== null && readings?.soilMoisture !== undefined
@@ -925,17 +925,17 @@ export default function GreenhouseSetupWizard() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2">
             <Button type="button" variant="outline" onClick={() => setStep(3)} className="h-10 cursor-pointer">
               Back
             </Button>
             <Button
               type="button"
               onClick={handleSaveStep4}
-              className="h-11 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer"
+              className="h-11 px-4 sm:px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-xs sm:text-sm font-semibold cursor-pointer"
             >
               Save Targets &amp; Check Connection
-              <ArrowRight size={16} className="ml-2" />
+              <ArrowRight size={16} className="ml-2 shrink-0" />
             </Button>
           </div>
         </section>
@@ -943,7 +943,7 @@ export default function GreenhouseSetupWizard() {
 
       {/* STEP 5: Safe Read-Only Connection Check */}
       {step === 5 && (
-        <section className="rounded-2xl border border-border bg-card p-6 md:p-8 shadow-xs space-y-6">
+        <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 md:p-8 shadow-xs space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-foreground">5. Safe Connection Check</h2>
@@ -1025,17 +1025,17 @@ export default function GreenhouseSetupWizard() {
             </div>
           )}
 
-          <div className="flex items-center justify-between pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2">
             <Button type="button" variant="outline" onClick={() => setStep(4)} className="h-10 cursor-pointer">
               Back
             </Button>
             <Button
               type="button"
               onClick={() => setStep(6)}
-              className="h-11 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold cursor-pointer"
+              className="h-11 px-5 sm:px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-xs sm:text-sm font-semibold cursor-pointer"
             >
               Continue to Finish
-              <ArrowRight size={16} className="ml-2" />
+              <ArrowRight size={16} className="ml-2 shrink-0" />
             </Button>
           </div>
         </section>
@@ -1043,7 +1043,7 @@ export default function GreenhouseSetupWizard() {
 
       {/* STEP 6: Start Monitoring */}
       {step === 6 && (
-        <section className="rounded-2xl border border-border bg-card p-8 text-center shadow-xs space-y-5">
+        <section className="rounded-2xl border border-border bg-card p-5 sm:p-8 text-center shadow-xs space-y-5">
           <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/45 dark:border-emerald-800/60 text-primary flex items-center justify-center mx-auto">
             <CheckCircle2 size={24} />
           </div>

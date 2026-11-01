@@ -479,9 +479,9 @@ export default function AiAssistant() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
           {/* Language Selector */}
-          <div className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 h-10">
+          <div className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 h-10 flex-1 sm:flex-initial min-w-0">
             <Globe size={15} className="text-primary shrink-0" />
             <label htmlFor="ai-lang-select" className="sr-only">
               Select Language
@@ -490,7 +490,7 @@ export default function AiAssistant() {
               id="ai-lang-select"
               value={selectedLangId}
               onChange={(e) => handleLanguageChange(e.target.value)}
-              className="bg-transparent text-xs font-semibold text-foreground focus:outline-none cursor-pointer"
+              className="bg-transparent text-xs font-semibold text-foreground focus:outline-none w-full min-w-0 truncate cursor-pointer"
             >
               {NIGERIAN_LANGUAGES.map((lang) => (
                 <option key={lang.id} value={lang.id}>
@@ -509,16 +509,16 @@ export default function AiAssistant() {
               setAutoSpeak((v) => !v);
             }}
             className={cn(
-              'h-10 px-3.5 rounded-xl text-xs font-semibold cursor-pointer',
+              'h-10 px-3 sm:px-3.5 rounded-xl text-xs font-semibold shrink-0 cursor-pointer',
               autoSpeak && 'border-primary bg-accent text-accent-foreground'
             )}
           >
             {autoSpeak ? (
-              <Volume2 size={15} className="mr-1.5 text-primary" />
+              <Volume2 size={15} className="mr-1.5 text-primary shrink-0" />
             ) : (
-              <VolumeX size={15} className="mr-1.5 text-muted-foreground" />
+              <VolumeX size={15} className="mr-1.5 text-muted-foreground shrink-0" />
             )}
-            {autoSpeak ? 'Voice Replies On' : 'Voice Replies Off'}
+            <span>{autoSpeak ? 'Voice On' : 'Voice Off'}</span>
           </Button>
 
           {messages.length > 1 && (
@@ -526,10 +526,10 @@ export default function AiAssistant() {
               type="button"
               variant="outline"
               onClick={handleClearConversation}
-              className="h-10 px-3 rounded-xl text-xs font-semibold text-muted-foreground hover:text-foreground cursor-pointer"
+              className="h-10 px-3 rounded-xl text-xs font-semibold text-muted-foreground hover:text-foreground shrink-0 cursor-pointer"
               title="Start new conversation"
             >
-              <Trash2 size={14} className="mr-1.5" />
+              <Trash2 size={14} className="mr-1.5 shrink-0" />
               New Chat
             </Button>
           )}
@@ -587,7 +587,7 @@ export default function AiAssistant() {
       {/* Main Chat Card */}
       <section className="rounded-2xl border border-border bg-card shadow-xs flex flex-col overflow-hidden">
         {/* Conversation History */}
-        <div className="p-5 md:p-6 space-y-4 min-h-[360px] max-h-[540px] overflow-y-auto">
+        <div className="p-4 sm:p-5 md:p-6 space-y-4 min-h-[240px] sm:min-h-[360px] max-h-[50dvh] sm:max-h-[540px] overflow-y-auto">
           {messages.map((msg, idx) => {
             const isUser = msg.role === 'user';
             const isSpeakingThis = speakingIndex === idx;
@@ -600,7 +600,7 @@ export default function AiAssistant() {
               >
                 <div
                   className={cn(
-                    'max-w-[88%] sm:max-w-[78%] rounded-2xl px-4 py-3.5 text-sm space-y-1',
+                    'max-w-[92%] sm:max-w-[78%] rounded-2xl px-3.5 sm:px-4 py-3 sm:py-3.5 text-sm space-y-1 break-words',
                     isUser
                       ? 'bg-primary text-primary-foreground'
                       : 'bg-muted/60 text-foreground border border-border'
@@ -667,7 +667,7 @@ export default function AiAssistant() {
 
         {/* Suggested Farmer Questions */}
         {messages.length <= 2 && !sending && (
-          <div className="px-5 md:px-6 pb-4 pt-2 border-t border-border bg-muted/20 space-y-2">
+          <div className="px-4 sm:px-5 md:px-6 pb-4 pt-2.5 border-t border-border bg-muted/20 space-y-2">
             <p className="text-xs font-medium text-muted-foreground">
               Suggested questions in {selectedLang.name}:
             </p>
@@ -687,7 +687,7 @@ export default function AiAssistant() {
         )}
 
         {/* Composer Area */}
-        <div className="p-4 md:p-5 border-t border-border bg-card space-y-3">
+        <div className="p-3.5 sm:p-4 md:p-5 border-t border-border bg-card space-y-3">
           {/* Attached Leaf Photo Preview */}
           {attachedLeafImage && (
             <div className="inline-flex items-center gap-3 rounded-xl border border-border bg-muted/50 p-2 pr-3">
@@ -753,14 +753,14 @@ export default function AiAssistant() {
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder={`Type your farming question in ${selectedLang.name}...`}
+                  placeholder={`Ask in ${selectedLang.name}...`}
                   disabled={sending || isTranscribing}
-                  className="flex-1 h-11 rounded-xl border border-input bg-background px-4 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  className="flex-1 min-w-0 h-11 rounded-xl border border-input bg-background px-3.5 sm:px-4 text-base sm:text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 />
                 <Button
                   type="submit"
                   disabled={sending || isTranscribing || (!input.trim() && !attachedLeafImage)}
-                  className="h-11 px-5 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold shrink-0 cursor-pointer"
+                  className="h-11 px-4 sm:px-5 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold shrink-0 cursor-pointer"
                 >
                   {sending ? (
                     <Loader2 size={16} className="animate-spin" />
@@ -773,18 +773,18 @@ export default function AiAssistant() {
                 </Button>
               </div>
 
-              {/* Voice & Photo Action Buttons */}
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
+              {/* Voice & Photo Action Buttons (2x2 thumb grid on mobile, row on desktop) */}
+              <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center justify-between gap-2.5">
+                <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full sm:w-auto">
                   <Button
                     type="button"
                     variant="outline"
                     disabled={sending || isTranscribing}
                     onClick={handleStartRecording}
-                    className="h-10 px-3.5 rounded-lg text-xs font-semibold cursor-pointer"
+                    className="h-10 px-2.5 sm:px-3.5 rounded-lg text-xs font-semibold justify-center cursor-pointer"
                   >
-                    <Mic size={15} className="mr-1.5 text-primary" />
-                    Speak Question
+                    <Mic size={15} className="mr-1.5 text-primary shrink-0" />
+                    <span className="truncate">Speak Question</span>
                   </Button>
 
                   <input
@@ -799,10 +799,10 @@ export default function AiAssistant() {
                     variant="outline"
                     disabled={sending || isTranscribing}
                     onClick={() => voiceFileInputRef.current?.click()}
-                    className="h-10 px-3.5 rounded-lg text-xs font-semibold cursor-pointer"
+                    className="h-10 px-2.5 sm:px-3.5 rounded-lg text-xs font-semibold justify-center cursor-pointer"
                   >
-                    <FileAudio size={15} className="mr-1.5 text-primary" />
-                    Upload Voice Note
+                    <FileAudio size={15} className="mr-1.5 text-primary shrink-0" />
+                    <span className="truncate">Voice Note</span>
                   </Button>
 
                   <Button
@@ -810,10 +810,10 @@ export default function AiAssistant() {
                     variant="outline"
                     disabled={sending || isTranscribing}
                     onClick={() => setCameraModalOpen(true)}
-                    className="h-10 px-3.5 rounded-lg text-xs font-semibold cursor-pointer"
+                    className="h-10 px-2.5 sm:px-3.5 rounded-lg text-xs font-semibold justify-center cursor-pointer"
                   >
-                    <Camera size={15} className="mr-1.5 text-primary" />
-                    Snap Leaf Photo
+                    <Camera size={15} className="mr-1.5 text-primary shrink-0" />
+                    <span className="truncate">Snap Leaf</span>
                   </Button>
 
                   <input
@@ -828,10 +828,10 @@ export default function AiAssistant() {
                     variant="outline"
                     disabled={sending || isTranscribing}
                     onClick={() => leafFileInputRef.current?.click()}
-                    className="h-10 px-3.5 rounded-lg text-xs font-semibold cursor-pointer"
+                    className="h-10 px-2.5 sm:px-3.5 rounded-lg text-xs font-semibold justify-center cursor-pointer"
                   >
-                    <ImagePlus size={15} className="mr-1.5 text-primary" />
-                    Attach Leaf Photo
+                    <ImagePlus size={15} className="mr-1.5 text-primary shrink-0" />
+                    <span className="truncate">Attach Leaf</span>
                   </Button>
                 </div>
 

@@ -155,13 +155,13 @@ export function LeafCameraModal({ open, onClose, onCapture }: LeafCameraModalPro
       aria-labelledby="leaf-camera-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4"
     >
-      <div className="w-full max-w-lg rounded-2xl border border-border bg-card text-foreground shadow-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
+      <div className="w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-2xl border border-border bg-card text-foreground shadow-xl">
+        <div className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-border flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 rounded-xl bg-accent text-primary flex items-center justify-center shrink-0">
               <Camera size={18} />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 id="leaf-camera-title" className="text-base font-semibold text-foreground">
                 Snap Plant Leaf Photo
               </h2>
@@ -174,13 +174,13 @@ export function LeafCameraModal({ open, onClose, onCapture }: LeafCameraModalPro
             type="button"
             onClick={onClose}
             aria-label="Close camera"
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
+            className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted shrink-0 cursor-pointer"
           >
             <X size={18} />
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="p-4 sm:p-5 space-y-4">
           <div className="w-full aspect-video rounded-xl overflow-hidden border border-border bg-stone-950 flex items-center justify-center relative">
             {capturedDataUrl ? (
               <img
@@ -222,28 +222,40 @@ export function LeafCameraModal({ open, onClose, onCapture }: LeafCameraModalPro
           />
 
           {capturedDataUrl ? (
-            <div className="flex flex-wrap items-center justify-between gap-2.5">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setCapturedDataUrl(null)}
-                className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-              >
-                <RefreshCw size={14} className="mr-1.5" />
-                Retake Photo
-              </Button>
+            <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center justify-between gap-2.5">
               <Button
                 type="button"
                 onClick={handleConfirmPhoto}
-                className="h-10 px-5 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold cursor-pointer"
+                className="h-11 sm:h-10 px-5 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold sm:order-2 cursor-pointer"
               >
                 <Check size={15} className="mr-1.5" />
                 Use This Leaf Photo
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCapturedDataUrl(null)}
+                className="h-11 sm:h-10 px-4 rounded-xl text-xs font-semibold sm:order-1 cursor-pointer"
+              >
+                <RefreshCw size={14} className="mr-1.5" />
+                Retake Photo
+              </Button>
             </div>
           ) : (
-            <div className="flex flex-wrap items-center justify-between gap-2.5">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center justify-between gap-2.5">
+              {!cameraError && (
+                <Button
+                  type="button"
+                  disabled={startingCamera}
+                  onClick={handleSnapFrame}
+                  className="h-11 sm:h-10 px-5 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold sm:order-2 cursor-pointer"
+                >
+                  <Camera size={15} className="mr-1.5" />
+                  Capture Leaf
+                </Button>
+              )}
+
+              <div className="grid grid-cols-2 sm:flex items-center gap-2 sm:order-1">
                 <Button
                   type="button"
                   variant="outline"
@@ -251,33 +263,21 @@ export function LeafCameraModal({ open, onClose, onCapture }: LeafCameraModalPro
                     setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'))
                   }
                   disabled={startingCamera}
-                  className="h-10 px-3.5 rounded-xl text-xs font-semibold cursor-pointer"
+                  className="h-10 px-3 rounded-xl text-xs font-semibold cursor-pointer"
                 >
-                  <RefreshCw size={14} className="mr-1.5" />
-                  Switch Camera
+                  <RefreshCw size={14} className="mr-1.5 shrink-0" />
+                  <span className="truncate">Switch Cam</span>
                 </Button>
                 <Button
                   type="button"
                   variant="outline"
                   onClick={() => fallbackInputRef.current?.click()}
-                  className="h-10 px-3.5 rounded-xl text-xs font-semibold cursor-pointer"
+                  className="h-10 px-3 rounded-xl text-xs font-semibold cursor-pointer"
                 >
-                  <ImageUp size={14} className="mr-1.5 text-primary" />
-                  Open Phone Camera / Gallery
+                  <ImageUp size={14} className="mr-1.5 text-primary shrink-0" />
+                  <span className="truncate">Phone Gallery</span>
                 </Button>
               </div>
-
-              {!cameraError && (
-                <Button
-                  type="button"
-                  disabled={startingCamera}
-                  onClick={handleSnapFrame}
-                  className="h-10 px-5 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold cursor-pointer"
-                >
-                  <Camera size={15} className="mr-1.5" />
-                  Capture Leaf
-                </Button>
-              )}
             </div>
           )}
         </div>

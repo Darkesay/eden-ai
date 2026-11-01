@@ -290,9 +290,9 @@ export default function PlantVision() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
           {/* Language Selector for Diagnosis Output */}
-          <div className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 h-10">
+          <div className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 h-10 flex-1 sm:flex-initial min-w-0">
             <Globe size={15} className="text-primary shrink-0" />
             <label htmlFor="vision-lang-select" className="sr-only">
               Report Language
@@ -304,7 +304,7 @@ export default function PlantVision() {
                 setSelectedLangId(e.target.value);
                 store.setValue('aiLanguage', e.target.value);
               }}
-              className="bg-transparent text-xs font-semibold text-foreground focus:outline-none cursor-pointer"
+              className="bg-transparent text-xs font-semibold text-foreground focus:outline-none w-full min-w-0 truncate cursor-pointer"
             >
               {NIGERIAN_LANGUAGES.map((lang) => (
                 <option key={lang.id} value={lang.id}>
@@ -319,7 +319,7 @@ export default function PlantVision() {
             variant="outline"
             onClick={handleRefreshSnapshot}
             disabled={camera.isRefreshing || loadingGhCam}
-            className="h-10 px-3.5 rounded-xl text-xs font-semibold cursor-pointer"
+            className="h-10 px-3.5 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
           >
             <RefreshCw
               size={14}
@@ -331,9 +331,9 @@ export default function PlantVision() {
       </div>
 
       {/* Main Two-Column Inspection Workspace */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-start">
         {/* Left: Snapshot Preview & Action Controls */}
-        <section className="lg:col-span-7 rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+        <section className="lg:col-span-7 rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4">
           {/* Explicit Camera Connection, Freshness & Snapshot Mode Strip */}
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <div className="flex flex-wrap items-center gap-2">
@@ -415,31 +415,35 @@ export default function PlantVision() {
           {/* Capture Timestamp & Clear Manual Photo */}
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             {manualPhotoDataUrl ? (
-              <div className="flex items-center gap-2">
-                <span>Selected file: {manualPhotoName || 'Leaf photograph'}</span>
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <span className="truncate max-w-[220px] sm:max-w-xs">
+                  Selected file: {manualPhotoName || 'Leaf photograph'}
+                </span>
                 <button
                   type="button"
                   onClick={() => {
                     setManualPhotoDataUrl(null);
                     setManualPhotoName('');
                   }}
-                  className="inline-flex items-center gap-1 text-primary font-semibold hover:underline cursor-pointer"
+                  className="inline-flex items-center gap-1 text-primary font-semibold hover:underline shrink-0 cursor-pointer"
                 >
                   <X size={13} /> Switch back to Greenhouse Camera
                 </button>
               </div>
             ) : (
-              <span className="font-mono tabular-nums flex items-center gap-1.5">
-                <Clock size={13} />
-                {snapshotTimestamp
-                  ? `Captured ${new Date(snapshotTimestamp).toLocaleString()} (${formatFrameAge(snapshotAgeSec)})`
-                  : 'Capture timestamp: None recorded yet'}
+              <span className="font-mono tabular-nums flex items-center gap-1.5 min-w-0 break-words">
+                <Clock size={13} className="shrink-0" />
+                <span className="min-w-0">
+                  {snapshotTimestamp
+                    ? `Captured ${new Date(snapshotTimestamp).toLocaleString()} (${formatFrameAge(snapshotAgeSec)})`
+                    : 'Capture timestamp: None recorded yet'}
+                </span>
               </span>
             )}
 
             <Link
               to="/settings?tab=hardware"
-              className="text-xs font-medium text-primary hover:underline underline-offset-4"
+              className="text-xs font-medium text-primary hover:underline underline-offset-4 shrink-0"
             >
               Camera Settings
             </Link>
@@ -459,12 +463,12 @@ export default function PlantVision() {
           )}
 
           {/* Primary Action Bar: Analyze Plant + Snap Leaf Photo + Upload Leaf Photo */}
-          <div className="pt-2 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2.5">
+          <div className="pt-2 flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5">
             <Button
               type="button"
               disabled={!canAnalyze || analyzing || preparingPhoto}
               onClick={handleAnalyzePlant}
-              className="h-11 px-5 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold flex-1 min-w-[200px] cursor-pointer"
+              className="h-11 px-5 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold sm:flex-1 sm:min-w-[200px] cursor-pointer"
             >
               {analyzing ? (
                 <>
@@ -486,34 +490,36 @@ export default function PlantVision() {
               )}
             </Button>
 
-            <Button
-              type="button"
-              variant="outline"
-              disabled={analyzing || preparingPhoto}
-              onClick={() => setCameraModalOpen(true)}
-              className="h-11 px-4 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
-            >
-              <Camera size={16} className="mr-2 text-primary" />
-              Snap Leaf Photo
-            </Button>
+            <div className="grid grid-cols-2 sm:flex items-center gap-2.5">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={analyzing || preparingPhoto}
+                onClick={() => setCameraModalOpen(true)}
+                className="h-11 px-3 sm:px-4 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
+              >
+                <Camera size={16} className="mr-1.5 sm:mr-2 text-primary shrink-0" />
+                <span className="truncate">Snap Leaf Photo</span>
+              </Button>
 
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleManualPhotoUpload}
-              className="hidden"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              disabled={analyzing || preparingPhoto}
-              onClick={() => fileInputRef.current?.click()}
-              className="h-11 px-4 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
-            >
-              <ImageUp size={16} className="mr-2 text-primary" />
-              {preparingPhoto ? 'Loading Photo...' : 'Upload Photo'}
-            </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleManualPhotoUpload}
+                className="hidden"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={analyzing || preparingPhoto}
+                onClick={() => fileInputRef.current?.click()}
+                className="h-11 px-3 sm:px-4 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
+              >
+                <ImageUp size={16} className="mr-1.5 sm:mr-2 text-primary shrink-0" />
+                <span className="truncate">{preparingPhoto ? 'Loading...' : 'Upload Photo'}</span>
+              </Button>
+            </div>
           </div>
 
           {analysisError && (
@@ -525,7 +531,7 @@ export default function PlantVision() {
         </section>
 
         {/* Right: Structured AI Plant Inspection Result */}
-        <section className="lg:col-span-5 rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+        <section className="lg:col-span-5 rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <div className="w-9 h-9 rounded-xl bg-accent text-primary flex items-center justify-center shrink-0">
@@ -626,7 +632,7 @@ export default function PlantVision() {
       </div>
 
       {/* Past Plant Inspections */}
-      <section className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+      <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4">
         <div>
           <h2 className="text-base font-semibold text-foreground">Past Plant Inspections</h2>
           <p className="text-xs text-muted-foreground mt-0.5">

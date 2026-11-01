@@ -76,7 +76,7 @@ function MetricCard({
         : 'bg-muted text-muted-foreground border-border';
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 shadow-xs flex flex-col justify-between gap-4">
+    <div className="rounded-2xl border border-border bg-card p-4 sm:p-5 shadow-xs flex flex-col justify-between gap-4">
       <div className="space-y-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5">
@@ -324,10 +324,10 @@ export default function ControlCenter() {
       )}
 
       {/* 1. Greenhouse Connection & Status Overview Card */}
-      <section className="rounded-2xl border border-border bg-card p-6 shadow-xs">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+      <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-5">
           <div className="space-y-2 max-w-2xl">
-            <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2">
               <span
                 className={cn(
                   'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border whitespace-nowrap shrink-0',
@@ -353,7 +353,7 @@ export default function ControlCenter() {
               </span>
             </div>
 
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">
               {connectionIsGood
                 ? `${ghState.greenhouseName} is online and reporting normally`
                 : ghState.overallConnectionState === 'SIMULATION'
@@ -366,13 +366,13 @@ export default function ControlCenter() {
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <Button
               type="button"
               variant="outline"
               onClick={handleManualRefresh}
               disabled={refreshing}
-              className="h-10 px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+              className="h-10 px-3 sm:px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
             >
               <RefreshCw size={14} className={cn('mr-1.5', refreshing && 'animate-spin')} />
               Refresh
@@ -382,7 +382,7 @@ export default function ControlCenter() {
               type="button"
               variant="outline"
               onClick={() => setScannerOpen(true)}
-              className="h-10 px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+              className="h-10 px-3 sm:px-3.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
             >
               <QrCode size={15} className="mr-1.5 text-primary" />
               Scan Kit QR
@@ -390,7 +390,7 @@ export default function ControlCenter() {
 
             <Link
               to={ghState.nextActionTo}
-              className="inline-flex items-center justify-center gap-1.5 h-10 px-4 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+              className="inline-flex items-center justify-center gap-1.5 h-10 px-4 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold transition-colors whitespace-nowrap flex-1 sm:flex-initial shrink-0"
             >
               <span>{ghState.nextActionLabel}</span>
               <ArrowRight size={14} />
@@ -399,18 +399,18 @@ export default function ControlCenter() {
         </div>
 
         {/* Compact Secondary Readings Strip when available */}
-        <div className="mt-5 pt-4 border-t border-border grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
-          <div className="flex items-center justify-between sm:justify-start sm:gap-2">
-            <span className="text-muted-foreground">Water Tank:</span>
+        <div className="mt-4 sm:mt-5 pt-4 border-t border-border grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-4 text-xs">
+          <div className="rounded-lg bg-muted/35 sm:bg-transparent px-2.5 py-2 sm:p-0 flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-2">
+            <span className="text-muted-foreground text-[11px] sm:text-xs">Water Tank</span>
             <span className="font-mono tabular-nums font-semibold text-foreground">
               {ghState.secondaryReadings.waterLevel !== null
                 ? `${Math.round(ghState.secondaryReadings.waterLevel)}%`
                 : 'Unavailable'}
             </span>
           </div>
-          <div className="flex items-center justify-between sm:justify-start sm:gap-2">
-            <span className="text-muted-foreground flex items-center gap-1">
-              <Sun size={13} className="text-amber-600 dark:text-amber-400" /> Sunlight:
+          <div className="rounded-lg bg-muted/35 sm:bg-transparent px-2.5 py-2 sm:p-0 flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-2">
+            <span className="text-muted-foreground text-[11px] sm:text-xs flex items-center gap-1">
+              <Sun size={12} className="text-amber-600 dark:text-amber-400 shrink-0" /> Sunlight
             </span>
             <span className="font-mono tabular-nums font-semibold text-foreground">
               {ghState.secondaryReadings.sunlight !== null
@@ -418,16 +418,16 @@ export default function ControlCenter() {
                 : 'Unavailable'}
             </span>
           </div>
-          <div className="flex items-center justify-between sm:justify-start sm:gap-2">
-            <span className="text-muted-foreground">Battery:</span>
+          <div className="rounded-lg bg-muted/35 sm:bg-transparent px-2.5 py-2 sm:p-0 flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-2">
+            <span className="text-muted-foreground text-[11px] sm:text-xs">Battery</span>
             <span className="font-mono tabular-nums font-semibold text-foreground">
               {ghState.secondaryReadings.batteryVoltage !== null
                 ? `${ghState.secondaryReadings.batteryVoltage.toFixed(1)} V`
                 : 'Unavailable'}
             </span>
           </div>
-          <div className="flex items-center justify-between sm:justify-start sm:gap-2">
-            <span className="text-muted-foreground">Weather Sensor:</span>
+          <div className="rounded-lg bg-muted/35 sm:bg-transparent px-2.5 py-2 sm:p-0 flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-2">
+            <span className="text-muted-foreground text-[11px] sm:text-xs">Weather</span>
             <span className="font-semibold text-foreground">
               {ghState.secondaryReadings.rain === null
                 ? 'Unavailable'
@@ -471,9 +471,9 @@ export default function ControlCenter() {
       </section>
 
       {/* 3. Two-Column Actionable Alerts + Ask EDENS AI & Crop Health */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-start">
         {/* Left Column: Needs Attention & Actionable Alerts */}
-        <section className="lg:col-span-7 rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+        <section className="lg:col-span-7 rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4">
           <div className="flex items-center justify-between gap-2">
             <div>
               <h2 className="text-base font-semibold text-foreground">What Needs Attention</h2>
@@ -595,9 +595,9 @@ export default function ControlCenter() {
         </section>
 
         {/* Right Column: Prominent Ask EDENS AI + Crop Health & Harvest */}
-        <div className="lg:col-span-5 space-y-6">
+        <div className="lg:col-span-5 space-y-5 sm:space-y-6">
           {/* Ask EDENS AI Card */}
-          <section className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+          <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-xl bg-primary text-primary-foreground flex items-center justify-center shrink-0">
@@ -627,26 +627,26 @@ export default function ControlCenter() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5 pt-1">
+            <div className="grid grid-cols-2 gap-2 pt-1">
               <Link
                 to="/assistant?voice=1"
-                className="inline-flex items-center justify-center gap-1.5 h-10 px-3 rounded-lg border border-border bg-background hover:bg-muted text-xs font-semibold text-foreground transition-colors whitespace-nowrap"
+                className="inline-flex items-center justify-center gap-1.5 h-10 px-2.5 rounded-lg border border-border bg-background hover:bg-muted text-xs font-semibold text-foreground transition-colors whitespace-nowrap"
               >
-                <Mic size={15} className="text-primary" />
-                <span>Speak Question</span>
+                <Mic size={15} className="text-primary shrink-0" />
+                <span className="truncate">Speak Question</span>
               </Link>
               <Link
                 to="/assistant"
-                className="inline-flex items-center justify-center gap-1.5 h-10 px-3 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold transition-colors whitespace-nowrap"
+                className="inline-flex items-center justify-center gap-1.5 h-10 px-2.5 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold transition-colors whitespace-nowrap"
               >
-                <MessageSquareText size={15} />
-                <span>Open AI Assistant</span>
+                <MessageSquareText size={15} className="shrink-0" />
+                <span className="truncate">Open Assistant</span>
               </Link>
             </div>
           </section>
 
           {/* Crop Health Summary Card (Only from genuine assessments) */}
-          <section className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+          <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-accent text-primary flex items-center justify-center shrink-0">

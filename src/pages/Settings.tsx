@@ -441,7 +441,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Horizontal Accessible Tab Navigation */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 border-b border-border">
+      <div className="-mx-3.5 px-3.5 sm:mx-0 sm:px-0 flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 border-b border-border">
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -451,7 +451,7 @@ export default function SettingsPage() {
               type="button"
               onClick={() => setTab(tab.id)}
               className={cn(
-                'inline-flex items-center gap-2 px-3.5 py-2.5 rounded-t-xl text-xs font-semibold border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer',
+                'inline-flex items-center gap-2 px-3 sm:px-3.5 py-2.5 rounded-t-xl text-xs font-semibold border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer',
                 isActive
                   ? 'border-primary text-primary bg-accent/50'
                   : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50'
@@ -480,10 +480,10 @@ export default function SettingsPage() {
 
       {/* TAB 1: General & Language */}
       {activeTab === 'general' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-start">
           <form
             onSubmit={handleSaveGeneral}
-            className="lg:col-span-7 rounded-2xl border border-border bg-card p-6 shadow-xs space-y-5"
+            className="lg:col-span-7 rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-5"
           >
             <div>
               <h2 className="text-base font-semibold text-foreground">Farm &amp; Language Preferences</h2>
@@ -577,8 +577,8 @@ export default function SettingsPage() {
           </form>
 
           {/* Appearance, Operating Mode & Quick Walkthrough */}
-          <div className="lg:col-span-5 space-y-6">
-            <section className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+          <div className="lg:col-span-5 space-y-5 sm:space-y-6">
+            <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4">
               <div>
                 <h2 className="text-base font-semibold text-foreground">Appearance</h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
@@ -609,13 +609,13 @@ export default function SettingsPage() {
                         );
                       }}
                       className={cn(
-                        'h-11 rounded-xl border px-3 flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer',
+                        'h-11 rounded-xl border px-2 sm:px-3 flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer',
                         selected
                           ? 'border-primary bg-accent text-accent-foreground'
                           : 'border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted/50'
                       )}
                     >
-                      <Icon size={15} className={selected ? 'text-primary' : 'text-muted-foreground'} />
+                      <Icon size={15} className={cn('shrink-0', selected ? 'text-primary' : 'text-muted-foreground')} />
                       <span>{option.label}</span>
                     </button>
                   );
@@ -623,7 +623,7 @@ export default function SettingsPage() {
               </div>
             </section>
 
-            <section className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+            <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4">
               <div>
                 <h2 className="text-base font-semibold text-foreground">Data Mode</h2>
                 <p className="text-xs text-muted-foreground mt-0.5">

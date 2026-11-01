@@ -234,12 +234,12 @@ export function QrScannerModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-border bg-card text-foreground shadow-xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <div className="flex items-center gap-2.5">
-            <Camera size={20} className="text-primary" />
-            <h3 className="font-semibold text-base">{title}</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-3.5 sm:p-4">
+      <div className="w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-2xl border border-border bg-card text-foreground shadow-xl">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-border gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Camera size={20} className="text-primary shrink-0" />
+            <h3 className="font-semibold text-base truncate">{title}</h3>
           </div>
           <button
             type="button"
@@ -248,14 +248,14 @@ export function QrScannerModal({
               onClose();
             }}
             aria-label="Close scanner"
-            className="h-9 w-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
+            className="h-9 w-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted shrink-0 cursor-pointer"
           >
             <X size={18} />
           </button>
         </div>
 
-        <div className="p-6 space-y-4">
-          <div className="relative rounded-xl overflow-hidden bg-stone-900 aspect-square max-h-68 mx-auto border border-border flex items-center justify-center">
+        <div className="p-4 sm:p-6 space-y-4">
+          <div className="relative rounded-xl overflow-hidden bg-stone-900 aspect-square max-h-56 sm:max-h-68 mx-auto border border-border flex items-center justify-center">
             <video
               ref={videoRef}
               playsInline
@@ -314,7 +314,7 @@ export function QrScannerModal({
                 value={manualCode}
                 onChange={(e) => setManualCode(e.target.value)}
                 placeholder="enr_..."
-                className="h-10 bg-background border-input font-mono text-xs"
+                className="h-10 bg-background border-input font-mono text-base sm:text-xs"
               />
               <Button
                 type="button"

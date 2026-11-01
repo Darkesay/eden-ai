@@ -213,7 +213,7 @@ export function AgronomyAgentsPanel() {
   return (
     <section
       aria-label="Specialized Agronomy Agents"
-      className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-5"
+      className="rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4 sm:space-y-5"
     >
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-start gap-3">
@@ -241,7 +241,7 @@ export function AgronomyAgentsPanel() {
           variant="outline"
           disabled={runningAll}
           onClick={() => void handleRunAll()}
-          className="h-10 px-4 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
+          className="h-10 px-4 rounded-xl text-xs font-semibold w-full sm:w-auto shrink-0 cursor-pointer"
         >
           {runningAll ? (
             <>

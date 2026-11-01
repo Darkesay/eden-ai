@@ -246,16 +246,16 @@ export default function Layout() {
       </aside>
 
       {/* Main Content Area */}
-      <div className="flex-1 min-w-0 flex flex-col pb-20 md:pb-0">
+      <div className="flex-1 min-w-0 flex flex-col pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-0">
         {/* Top Bar (Compact <= 56px on mobile, 64px on desktop) */}
-        <header className="sticky top-0 z-30 h-14 md:h-16 bg-card/95 backdrop-blur-sm border-b border-border px-4 md:px-8 flex items-center justify-between gap-3">
+        <header className="sticky top-0 z-30 h-14 md:h-16 bg-card/95 backdrop-blur-sm border-b border-border px-3.5 sm:px-6 md:px-8 flex items-center justify-between gap-2">
           {/* Left: Mobile Brand OR Desktop Breadcrumb */}
           <div className="flex items-center gap-2 min-w-0">
-            <Link to="/" className="md:hidden flex items-center gap-2 shrink-0">
-              <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
+            <Link to="/" className="md:hidden flex items-center gap-2 min-w-0 shrink-0">
+              <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
                 <Sprout size={17} />
               </div>
-              <span className="font-bold text-sm tracking-tight text-foreground">EDENS AI</span>
+              <span className="font-bold text-sm tracking-tight text-foreground truncate">EDENS AI</span>
             </Link>
 
             <div className="hidden md:flex items-center gap-2 text-sm min-w-0">
@@ -274,9 +274,9 @@ export default function Layout() {
           </div>
 
           {/* Right: Theme Toggle & Primary Assistant Action */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <div className="md:hidden">
-              <DataSourceBadge showFreshness={false} />
+              <DataSourceBadge showFreshness={false} compact />
             </div>
 
             <button
@@ -284,7 +284,7 @@ export default function Layout() {
               onClick={toggleTheme}
               title={resolvedTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               aria-label={resolvedTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-              className="h-9 md:h-10 px-2.5 sm:px-3 rounded-lg border border-border bg-background hover:bg-muted text-foreground inline-flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="h-9 md:h-10 w-9 sm:w-auto sm:px-3 rounded-lg border border-border bg-background hover:bg-muted text-foreground inline-flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               {resolvedTheme === 'dark' ? (
                 <>
@@ -303,10 +303,11 @@ export default function Layout() {
               <Button
                 type="button"
                 onClick={() => navigate('/assistant')}
-                className="h-9 md:h-10 px-3.5 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs md:text-sm font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                className="h-9 md:h-10 px-2.5 sm:px-3.5 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs md:text-sm font-semibold whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <MessageSquare size={15} className="mr-1.5" />
-                Ask EDENS AI
+                <MessageSquare size={15} className="sm:mr-1.5 mr-1 shrink-0" />
+                <span className="sm:hidden">Ask AI</span>
+                <span className="hidden sm:inline">Ask EDENS AI</span>
               </Button>
             )}
 
@@ -325,15 +326,15 @@ export default function Layout() {
         </header>
 
         {/* Page Viewport */}
-        <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 md:px-8 py-6 md:py-8">
+        <main className="flex-1 w-full max-w-6xl mx-auto px-3.5 sm:px-6 md:px-8 py-4 sm:py-6 md:py-8">
           <Outlet />
         </main>
       </div>
 
-      {/* Mobile Bottom Navigation (5 Farmer-Facing Items, >=44px touch targets) */}
+      {/* Mobile Bottom Navigation (5 Equal Columns, >=44px touch targets, safe-area aware) */}
       <nav
         aria-label="Mobile navigation"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-40 h-16 bg-card border-t border-border px-1 flex items-center justify-around"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 h-[calc(4rem+env(safe-area-inset-bottom,0px))] pb-[env(safe-area-inset-bottom,0px)] bg-card/95 backdrop-blur-sm border-t border-border px-1 grid grid-cols-5 items-center"
       >
         {PRIMARY_NAV_ITEMS.map((item) => {
           const Icon = item.icon;
@@ -348,12 +349,12 @@ export default function Layout() {
               to={item.to}
               end={item.to === '/'}
               className={cn(
-                'flex flex-col items-center justify-center min-h-[44px] min-w-[56px] px-2 py-1 rounded-lg gap-0.5 transition-colors whitespace-nowrap shrink-0',
+                'flex flex-col items-center justify-center min-h-[44px] min-w-0 w-full px-1 py-1 rounded-lg gap-0.5 transition-colors',
                 isItemActive ? 'text-primary font-semibold' : 'text-muted-foreground hover:text-foreground'
               )}
             >
-              <Icon size={20} />
-              <span className="text-[11px] leading-tight">{item.shortLabel}</span>
+              <Icon size={20} className="shrink-0" />
+              <span className="text-[11px] leading-tight truncate max-w-full">{item.shortLabel}</span>
             </NavLink>
           );
         })}

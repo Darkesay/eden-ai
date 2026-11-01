@@ -100,7 +100,7 @@ function EnvironmentalTrendChart({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-muted-foreground">
         <span>Recent Temperature Trend (°C)</span>
         <span className="font-mono tabular-nums">
           Target band: {tempMin}–{tempMax}°C ({validTempSamples.length} readings)
@@ -571,7 +571,7 @@ export default function GreenhouseDetails() {
       )}
 
       {/* 1. Sensor Readings & Environmental Trend */}
-      <section className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-5">
+      <section className="rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="text-base font-semibold text-foreground">Sensor Readings &amp; Trend</h2>
@@ -670,9 +670,9 @@ export default function GreenhouseDetails() {
       </section>
 
       {/* 2. Two-Column Camera Snapshot Summary + Safe Equipment Controls */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-start">
         {/* Plant Camera Summary */}
-        <section className="lg:col-span-6 rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+        <section className="lg:col-span-6 rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4">
           <div className="flex items-start justify-between gap-2">
             <div>
               <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
@@ -734,7 +734,7 @@ export default function GreenhouseDetails() {
         </section>
 
         {/* Safe Equipment Controls & Hardware Safety Locks */}
-        <section className="lg:col-span-6 rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4">
+        <section className="lg:col-span-6 rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4">
           <div className="flex items-start justify-between gap-2">
             <div>
               <h2 className="text-base font-semibold text-foreground">
@@ -816,7 +816,7 @@ export default function GreenhouseDetails() {
         <button
           type="button"
           onClick={() => setShowTechSection((prev) => !prev)}
-          className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-muted/40 transition-colors cursor-pointer"
+          className="w-full px-4 sm:px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-muted/40 transition-colors cursor-pointer"
         >
           <div>
             <h2 className="text-sm font-semibold text-foreground">
@@ -834,7 +834,7 @@ export default function GreenhouseDetails() {
         </button>
 
         {showTechSection && (
-          <div className="px-6 pb-6 pt-4 border-t border-border grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="px-4 sm:px-6 pb-5 sm:pb-6 pt-4 border-t border-border grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Enrolled Hardware Devices */}
             <div className="space-y-3">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
