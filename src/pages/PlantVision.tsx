@@ -196,6 +196,8 @@ export default function PlantVision() {
     }
   };
 
+  const reportSpeechCacheRef = useRef<Map<string, string>>(new Map());
+
   const handleSpeakReport = async () => {
     if (!analysisResult) return;
     if (speakingReport) {
@@ -209,9 +211,28 @@ export default function PlantVision() {
       `${analysisResult.species}. Condition: ${analysisResult.healthStatus}. ${analysisResult.symptoms}. Recommended action: ${analysisResult.recommendation}`;
 
     const langObj = NIGERIAN_LANGUAGES.find((l) => l.id === selectedLangId);
+    const fallbackToDeviceVoice = () => {
+      setLoadingSpeech(false);
+      const ok = speakWithBrowserTts(
+        summaryText,
+        langObj?.speechCode || 'en-NG',
+        () => setSpeakingReport(true),
+        () => setSpeakingReport(false)
+      );
+      if (!ok) setSpeakingReport(false);
+    };
+
     setLoadingSpeech(true);
     try {
-      const pcmBase64 = await generateSpeechAudio(summaryText, 'Kore');
+      const cachedPcm = reportSpeechCacheRef.current.get(summaryText);
+      const pcmBase64 = cachedPcm ?? (await generateSpeechAudio(summaryText, 'Kore'));
+      if (!pcmBase64) {
+        fallbackToDeviceVoice();
+        return;
+      }
+      if (!cachedPcm) {
+        reportSpeechCacheRef.current.set(summaryText, pcmBase64);
+      }
       const wavUrl = base64PcmToWavUrl(pcmBase64, 24000);
       setLoadingSpeech(false);
       setSpeakingReport(true);
@@ -223,18 +244,11 @@ export default function PlantVision() {
         },
         () => {
           URL.revokeObjectURL(wavUrl);
-          setSpeakingReport(false);
+          fallbackToDeviceVoice();
         }
       );
     } catch {
-      setLoadingSpeech(false);
-      const ok = speakWithBrowserTts(
-        summaryText,
-        langObj?.speechCode || 'en-NG',
-        () => setSpeakingReport(true),
-        () => setSpeakingReport(false)
-      );
-      if (!ok) setSpeakingReport(false);
+      fallbackToDeviceVoice();
     }
   };
 

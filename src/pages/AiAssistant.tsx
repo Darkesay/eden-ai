@@ -138,6 +138,8 @@ export default function AiAssistant() {
     }
   };
 
+  const speechCacheRef = useRef<Map<string, string>>(new Map());
+
   const speakReply = useCallback(
     async (text: string, msgIndex: number) => {
       if (speakingIndex === msgIndex) {
@@ -147,8 +149,30 @@ export default function AiAssistant() {
       }
       stopAllAudio();
       setLoadingSpeechIndex(msgIndex);
+
+      const fallbackToDeviceVoice = () => {
+        setLoadingSpeechIndex(null);
+        const started = speakWithBrowserTts(
+          text,
+          selectedLang.speechCode || 'en-NG',
+          () => setSpeakingIndex(msgIndex),
+          () => setSpeakingIndex(null)
+        );
+        if (!started) {
+          setSpeakingIndex(null);
+        }
+      };
+
       try {
-        const pcmBase64 = await generateSpeechAudio(text, 'Kore');
+        const cachedPcm = speechCacheRef.current.get(text);
+        const pcmBase64 = cachedPcm ?? (await generateSpeechAudio(text, 'Kore'));
+        if (!pcmBase64) {
+          fallbackToDeviceVoice();
+          return;
+        }
+        if (!cachedPcm) {
+          speechCacheRef.current.set(text, pcmBase64);
+        }
         const wavUrl = base64PcmToWavUrl(pcmBase64, 24000);
         setLoadingSpeechIndex(null);
         setSpeakingIndex(msgIndex);
@@ -160,20 +184,11 @@ export default function AiAssistant() {
           },
           () => {
             URL.revokeObjectURL(wavUrl);
-            setSpeakingIndex(null);
+            fallbackToDeviceVoice();
           }
         );
       } catch {
-        setLoadingSpeechIndex(null);
-        const started = speakWithBrowserTts(
-          text,
-          selectedLang.speechCode || 'en-NG',
-          () => setSpeakingIndex(msgIndex),
-          () => setSpeakingIndex(null)
-        );
-        if (!started) {
-          setSpeakingIndex(null);
-        }
+        fallbackToDeviceVoice();
       }
     },
     [selectedLang.speechCode, speakingIndex]

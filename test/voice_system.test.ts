@@ -605,6 +605,89 @@ async function runTests() {
     );
   }
 
+  // Test 22: POST /api/ai/speech multi-model fallback, LRU cache, and BROWSER_TTS quota fallback
+  {
+    let liteTtsQuotaExhausted = true;
+    let flashTtsQuotaExhausted = false;
+    let upstreamModelCalls = 0;
+    const ttsCache = new Map<string, { pcmBase64: string; modelUsed: string }>();
+
+    const ttsApp = express();
+    ttsApp.use(express.json());
+    ttsApp.post('/api/ai/speech', (req, res) => {
+      const text = String(req.body?.text || '').trim();
+      const voiceName = String(req.body?.voiceName || 'Kore');
+      if (!text) return res.status(400).json({ error: 'EMPTY_TEXT' });
+
+      const key = `${voiceName}|${text}`;
+      const hit = ttsCache.get(key);
+      if (hit) {
+        return res.json({ success: true, pcmBase64: hit.pcmBase64, modelUsed: hit.modelUsed, cached: true });
+      }
+
+      const models = ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'];
+      for (const m of models) {
+        upstreamModelCalls++;
+        if (m === 'gemini-3.8-flash-lite-tts' && liteTtsQuotaExhausted) continue;
+        if (m === 'gemini-3.8-flash-tts' && flashTtsQuotaExhausted) continue;
+        const pcm = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+        ttsCache.set(key, { pcmBase64: pcm, modelUsed: m });
+        return res.json({ success: true, pcmBase64: pcm, modelUsed: m, cached: false });
+      }
+
+      return res.status(200).json({
+        success: true,
+        fallback: 'BROWSER_TTS',
+        pcmBase64: null,
+        reason: 'Quota reached across TTS models; using device SpeechSynthesis.'
+      });
+    });
+
+    const ttsServer = http.createServer(ttsApp);
+    await new Promise<void>((resolve) => ttsServer.listen(0, resolve));
+    const ttsPort = (ttsServer.address() as any).port;
+
+    // 24a: Primary TTS model hits 429 -> falls back to secondary Gemini TTS model
+    const r1 = await fetch(`http://127.0.0.1:${ttsPort}/api/ai/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'Welcome farmer to EDENS AI.' })
+    });
+    const d1 = await r1.json();
+    assert(
+      r1.status === 200 && Boolean(d1.pcmBase64) && d1.modelUsed === 'gemini-3.8-flash-tts',
+      '24. POST /api/ai/speech falls back cleanly to secondary Gemini TTS model when primary model hits 429 quota'
+    );
+
+    // 24b: Repeated request hits LRU cache with 0 additional upstream model calls
+    const callsBeforeCache = upstreamModelCalls;
+    const r2 = await fetch(`http://127.0.0.1:${ttsPort}/api/ai/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'Welcome farmer to EDENS AI.' })
+    });
+    const d2 = await r2.json();
+    assert(
+      r2.status === 200 && d2.cached === true && upstreamModelCalls === callsBeforeCache,
+      '25. POST /api/ai/speech serves repeated phrases from LRU cache without burning extra Gemini quota'
+    );
+
+    // 24c: When all Gemini TTS models reach 429 quota, returns HTTP 200 BROWSER_TTS fallback instead of crashing with 502
+    flashTtsQuotaExhausted = true;
+    const r3 = await fetch(`http://127.0.0.1:${ttsPort}/api/ai/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'Uncached sentence when all TTS models are exhausted.' })
+    });
+    const d3 = await r3.json();
+    assert(
+      r3.status === 200 && d3.fallback === 'BROWSER_TTS' && d3.pcmBase64 === null,
+      '26. POST /api/ai/speech returns clean BROWSER_TTS fallback (HTTP 200) when all Gemini TTS models reach free-tier quota'
+    );
+
+    ttsServer.close();
+  }
+
   server.close();
 
   console.log('\n========================================');

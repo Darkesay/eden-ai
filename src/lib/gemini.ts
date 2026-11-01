@@ -357,13 +357,19 @@ export async function generateSpeechAudio(
   text: string,
   voiceName: string = 'Kore',
   styleDescription: string = 'Warm, clear, respectful Nigerian agronomist speaking naturally to a farmer'
-): Promise<string> {
+): Promise<string | null> {
   const res = await apiFetch('/api/ai/speech', {
     method: 'POST',
     body: JSON.stringify({ text, voiceName, styleDescription })
   });
 
-  const parsed = await parseApiJsonResponse<{ pcmBase64?: string }>(res);
+  const parsed = await parseApiJsonResponse<{
+    pcmBase64?: string | null;
+    fallback?: string;
+  }>(res);
+  if (parsed.ok && parsed.data?.fallback === 'BROWSER_TTS') {
+    return null;
+  }
   if (!parsed.ok || !parsed.data?.pcmBase64) {
     throw new Error(
       !parsed.ok ? parsed.message : `Speech synthesis failed with HTTP ${res.status}`

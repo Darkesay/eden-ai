@@ -156,19 +156,21 @@ export function speakWithBrowserTts(
   stopAllAudio();
 
   const cleanText = text
-    .replace(/[*#_`>]/g, '')
+    .replace(/[*#_`>~]/g, '')
     .replace(/\[.*?\]/g, '')
     .trim();
 
   if (!cleanText) return false;
 
   const utterance = new SpeechSynthesisUtterance(cleanText);
+  utterance.lang = speechCode || 'en-NG';
   utterance.rate = 0.95;
   utterance.pitch = 1.0;
 
   const voices = window.speechSynthesis.getVoices();
   const prefix = speechCode.slice(0, 2).toLowerCase();
   const matchedVoice = 
+    voices.find(v => v.lang.toLowerCase() === speechCode.toLowerCase()) ||
     voices.find(v => v.lang.toLowerCase().startsWith(prefix)) ||
     voices.find(v => v.lang.includes('NG') || v.lang.includes('GB') || v.lang.includes('US')) ||
     voices[0];
@@ -181,6 +183,9 @@ export function speakWithBrowserTts(
   utterance.onend = () => onEnd?.();
   utterance.onerror = () => onEnd?.();
 
+  try {
+    window.speechSynthesis.resume();
+  } catch (_) {}
   window.speechSynthesis.speak(utterance);
   return true;
 }

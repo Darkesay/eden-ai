@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'node:crypto';
 import dns from 'node:dns';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -1036,8 +1037,8 @@ function getGeminiClient(): GoogleGenAI | null {
 }
 
 const GEMINI_TEXT_VISION_MODELS = [
-  'gemini-3.8-flash',
   'gemini-3.1-flash-lite',
+  'gemini-3.8-flash',
   'gemini-flash-latest'
 ] as const;
 
@@ -1047,11 +1048,47 @@ const GEMINI_AGENT_MODELS = [
   'gemini-flash-latest'
 ] as const;
 
+const GEMINI_TTS_MODELS = [
+  'gemini-3.8-flash-tts',
+  'gemini-3.8-flash-lite-tts'
+] as const;
+
+// Bounded in-memory LRU cache for synthesized TTS clips so repeated playback uses 0 Gemini quota
+interface CachedSpeechEntry {
+  pcmBase64: string;
+  mimeType: 'audio/wav' | 'audio/pcm';
+  modelUsed: string;
+}
+const MAX_SPEECH_CACHE_ENTRIES = 40;
+const speechAudioCache = new Map<string, CachedSpeechEntry>();
+
+function getCachedSpeech(cacheKey: string): CachedSpeechEntry | undefined {
+  const existing = speechAudioCache.get(cacheKey);
+  if (!existing) return undefined;
+  // Refresh LRU order
+  speechAudioCache.delete(cacheKey);
+  speechAudioCache.set(cacheKey, existing);
+  return existing;
+}
+
+function setCachedSpeech(cacheKey: string, entry: CachedSpeechEntry): void {
+  if (speechAudioCache.has(cacheKey)) {
+    speechAudioCache.delete(cacheKey);
+  } else if (speechAudioCache.size >= MAX_SPEECH_CACHE_ENTRIES) {
+    const oldestKey = speechAudioCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      speechAudioCache.delete(oldestKey);
+    }
+  }
+  speechAudioCache.set(cacheKey, entry);
+}
+
 // Tracks temporary per-model 429 quota cooldowns so subsequent requests immediately route to healthy models
 const modelQuotaCooldownUntil = new Map<string, number>();
 
 function recordModelCooldownIfQuotaExhausted(modelName: string, err: any): boolean {
   const msg = String(err?.message || err || '');
+  const lower = msg.toLowerCase();
   const status = Number(err?.status || err?.statusCode || 0);
   if (status !== 429 && !msg.includes('429') && !msg.includes('RESOURCE_EXHAUSTED')) {
     return false;
@@ -1059,18 +1096,18 @@ function recordModelCooldownIfQuotaExhausted(modelName: string, err: any): boole
 
   let cooldownMs = 45_000;
   if (
-    msg.includes('GenerateRequestsPerDay') ||
-    msg.includes('requests per day') ||
-    msg.includes('free_tier_requests')
+    lower.includes('generaterequestsperday') ||
+    lower.includes('requests per day') ||
+    lower.includes('free_tier_requests')
   ) {
-    // Daily free-tier quota reached for this specific model -> cool down for 15 minutes
-    cooldownMs = 15 * 60 * 1000;
+    // Daily free-tier quota reached for this specific model -> cool down for 30 minutes
+    cooldownMs = 30 * 60 * 1000;
   } else {
     const delayMatch = msg.match(/"retryDelay"\s*:\s*"(\d+)s"/i);
     if (delayMatch) {
       const secs = parseInt(delayMatch[1], 10);
       if (Number.isFinite(secs) && secs > 0) {
-        cooldownMs = Math.min(15 * 60 * 1000, Math.max(15_000, secs * 1000));
+        cooldownMs = Math.min(30 * 60 * 1000, Math.max(15_000, secs * 1000));
       }
     }
   }
@@ -1233,11 +1270,12 @@ app.get('/api/ai/status', (req, res) => {
     configured: isConfigured,
     provider: 'Google Gemini AI',
     models: {
-      chat: 'gemini-3.8-flash',
-      vision: 'gemini-3.8-flash',
+      chat: 'gemini-3.1-flash-lite',
+      vision: 'gemini-3.1-flash-lite',
       transcription: 'gemini-3.5-transcribe',
-      speech: 'gemini-3.8-flash-lite-tts',
-      fallbackChain: ['gemini-flash-latest', 'gemini-3.1-flash-lite']
+      speech: 'gemini-3.8-flash-tts',
+      fallbackChain: ['gemini-3.8-flash', 'gemini-flash-latest'],
+      ttsFallbackChain: ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts', 'BROWSER_TTS']
     },
     maxAudioUploadMb: MAX_AUDIO_MB,
     supportedAudioFormats: ['audio/webm', 'audio/wav', 'audio/mp3', 'audio/m4a', 'audio/mp4', 'audio/ogg', 'audio/aac'],
@@ -2244,7 +2282,9 @@ Return JSON: { "pump": "ON"|"OFF", "duration": number, "reason": "string" }`;
 
 /**
  * POST /api/ai/speech
- * High-quality Text-To-Speech generation via Gemini 3.8 Flash Lite TTS.
+ * High-quality Text-To-Speech generation across Gemini 3.8 TTS models
+ * (gemini-3.8-flash-tts -> gemini-3.8-flash-lite-tts) with bounded LRU audio caching
+ * and graceful client SpeechSynthesis fallback when free-tier TTS quota is exhausted.
  */
 app.post('/api/ai/speech', async (req, res) => {
   const ai = getGeminiClient();
@@ -2270,73 +2310,157 @@ app.post('/api/ai/speech', async (req, res) => {
     .trim()
     .slice(0, 900);
 
-  try {
-    let response: any;
-    try {
-      response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash-lite-tts',
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                text: cleanText,
-                speechMetadata: {
-                  style: String(styleDescription).slice(0, 160)
-                }
-              } as any
-            ]
-          }
-        ],
-        config: {
-          abortSignal: AbortSignal.timeout(15000),
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: voiceName || 'Kore' }
-            }
-          }
-        }
-      });
-    } catch {
-      await new Promise((r) => setTimeout(r, 500));
-      response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash-lite-tts',
-        contents: [{ role: 'user', parts: [{ text: cleanText }] }],
-        config: {
-          abortSignal: AbortSignal.timeout(15000),
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: voiceName || 'Kore' }
-            }
-          }
-        }
-      });
-    }
+  if (!cleanText) {
+    return res.status(400).json({ error: 'EMPTY_TEXT', message: 'No speakable text remained after formatting cleanup.' });
+  }
 
-    const pcmBase64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!pcmBase64) {
-      throw new Error('No audio data returned from Gemini TTS.');
-    }
+  const resolvedVoice = String(voiceName || 'Kore').trim() || 'Kore';
+  const resolvedStyle = String(styleDescription || '').trim().slice(0, 160);
+  const cacheKey = crypto
+    .createHash('sha256')
+    .update(`${resolvedVoice}|${resolvedStyle}|${cleanText}`)
+    .digest('hex');
 
-    const headBuf = Buffer.from(pcmBase64.slice(0, 16), 'base64');
-    const isRiffWav = headBuf.length >= 4 && headBuf.toString('ascii', 0, 4) === 'RIFF';
-
+  const cachedClip = getCachedSpeech(cacheKey);
+  if (cachedClip) {
     return res.json({
       success: true,
-      pcmBase64,
+      pcmBase64: cachedClip.pcmBase64,
       sampleRate: 24000,
-      mimeType: isRiffWav ? 'audio/wav' : 'audio/pcm'
-    });
-  } catch (err: any) {
-    const cleanErr = formatGeminiErrorForUser(err);
-    console.error('Speech generation error on server:', cleanErr);
-    return res.status(502).json({
-      error: 'TTS_FAILED',
-      message: `Speech synthesis failed: ${cleanErr}`
+      mimeType: cachedClip.mimeType,
+      modelUsed: cachedClip.modelUsed,
+      cached: true
     });
   }
+
+  const now = Date.now();
+  const activeTtsModels = GEMINI_TTS_MODELS.filter((m) => (modelQuotaCooldownUntil.get(m) || 0) <= now);
+
+  // If all Gemini TTS models are in active 429 quota cooldown, immediately instruct client to use native device TTS
+  if (activeTtsModels.length === 0) {
+    return res.status(200).json({
+      success: true,
+      fallback: 'BROWSER_TTS',
+      pcmBase64: null,
+      reason: 'Gemini TTS free-tier quota is cooling down; using device speech synthesis.'
+    });
+  }
+
+  let lastErr: any = null;
+
+  for (const ttsModel of activeTtsModels) {
+    try {
+      let response: any;
+      try {
+        response = await ai.models.generateContent({
+          model: ttsModel,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                (resolvedStyle
+                  ? {
+                      text: cleanText,
+                      speechMetadata: {
+                        style: resolvedStyle
+                      }
+                    }
+                  : { text: cleanText }) as any
+              ]
+            }
+          ],
+          config: {
+            abortSignal: AbortSignal.timeout(15000),
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: resolvedVoice }
+              }
+            }
+          }
+        });
+      } catch (innerErr: any) {
+        const innerStatus = Number(innerErr?.status || innerErr?.statusCode || 0);
+        const innerMsg = String(innerErr?.message || innerErr || '');
+        // Only retry the same model without speechMetadata if speechMetadata caused a 400 invalid argument error
+        if (innerStatus === 400 && !innerMsg.includes('API_KEY_INVALID')) {
+          response = await ai.models.generateContent({
+            model: ttsModel,
+            contents: [{ role: 'user', parts: [{ text: cleanText }] }],
+            config: {
+              abortSignal: AbortSignal.timeout(15000),
+              responseModalities: ['AUDIO'],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName: resolvedVoice }
+                }
+              }
+            }
+          });
+        } else {
+          throw innerErr;
+        }
+      }
+
+      const pcmBase64 = response?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!pcmBase64) {
+        throw new Error(`No audio data returned from ${ttsModel}.`);
+      }
+
+      modelQuotaCooldownUntil.delete(ttsModel);
+      const headBuf = Buffer.from(pcmBase64.slice(0, 16), 'base64');
+      const isRiffWav = headBuf.length >= 4 && headBuf.toString('ascii', 0, 4) === 'RIFF';
+      const mimeType: 'audio/wav' | 'audio/pcm' = isRiffWav ? 'audio/wav' : 'audio/pcm';
+
+      setCachedSpeech(cacheKey, {
+        pcmBase64,
+        mimeType,
+        modelUsed: ttsModel
+      });
+
+      return res.json({
+        success: true,
+        pcmBase64,
+        sampleRate: 24000,
+        mimeType,
+        modelUsed: ttsModel
+      });
+    } catch (err: any) {
+      lastErr = err;
+      const wasQuota = recordModelCooldownIfQuotaExhausted(ttsModel, err);
+      if (!wasQuota && !isFallbackEligibleError(err)) {
+        break;
+      }
+    }
+  }
+
+  const cleanErr = formatGeminiErrorForUser(lastErr);
+  const lastStatus = Number(lastErr?.status || lastErr?.statusCode || 0);
+  const rawLastMsg = String(lastErr?.message || lastErr || '');
+  const isQuotaOrTransient =
+    lastStatus === 429 ||
+    rawLastMsg.includes('429') ||
+    rawLastMsg.includes('RESOURCE_EXHAUSTED') ||
+    isTransientRetryableModelError(lastErr);
+
+  if (isQuotaOrTransient) {
+    console.warn(
+      '[EDENS AI TTS] Upstream Gemini TTS quota/capacity reached across models; switching client to native SpeechSynthesis:',
+      cleanErr
+    );
+    return res.status(200).json({
+      success: true,
+      fallback: 'BROWSER_TTS',
+      pcmBase64: null,
+      reason: cleanErr
+    });
+  }
+
+  console.warn('[EDENS AI TTS] Speech synthesis failed:', cleanErr);
+  return res.status(502).json({
+    error: 'TTS_FAILED',
+    message: `Speech synthesis failed: ${cleanErr}`
+  });
 });
 
 // --------------------------------------------------------------------
