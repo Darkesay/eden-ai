@@ -33,6 +33,7 @@ import { useMqtt } from '../lib/mqtt';
 import { store, useStoreTable } from '../lib/store';
 import { DataSourceBadge } from '../components/DataSourceBadge';
 import { HarvestWidget } from '../components/HarvestWidget';
+import { AgronomyAgentsPanel } from '../components/AgronomyAgentsPanel';
 import { QrScannerModal } from '../components/QrScannerModal';
 import { Button } from '../components/ui/button';
 import { cn } from '../lib/utils';
@@ -192,14 +193,20 @@ export default function ControlCenter() {
             });
             return;
           }
-          const obs = Array.isArray(data.observations) ? data.observations[0] : null;
-          if (obs && obs.summary) {
+          const visionObs = Array.isArray(data.observations)
+            ? data.observations.find((o: any) => o.category === 'vision_diagnosis')
+            : null;
+          if (visionObs) {
+            const payload = visionObs.payload || {};
             setLatestCropCheck({
-              species: ghState.cropName,
-              healthStatus: obs.healthStatus || obs.category || 'Inspected',
-              recommendation: obs.recommendation || obs.summary,
-              timestamp: obs.createdAt || null,
-              sourceLabel: 'Saved Crop Assessment'
+              species: payload.species || ghState.cropName,
+              healthStatus: payload.healthStatus || 'Inspected',
+              recommendation: payload.recommendation || visionObs.summary || '',
+              timestamp: visionObs.createdAt || null,
+              sourceLabel:
+                visionObs.dataSource === 'MANUAL_UPLOAD'
+                  ? 'Phone / Leaf Photo'
+                  : 'Greenhouse Camera Photo'
             });
             return;
           }
@@ -694,6 +701,9 @@ export default function ControlCenter() {
           <HarvestWidget />
         </div>
       </div>
+
+      {/* 4. 5 Specialized Agronomy Agents Hub */}
+      <AgronomyAgentsPanel />
 
       <QrScannerModal
         open={scannerOpen}

@@ -39,6 +39,8 @@ import {
 } from '../lib/audio';
 import { formatRelativeAge, useFarmerGreenhouseState } from '../lib/greenhouseState';
 import { store, useStoreValue } from '../lib/store';
+import { LeafCameraModal } from '../components/LeafCameraModal';
+import { prepareImageForDiagnosis } from '../lib/imageUtils';
 import { Button } from '../components/ui/button';
 import { cn } from '../lib/utils';
 
@@ -89,6 +91,7 @@ export default function AiAssistant() {
 
   const [input, setInput] = useState('');
   const [attachedLeafImage, setAttachedLeafImage] = useState<string | null>(null);
+  const [cameraModalOpen, setCameraModalOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
@@ -425,18 +428,19 @@ export default function AiAssistant() {
     }
   };
 
-  const handleLeafPhotoSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLeafPhotoSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    if (leafFileInputRef.current) leafFileInputRef.current.value = '';
     if (!file) return;
     setErrorBanner(null);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      if (typeof reader.result === 'string') {
-        setAttachedLeafImage(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
-    if (leafFileInputRef.current) leafFileInputRef.current.value = '';
+    try {
+      const normalizedDataUrl = await prepareImageForDiagnosis(file);
+      setAttachedLeafImage(normalizedDataUrl);
+    } catch (err: any) {
+      setErrorBanner(
+        err?.message || 'Could not load that leaf photo. Please choose a clear JPG, PNG, or WebP image.'
+      );
+    }
   };
 
   const handleClearConversation = () => {
@@ -801,6 +805,17 @@ export default function AiAssistant() {
                     Upload Voice Note
                   </Button>
 
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={sending || isTranscribing}
+                    onClick={() => setCameraModalOpen(true)}
+                    className="h-10 px-3.5 rounded-lg text-xs font-semibold cursor-pointer"
+                  >
+                    <Camera size={15} className="mr-1.5 text-primary" />
+                    Snap Leaf Photo
+                  </Button>
+
                   <input
                     ref={leafFileInputRef}
                     type="file"
@@ -828,6 +843,15 @@ export default function AiAssistant() {
           )}
         </div>
       </section>
+
+      <LeafCameraModal
+        open={cameraModalOpen}
+        onClose={() => setCameraModalOpen(false)}
+        onCapture={(dataUrl) => {
+          setErrorBanner(null);
+          setAttachedLeafImage(dataUrl);
+        }}
+      />
     </div>
   );
 }

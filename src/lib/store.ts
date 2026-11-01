@@ -8,6 +8,29 @@ export const persister = createIndexedDbPersister(store, 'botanix-db');
 
 export async function initStore() {
   await persister.startAutoLoad();
+
+  const defaultAgentKeys = [
+    'agent_ClimateAgent_enabled',
+    'agent_IrrigationAgent_enabled',
+    'agent_VisionAgent_enabled',
+    'agent_HarvestAgent_enabled',
+    'agent_AlertAgent_enabled'
+  ] as const;
+
+  for (const key of defaultAgentKeys) {
+    if (store.getValue(key) === undefined) {
+      store.setValue(key, true);
+    }
+  }
+
+  if (store.getValue('cropType') === undefined) {
+    store.setValue('cropType', 'Tomato');
+  }
+  if (store.getValue('plantingDate') === undefined) {
+    const defaultPlanted = new Date(Date.now() - 21 * 86_400_000).toISOString().split('T')[0];
+    store.setValue('plantingDate', defaultPlanted);
+  }
+
   await persister.startAutoSave();
 }
 

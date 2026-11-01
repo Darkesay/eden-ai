@@ -59,7 +59,8 @@ function readEnvApiBaseUrl(): string {
  * so `/api/api/...` cannot occur.
  */
 export function normalizeApiBaseUrl(rawBaseUrl?: string): string {
-  const candidate = (rawBaseUrl !== undefined ? rawBaseUrl : readEnvApiBaseUrl()).trim();
+  const isExplicitOverride = rawBaseUrl !== undefined;
+  const candidate = (isExplicitOverride ? rawBaseUrl : readEnvApiBaseUrl()).trim();
   if (!candidate) return '';
   if (!/^https?:\/\//i.test(candidate)) return '';
   if (/REPLACE_WITH|YOUR_APP_URL|Secret value/i.test(candidate)) return '';
@@ -68,6 +69,31 @@ export function normalizeApiBaseUrl(rawBaseUrl?: string): string {
   if (cleaned.endsWith('/api')) {
     cleaned = cleaned.slice(0, -4);
   }
+
+  // Guard env-configured VITE_API_BASE_URL in browsers so a static frontend URL (e.g. eden-ai.vercel.app)
+  // or cross-origin override never hijacks same-origin Express servers (AI Studio *.run.app / Render / localhost).
+  if (!isExplicitOverride) {
+    try {
+      const parsed = new URL(cleaned);
+      if (parsed.hostname.toLowerCase() === 'eden-ai.vercel.app') {
+        return '';
+      }
+      if (typeof window !== 'undefined' && window.location?.hostname) {
+        const currentHost = window.location.hostname.toLowerCase();
+        if (
+          currentHost.endsWith('.run.app') ||
+          currentHost.endsWith('.onrender.com') ||
+          currentHost === 'localhost' ||
+          currentHost === '127.0.0.1'
+        ) {
+          return '';
+        }
+      }
+    } catch {
+      return '';
+    }
+  }
+
   return cleaned;
 }
 
@@ -159,8 +185,33 @@ export async function parseApiJsonResponse<T = Record<string, any>>(
     }
   }
 
-  // Case A: Non-JSON HTML / plain-text response (Vercel 404, Express HTML 404, SPA index.html fallback, or 502/503/504 gateway page)
+  // Case A: Non-JSON HTML / plain-text response (Vercel 404, Express HTML 404, SPA index.html fallback, 413 payload error, or 502/503/504 gateway page)
   if (!jsonParseSucceeded) {
+    if (
+      status === 413 ||
+      /Request Entity Too Large|Payload Too Large|FUNCTION_PAYLOAD_TOO_LARGE/i.test(trimmed)
+    ) {
+      return {
+        ok: false,
+        status: status || 413,
+        kind: 'VALIDATION_ERROR',
+        errorCode: 'PAYLOAD_TOO_LARGE',
+        message:
+          'The selected photo or audio file is too large for the network proxy. Please snap a fresh leaf photo or upload a smaller image.'
+      };
+    }
+
+    if (status === 408 || status === 524) {
+      return {
+        ok: false,
+        status,
+        kind: 'BACKEND_UNAVAILABLE',
+        errorCode: `GATEWAY_HTTP_${status}`,
+        message:
+          'The request timed out while waiting for the EDENS AI server. Please try again in a few seconds.'
+      };
+    }
+
     if (status === 502 || status === 503 || status === 504) {
       return {
         ok: false,
@@ -168,7 +219,7 @@ export async function parseApiJsonResponse<T = Record<string, any>>(
         kind: 'BACKEND_UNAVAILABLE',
         errorCode: `GATEWAY_HTTP_${status}`,
         message:
-          'The EDENS AI backend server is temporarily unavailable or waking up on Render. Wait 15–30 seconds and try again.'
+          'The EDENS AI backend server is temporarily unavailable or waking up. Wait 10–20 seconds and try again.'
       };
     }
 
@@ -189,13 +240,16 @@ export async function parseApiJsonResponse<T = Record<string, any>>(
       status === 405 ||
       looksLikeHtmlOrStaticNotFound(trimmed, contentType)
     ) {
+      const isAuthContext =
+        context === 'register' || context === 'login' || context === 'session';
       return {
         ok: false,
         status,
         kind: 'API_ROUTE_MISCONFIGURED',
         errorCode: 'API_ROUTE_MISCONFIGURED',
-        message:
-          'Unable to reach the EDENS AI authentication service because /api/* requests returned a static page instead of API JSON. Verify backend routing or deployment rewrites.'
+        message: isAuthContext
+          ? 'Unable to reach the EDENS AI authentication service because /api/* requests returned a static page instead of API JSON. Verify backend routing or deployment rewrites.'
+          : 'Unable to reach the EDENS AI backend API because /api/* returned a static page instead of JSON. Refresh the page or verify backend routing.'
       };
     }
 
@@ -396,6 +450,27 @@ export interface ApiFetchOptions extends RequestInit {
   fetchImpl?: typeof fetch;
 }
 
+const PRODUCTION_RENDER_API_ORIGIN = 'https://edens-ai.onrender.com';
+
+async function isStaticNonJsonApiResponse(res: Response): Promise<boolean> {
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  if (ct.includes('application/json') || ct.includes('+json')) {
+    return false;
+  }
+  if (ct.includes('text/html')) {
+    return true;
+  }
+  if (res.status === 404 || res.status === 405) {
+    try {
+      const sample = (await res.clone().text()).trim().slice(0, 512);
+      return looksLikeHtmlOrStaticNotFound(sample, ct);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 /**
  * Executes a credentialed HTTP request against the EDENS AI backend using `HttpOnly` cookies (`credentials: 'include'`),
  * with automatic private in-memory `Authorization: Bearer` fallback inside restricted cross-origin iframes.
@@ -418,10 +493,47 @@ export async function apiFetch(input: string, init: ApiFetchOptions = {}): Promi
     headers.set('Content-Type', 'application/json');
   }
 
-  const targetUrl = resolveApiUrl(input, baseUrl);
-  return fetchImpl(targetUrl, {
+  const requestInit: RequestInit = {
     ...rest,
     credentials: rest.credentials ?? 'include',
     headers
-  });
+  };
+
+  const targetUrl = resolveApiUrl(input, baseUrl);
+  const primaryRes = await fetchImpl(targetUrl, requestInit);
+
+  // Automatic browser-only recovery when a static host or misconfigured rewrite returns HTML/404 instead of API JSON
+  const isDefaultBrowserFetch =
+    typeof window !== 'undefined' &&
+    init.fetchImpl === undefined &&
+    baseUrl === undefined &&
+    (input.startsWith('/api/') || input.startsWith('api/'));
+
+  if (isDefaultBrowserFetch) {
+    const normalizedPath = input.startsWith('/') ? input : `/${input}`;
+    const staticMisrouted = await isStaticNonJsonApiResponse(primaryRes);
+
+    // 1. If an external base URL returned a static page, fall back to same-origin relative /api/*
+    if (staticMisrouted && targetUrl !== normalizedPath) {
+      const sameOriginRes = await fetchImpl(normalizedPath, requestInit);
+      if (!(await isStaticNonJsonApiResponse(sameOriginRes))) {
+        return sameOriginRes;
+      }
+    }
+
+    // 2. If hosted on Vercel (*.vercel.app) and rewrite returned a static page or 502/504 proxy timeout, call Render directly
+    const host = (window.location?.hostname || '').toLowerCase();
+    if (
+      host.endsWith('.vercel.app') &&
+      (staticMisrouted || primaryRes.status === 502 || primaryRes.status === 504)
+    ) {
+      try {
+        return await fetchImpl(`${PRODUCTION_RENDER_API_ORIGIN}${normalizedPath}`, requestInit);
+      } catch {
+        return primaryRes;
+      }
+    }
+  }
+
+  return primaryRes;
 }

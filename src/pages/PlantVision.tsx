@@ -33,6 +33,8 @@ import {
 import { base64PcmToWavUrl, playAudioUrl, speakWithBrowserTts, stopAllAudio } from '../lib/audio';
 import { formatRelativeAge } from '../lib/greenhouseState';
 import { store, useStoreTable, useStoreValue } from '../lib/store';
+import { LeafCameraModal } from '../components/LeafCameraModal';
+import { prepareImageForDiagnosis } from '../lib/imageUtils';
 import { Button } from '../components/ui/button';
 import { cn } from '../lib/utils';
 
@@ -50,9 +52,11 @@ export default function PlantVision() {
   const [ghObservations, setGhObservations] = useState<any[]>([]);
   const [loadingGhCam, setLoadingGhCam] = useState(false);
 
-  // Manual phone/computer photo upload state
+  // Manual phone/computer photo upload & live camera snap state
   const [manualPhotoDataUrl, setManualPhotoDataUrl] = useState<string | null>(null);
   const [manualPhotoName, setManualPhotoName] = useState<string>('');
+  const [preparingPhoto, setPreparingPhoto] = useState(false);
+  const [cameraModalOpen, setCameraModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // AI inspection state
@@ -120,20 +124,24 @@ export default function PlantVision() {
 
   const cameraConnected = snapshotExists && snapshotIsFresh;
 
-  const handleManualPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleManualPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    if (fileInputRef.current) fileInputRef.current.value = '';
     if (!file) return;
     setAnalysisError(null);
     setAnalysisResult(null);
-    setManualPhotoName(file.name);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      if (typeof reader.result === 'string') {
-        setManualPhotoDataUrl(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    setPreparingPhoto(true);
+    try {
+      const normalizedDataUrl = await prepareImageForDiagnosis(file);
+      setManualPhotoName(file.name);
+      setManualPhotoDataUrl(normalizedDataUrl);
+    } catch (err: any) {
+      setAnalysisError(
+        err?.message || 'Could not load that photo. Please choose a clear JPG, PNG, or WebP leaf image.'
+      );
+    } finally {
+      setPreparingPhoto(false);
+    }
   };
 
   const handleAnalyzePlant = async () => {
@@ -230,7 +238,7 @@ export default function PlantVision() {
     }
   };
 
-  // Combine past inspections from cloud greenhouse observations + local ai_history
+  // Combine past inspections from cloud greenhouse vision observations + local ai_history
   const localHistory = Object.entries(aiHistoryTable).map(([id, item]: [string, any]) => ({
     id,
     title: `${item.species || 'Crop'} — ${item.healthStatus || 'Inspected'}`,
@@ -239,16 +247,31 @@ export default function PlantVision() {
     source: item.source || 'Leaf Photo'
   }));
 
-  const cloudHistory = ghObservations.map((obs: any) => ({
-    id: obs.id,
-    title: `${activeGreenhouse?.cropType || 'Crop'} — ${obs.healthStatus || 'Camera Check'}`,
-    summary: obs.recommendation || obs.summary || '',
-    timestamp: obs.createdAt || null,
-    source: 'Greenhouse Camera'
-  }));
+  const cloudHistory = ghObservations
+    .filter((obs: any) => !obs.category || obs.category === 'vision_diagnosis')
+    .map((obs: any) => {
+      const payload = obs.payload || {};
+      return {
+        id: obs.id,
+        title: `${payload.species || activeGreenhouse?.cropType || 'Crop'} — ${payload.healthStatus || obs.healthStatus || 'Inspected'}`,
+        summary: payload.recommendation || obs.recommendation || obs.summary || '',
+        timestamp: obs.createdAt || null,
+        source:
+          obs.dataSource === 'MANUAL_UPLOAD' ? 'Phone / Leaf Photo' : 'ESP32-CAM Snapshot'
+      };
+    });
 
+  // Deduplicate if the same inspection was saved both to cloud and local history within 5s
   const combinedHistory = [...cloudHistory, ...localHistory]
     .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+    .filter((item, idx, arr) => {
+      if (idx === 0) return true;
+      const prev = arr[idx - 1];
+      const dt = Math.abs(
+        new Date(item.timestamp || 0).getTime() - new Date(prev.timestamp || 0).getTime()
+      );
+      return !(dt < 5000 && item.title === prev.title);
+    })
     .slice(0, 8);
 
   const canAnalyze = Boolean(manualPhotoDataUrl) || (snapshotExists && snapshotIsFresh);
@@ -435,29 +458,43 @@ export default function PlantVision() {
             </div>
           )}
 
-          {/* Primary Action Bar: Analyze Plant + Upload Leaf Photo */}
-          <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          {/* Primary Action Bar: Analyze Plant + Snap Leaf Photo + Upload Leaf Photo */}
+          <div className="pt-2 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2.5">
             <Button
               type="button"
-              disabled={!canAnalyze || analyzing}
+              disabled={!canAnalyze || analyzing || preparingPhoto}
               onClick={handleAnalyzePlant}
-              className="h-11 px-6 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold flex-1 cursor-pointer"
+              className="h-11 px-5 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold flex-1 min-w-[200px] cursor-pointer"
             >
               {analyzing ? (
                 <>
                   <Loader2 size={17} className="animate-spin mr-2" />
                   <span>Inspecting Plant Leaves...</span>
                 </>
+              ) : preparingPhoto ? (
+                <>
+                  <Loader2 size={17} className="animate-spin mr-2" />
+                  <span>Preparing Photo...</span>
+                </>
               ) : (
                 <>
                   <Sparkles size={17} className="mr-2" />
                   <span>
-                    {manualPhotoDataUrl
-                      ? 'Analyze Uploaded Leaf Photo'
-                      : 'Analyze Plant Snapshot'}
+                    {manualPhotoDataUrl ? 'Analyze Leaf Photo' : 'Analyze Plant Snapshot'}
                   </span>
                 </>
               )}
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              disabled={analyzing || preparingPhoto}
+              onClick={() => setCameraModalOpen(true)}
+              className="h-11 px-4 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
+            >
+              <Camera size={16} className="mr-2 text-primary" />
+              Snap Leaf Photo
             </Button>
 
             <input
@@ -470,12 +507,12 @@ export default function PlantVision() {
             <Button
               type="button"
               variant="outline"
-              disabled={analyzing}
+              disabled={analyzing || preparingPhoto}
               onClick={() => fileInputRef.current?.click()}
               className="h-11 px-4 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
             >
               <ImageUp size={16} className="mr-2 text-primary" />
-              Upload Leaf Photo
+              {preparingPhoto ? 'Loading Photo...' : 'Upload Photo'}
             </Button>
           </div>
 
@@ -526,7 +563,16 @@ export default function PlantVision() {
               <div className="rounded-xl bg-muted/50 p-4 space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-muted-foreground">Plant Identified</span>
-                  <span className="text-xs font-semibold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60">
+                  <span
+                    className={cn(
+                      'text-xs font-semibold px-2.5 py-0.5 rounded border',
+                      analysisResult.healthStatus.toLowerCase().includes('healthy')
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60'
+                        : analysisResult.healthStatus.toLowerCase().includes('diseas')
+                          ? 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/45 dark:text-red-300 dark:border-red-800/60'
+                          : 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/45 dark:text-amber-300 dark:border-amber-800/60'
+                    )}
+                  >
                     {analysisResult.healthStatus}
                   </span>
                 </div>
@@ -546,16 +592,18 @@ export default function PlantVision() {
                 </div>
 
                 <div className="pt-2 border-t border-border">
-                  <h3 className="font-semibold text-foreground mb-1">Likely Cause</h3>
+                  <h3 className="font-semibold text-foreground mb-1">Likely Root Cause</h3>
                   <p className="text-muted-foreground">{analysisResult.cause}</p>
                 </div>
 
                 <div className="pt-2 border-t border-border">
                   <h3 className="font-semibold text-foreground mb-1 flex items-center gap-1.5">
                     <CheckCircle2 size={14} className="text-primary" />
-                    Recommended Next Steps
+                    Step-by-Step Treatment &amp; Organic Remedies
                   </h3>
-                  <p className="text-foreground font-medium">{analysisResult.recommendation}</p>
+                  <p className="text-foreground font-medium whitespace-pre-line">
+                    {analysisResult.recommendation}
+                  </p>
                 </div>
               </div>
 
@@ -570,7 +618,7 @@ export default function PlantVision() {
             <div className="rounded-xl bg-muted/50 p-6 text-center space-y-2">
               <p className="text-sm font-semibold text-foreground">Ready to Inspect Your Crop</p>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Tap <strong className="text-foreground">Analyze Plant Snapshot</strong> when a fresh greenhouse photo is shown, or tap <strong className="text-foreground">Upload Leaf Photo</strong> to inspect any plant photo from your phone.
+                Tap <strong className="text-foreground">Analyze Plant Snapshot</strong> when a fresh greenhouse photo is shown, or tap <strong className="text-foreground">Snap Leaf Photo</strong> / <strong className="text-foreground">Upload Photo</strong> to inspect a leaf from your phone or camera.
               </p>
             </div>
           )}
@@ -609,6 +657,17 @@ export default function PlantVision() {
           </div>
         )}
       </section>
+
+      <LeafCameraModal
+        open={cameraModalOpen}
+        onClose={() => setCameraModalOpen(false)}
+        onCapture={(dataUrl, fileName) => {
+          setAnalysisError(null);
+          setAnalysisResult(null);
+          setManualPhotoDataUrl(dataUrl);
+          setManualPhotoName(fileName);
+        }}
+      />
     </div>
   );
 }

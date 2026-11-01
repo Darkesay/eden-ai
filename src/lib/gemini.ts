@@ -5,6 +5,7 @@
  */
 
 import { apiFetch, parseApiJsonResponse } from './api.ts';
+import { prepareImageForDiagnosis } from './imageUtils.ts';
 
 export interface PlantAnalysisResult {
   species: string;
@@ -28,6 +29,8 @@ export interface HarvestPredictionResult {
   daysRemaining: number;
   estimatedHarvestDate: string;
   confidence: number;
+  dataSource?: string;
+  telemetryTimestamp?: string | null;
   factors: {
     name: string;
     impact: number;
@@ -191,16 +194,21 @@ export async function predictHarvest(
   cropType: string,
   plantingDate: string,
   standardDays: number,
-  avgTemp: number,
-  avgHumidity: number,
+  avgTemp: number | null,
+  avgHumidity: number | null,
   lightHours: number,
-  soilMoisture: number
+  soilMoisture: number | null,
+  options?: { dataSource?: string; requireFresh?: boolean }
 ): Promise<HarvestPredictionResult> {
-  const greenhouseId = getActiveGreenhouseIdForAi();
+  const source = options?.dataSource || 'CROP_BASELINE';
+  const requireFresh = options?.requireFresh ?? source === 'REAL_HARDWARE';
+  const greenhouseId = getActiveGreenhouseIdForAi(source);
   const res = await apiFetch('/api/ai/predict-harvest', {
     method: 'POST',
     body: JSON.stringify({
       greenhouseId,
+      requireFresh,
+      dataSource: source,
       cropType,
       plantingDate,
       standardDays,
@@ -211,13 +219,21 @@ export async function predictHarvest(
     })
   });
 
-  const parsed = await parseApiJsonResponse<{ result?: HarvestPredictionResult }>(res);
+  const parsed = await parseApiJsonResponse<{
+    result?: HarvestPredictionResult;
+    dataSource?: string;
+    telemetryTimestamp?: string | null;
+  }>(res);
   if (!parsed.ok || !parsed.data?.result) {
     throw new Error(
       !parsed.ok ? parsed.message : `Harvest prediction failed with HTTP ${res.status}`
     );
   }
-  return parsed.data.result;
+  return {
+    ...parsed.data.result,
+    dataSource: parsed.data.dataSource || source,
+    telemetryTimestamp: parsed.data.telemetryTimestamp ?? null
+  };
 }
 
 export class CameraDiagnosisError extends Error {
@@ -281,10 +297,24 @@ export async function analyzePlantImage(
   base64Image: string,
   languageId: string = 'pcm'
 ): Promise<PlantAnalysisResult> {
-  const res = await apiFetch('/api/ai/diagnose', {
-    method: 'POST',
-    body: JSON.stringify({ image: base64Image, source: 'MANUAL_UPLOAD', languageId })
-  });
+  const normalizedImage = await prepareImageForDiagnosis(base64Image);
+  const greenhouseId = getActiveGreenhouseIdForAi();
+
+  const sendDiagnosisRequest = (ghId?: string) =>
+    apiFetch('/api/ai/diagnose', {
+      method: 'POST',
+      body: JSON.stringify({
+        greenhouseId: ghId,
+        image: normalizedImage,
+        source: 'MANUAL_UPLOAD',
+        languageId
+      })
+    });
+
+  let res = await sendDiagnosisRequest(greenhouseId);
+  if (greenhouseId && (res.status === 401 || res.status === 403)) {
+    res = await sendDiagnosisRequest(undefined);
+  }
 
   const parsed = await parseApiJsonResponse<{ result?: PlantAnalysisResult }>(res);
   if (parsed.ok) {
@@ -326,11 +356,11 @@ export async function transcribeSpeechAudio(
 export async function generateSpeechAudio(
   text: string,
   voiceName: string = 'Kore',
-  _styleDescription: string = 'Warm, respectful, articulate African agronomist expert'
+  styleDescription: string = 'Warm, clear, respectful Nigerian agronomist speaking naturally to a farmer'
 ): Promise<string> {
   const res = await apiFetch('/api/ai/speech', {
     method: 'POST',
-    body: JSON.stringify({ text, voiceName })
+    body: JSON.stringify({ text, voiceName, styleDescription })
   });
 
   const parsed = await parseApiJsonResponse<{ pcmBase64?: string }>(res);
@@ -446,16 +476,22 @@ export async function consultAgronomist(
 ): Promise<string> {
   try {
     const greenhouseId = getActiveGreenhouseIdForAi(contextData?.dataSource);
-    const res = await apiFetch('/api/ai/chat', {
-      method: 'POST',
-      body: JSON.stringify({
-        greenhouseId,
-        message,
-        languageId,
-        history,
-        contextData
-      })
-    });
+    const sendChat = (ghId?: string) =>
+      apiFetch('/api/ai/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          greenhouseId: ghId,
+          message,
+          languageId,
+          history,
+          contextData
+        })
+      });
+
+    let res = await sendChat(greenhouseId);
+    if (greenhouseId && (res.status === 401 || res.status === 403)) {
+      res = await sendChat(undefined);
+    }
 
     const parsed = await parseApiJsonResponse<{ reply?: string }>(res);
     if (parsed.ok) {
