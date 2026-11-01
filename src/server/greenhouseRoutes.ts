@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import express from 'express';
 import QRCode from 'qrcode';
 import { GreenhouseCameraStoreRegistry } from './cameraAcquisition.ts';
@@ -333,7 +334,7 @@ export function registerSelfServiceGreenhouseRoutes(
     String(req.headers['x-edens-auth-mode'] || '').trim().toLowerCase() === 'cookie';
 
   const logAuthDiagnostic = (
-    action: 'register' | 'login' | 'logout',
+    action: 'register' | 'login' | 'logout' | 'guest',
     statusCode: number,
     outcome: string,
     req: express.Request,
@@ -500,6 +501,73 @@ export function registerSelfServiceGreenhouseRoutes(
     clearSessionCookie(req, res);
     logAuthDiagnostic('logout', 200, 'SIGNED_OUT', req);
     return res.json({ success: true });
+  });
+
+  app.post('/api/auth/guest', async (req, res) => {
+    await platformDb.init();
+    const existingUser = getAuthUser(req);
+    if (existingUser) {
+      const greenhouses = platformDb
+        .listGreenhousesForUser(existingUser.id)
+        .map((gh) => buildGreenhouseSummary(gh, platformDb, cameraRegistry));
+      return res.status(200).json({
+        success: true,
+        user: existingUser,
+        greenhouses
+      });
+    }
+
+    const ip = extractClientIp(req);
+    const rate = authLimiter.check(`guest:${ip}`);
+    if (!rate.allowed) {
+      res.setHeader('Retry-After', String(rate.retryAfterSeconds));
+      return res.status(429).json({
+        error: 'RATE_LIMITED',
+        retryAfterSeconds: rate.retryAfterSeconds,
+        message: `Too many guest workspace requests. Please wait ${rate.retryAfterSeconds} seconds.`
+      });
+    }
+
+    const guestSuffix = crypto.randomBytes(6).toString('hex');
+    const generatedSecret = crypto.randomBytes(24).toString('hex');
+    const result = platformDb.registerUser({
+      email: `guest-${guestSuffix}@preview.edens-ai.local`,
+      password: generatedSecret,
+      displayName: 'Guest Farmer',
+      userAgent: req.headers['user-agent'],
+      ipAddress: ip
+    });
+
+    if ('errorCode' in result) {
+      return res.status(result.statusCode).json({
+        error: result.errorCode,
+        message: result.message
+      });
+    }
+
+    setSessionCookie(req, res, result.sessionToken, result.expiresAt);
+    const cookieOnly = isCookieOnlyBrowserRequest(req);
+    logAuthDiagnostic('guest', 201, 'GUEST_SESSION_CREATED', req, {
+      userId: result.user.id,
+      cookieOnly
+    });
+
+    if (cookieOnly) {
+      return res.status(201).json({
+        success: true,
+        user: result.user,
+        greenhouses: [],
+        expiresAt: result.expiresAt
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      user: result.user,
+      greenhouses: [],
+      sessionToken: result.sessionToken,
+      expiresAt: result.expiresAt
+    });
   });
 
   app.get('/api/auth/session', async (req, res) => {

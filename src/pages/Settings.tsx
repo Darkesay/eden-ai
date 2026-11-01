@@ -28,7 +28,7 @@ import {
   User,
   Wrench
 } from 'lucide-react';
-import { apiFetch, useAuth } from '../lib/auth';
+import { AUTH_GATE_ENABLED, apiFetch, useAuth } from '../lib/auth';
 import { parseApiJsonResponse } from '../lib/api';
 import { useCameraConnection } from '../lib/cameraConnectionManager';
 import { NIGERIAN_LANGUAGES } from '../lib/gemini';
@@ -494,9 +494,15 @@ export default function SettingsPage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-foreground">Signed-In Farmer</label>
+                <label className="text-xs font-medium text-foreground">
+                  {AUTH_GATE_ENABLED ? 'Signed-In Farmer' : 'Workspace Profile'}
+                </label>
                 <Input
-                  value={`${user?.displayName || 'Farmer'} (${user?.email || ''})`}
+                  value={
+                    AUTH_GATE_ENABLED
+                      ? `${user?.displayName || 'Farmer'} (${user?.email || ''})`
+                      : `${user?.displayName || 'Guest Farmer'} (Open Testing Mode)`
+                  }
                   disabled
                   className="h-10 bg-muted text-xs"
                 />

@@ -8,7 +8,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { initStore } from './lib/store';
 import { MqttProvider } from './lib/mqtt';
-import { AuthProvider, useAuth } from './lib/auth';
+import { AUTH_GATE_ENABLED, AuthProvider, useAuth } from './lib/auth';
 import { ThemeProvider } from './lib/theme';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -71,6 +71,10 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const location = useLocation();
 
+  if (!AUTH_GATE_ENABLED) {
+    return <>{children}</>;
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-2.5 bg-background text-foreground">
@@ -101,7 +105,14 @@ export default function App() {
         <AuthProvider>
           <BrowserRouter>
             <Routes>
-              <Route path="/login" element={<Login />} />
+              <Route
+                path="/login"
+                element={AUTH_GATE_ENABLED ? <Login /> : <Navigate to="/" replace />}
+              />
+              <Route
+                path="/register"
+                element={<Navigate to={AUTH_GATE_ENABLED ? '/login' : '/'} replace />}
+              />
               <Route
                 path="/"
                 element={

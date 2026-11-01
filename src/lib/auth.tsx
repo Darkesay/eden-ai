@@ -16,12 +16,26 @@ export { resolveApiUrl };
 const LEGACY_SESSION_STORAGE_KEY = 'edens_session_token';
 const ACTIVE_GH_STORAGE_KEY = 'edens_active_greenhouse_id';
 
+/**
+ * Open testing toggle:
+ * - `false`: Removes Login & Sign Up screens for public testing; visitors enter the workspace directly.
+ * - `true`: Restores full Login, Sign Up, and Sign Out UI gates.
+ */
+export const AUTH_GATE_ENABLED = false;
+
 export interface AuthUser {
   id: string;
   email: string;
   displayName: string;
   createdAt: string;
 }
+
+const GUEST_PREVIEW_USER: AuthUser = {
+  id: 'guest-preview',
+  email: '',
+  displayName: 'Guest Farmer',
+  createdAt: '2026-01-01T00:00:00.000Z'
+};
 
 export type ExplicitDeviceConnectionState =
   | 'CONFIGURATION_REQUIRED'
@@ -232,8 +246,10 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<AuthUser | null>(() =>
+    AUTH_GATE_ENABLED ? null : GUEST_PREVIEW_USER
+  );
+  const [loading, setLoading] = useState(AUTH_GATE_ENABLED);
   const [hasRegisteredUsers, setHasRegisteredUsers] = useState<boolean | null>(null);
   const [greenhouses, setGreenhouses] = useState<GreenhouseSummary[]>([]);
   const [activeGreenhouseId, setActiveGhState] = useState<string | null>(() => {
@@ -256,35 +272,94 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
-  const refreshSession = useCallback(async (): Promise<boolean> => {
-    try {
-      const res = await coreApiFetch('/api/auth/session');
-      if (!res.ok) {
-        clearInMemorySessionToken();
-        setUser(null);
-        setGreenhouses([]);
-        return false;
-      }
-      const parsed = await parseApiJsonResponse<{
-        authenticated?: boolean;
-        hasRegisteredUsers?: boolean;
-        user?: AuthUser;
-        greenhouses?: GreenhouseSummary[];
-      }>(res, 'session');
-
-      if (parsed.ok && typeof parsed.data?.hasRegisteredUsers === 'boolean') {
-        setHasRegisteredUsers(parsed.data.hasRegisteredUsers);
-      }
-
-      if (parsed.ok && parsed.data?.authenticated && parsed.data?.user) {
-        setUser(parsed.data.user);
-        const list: GreenhouseSummary[] = Array.isArray(parsed.data.greenhouses)
-          ? parsed.data.greenhouses
+  const provisionGuestSession = useCallback(async (): Promise<boolean> => {
+    const tryMode = async (mode: 'cookie' | 'memory'): Promise<boolean> => {
+      try {
+        const guestRes = await coreApiFetch('/api/auth/guest', {
+          method: 'POST',
+          headers: {
+            'X-Edens-Auth-Mode': mode === 'memory' ? 'embedded' : 'cookie'
+          },
+          body: JSON.stringify({})
+        });
+        if (!guestRes.ok) return false;
+        const guestParsed = await parseApiJsonResponse<{
+          success?: boolean;
+          user?: AuthUser;
+          greenhouses?: GreenhouseSummary[];
+          sessionToken?: string;
+        }>(guestRes, 'session');
+        if (!guestParsed.ok || !guestParsed.data?.success || !guestParsed.data?.user) {
+          return false;
+        }
+        if (mode === 'memory' && typeof guestParsed.data.sessionToken === 'string') {
+          setInMemorySessionToken(guestParsed.data.sessionToken);
+        }
+        setUser(guestParsed.data.user);
+        const list: GreenhouseSummary[] = Array.isArray(guestParsed.data.greenhouses)
+          ? guestParsed.data.greenhouses
           : [];
         setGreenhouses(list);
         if (list.length > 0) {
           setActiveGhState((prev) => (prev && list.some((g) => g.id === prev) ? prev : list[0].id));
         }
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const preferredMode = isEmbeddedIframeContext() ? 'memory' : 'cookie';
+    const okPrimary = await tryMode(preferredMode);
+    if (okPrimary) {
+      if (preferredMode === 'cookie') {
+        const checkRes = await coreApiFetch('/api/auth/session').catch(() => null);
+        const checkParsed = checkRes
+          ? await parseApiJsonResponse<{ authenticated?: boolean }>(checkRes, 'session')
+          : null;
+        if (checkParsed?.ok && checkParsed.data?.authenticated) {
+          return true;
+        }
+        return tryMode('memory');
+      }
+      return true;
+    }
+    return false;
+  }, []);
+
+  const refreshSession = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await coreApiFetch('/api/auth/session');
+      if (res.ok) {
+        const parsed = await parseApiJsonResponse<{
+          authenticated?: boolean;
+          hasRegisteredUsers?: boolean;
+          user?: AuthUser;
+          greenhouses?: GreenhouseSummary[];
+        }>(res, 'session');
+
+        if (parsed.ok && typeof parsed.data?.hasRegisteredUsers === 'boolean') {
+          setHasRegisteredUsers(parsed.data.hasRegisteredUsers);
+        }
+
+        if (parsed.ok && parsed.data?.authenticated && parsed.data?.user) {
+          setUser(parsed.data.user);
+          const list: GreenhouseSummary[] = Array.isArray(parsed.data.greenhouses)
+            ? parsed.data.greenhouses
+            : [];
+          setGreenhouses(list);
+          if (list.length > 0) {
+            setActiveGhState((prev) => (prev && list.some((g) => g.id === prev) ? prev : list[0].id));
+          }
+          return true;
+        }
+      }
+
+      if (!AUTH_GATE_ENABLED) {
+        const guestOk = await provisionGuestSession();
+        if (guestOk) return true;
+        setUser(GUEST_PREVIEW_USER);
+        setGreenhouses([]);
         return true;
       }
 
@@ -293,13 +368,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setGreenhouses([]);
       return false;
     } catch {
+      if (!AUTH_GATE_ENABLED) {
+        setUser(GUEST_PREVIEW_USER);
+        setGreenhouses([]);
+        return true;
+      }
       setUser(null);
       setGreenhouses([]);
       return false;
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [provisionGuestSession]);
 
   useEffect(() => {
     void refreshSession();

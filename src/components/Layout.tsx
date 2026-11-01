@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { useAuth } from '../lib/auth';
+import { AUTH_GATE_ENABLED, useAuth } from '../lib/auth';
 import { useTheme } from '../lib/theme';
 import { OnboardingTour } from './OnboardingTour';
 import { DataSourceBadge } from './DataSourceBadge';
@@ -227,18 +227,20 @@ export default function Layout() {
                 {user?.displayName || 'Farmer'}
               </div>
               <div className="text-xs text-muted-foreground truncate">
-                {user?.email || ''}
+                {AUTH_GATE_ENABLED ? user?.email || '' : 'Open Testing Mode'}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={handleLogout}
-              title="Sign out"
-              aria-label="Sign out"
-              className="h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive hover:border-destructive/30 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors shrink-0 cursor-pointer"
-            >
-              <LogOut size={16} />
-            </button>
+            {AUTH_GATE_ENABLED && (
+              <button
+                type="button"
+                onClick={handleLogout}
+                title="Sign out"
+                aria-label="Sign out"
+                className="h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive hover:border-destructive/30 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors shrink-0 cursor-pointer"
+              >
+                <LogOut size={16} />
+              </button>
+            )}
           </div>
         </div>
       </aside>
@@ -308,15 +310,17 @@ export default function Layout() {
               </Button>
             )}
 
-            <button
-              type="button"
-              onClick={handleLogout}
-              title="Sign out"
-              aria-label="Sign out"
-              className="md:hidden h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive shrink-0 cursor-pointer"
-            >
-              <LogOut size={16} />
-            </button>
+            {AUTH_GATE_ENABLED && (
+              <button
+                type="button"
+                onClick={handleLogout}
+                title="Sign out"
+                aria-label="Sign out"
+                className="md:hidden h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive shrink-0 cursor-pointer"
+              >
+                <LogOut size={16} />
+              </button>
+            )}
           </div>
         </header>
 
