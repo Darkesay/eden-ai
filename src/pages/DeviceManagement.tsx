@@ -3,9 +3,10 @@ import { useStoreTable, store } from '../lib/store';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
-import { Copy, Check, Fingerprint, Calendar, Cpu, Network, Plus, Server, Terminal, Settings, Wifi, Radio, Plug } from 'lucide-react';
-import { format, formatDistanceToNow } from 'date-fns';
+import { Label } from '../components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Copy, Check, Fingerprint, Calendar, Cpu, Network, Plus, Server, Terminal, Settings, Wifi, Radio, Plug, ShieldAlert } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
 import { cn } from '../lib/utils';
 
 const DEVICE_TYPES = [
@@ -163,110 +164,117 @@ void loop() {
 
   return (
     <div id="tour-device-management" className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Endpoint Fleet</h1>
-          <p className="opacity-70 text-sm mt-1">Manage connected IoT sensors and actuators</p>
+          <h1 className="text-2xl font-semibold tracking-tight">Devices</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Manage the devices registered to your greenhouses and their connection keys.
+          </p>
         </div>
-        
-        <Button onClick={() => setModalOpen(true)} className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold h-10 px-4 rounded-xl gap-2">
-            <Plus size={18} /> Provision Node
+
+        <Button onClick={() => setModalOpen(true)}>
+          <Plus size={15} aria-hidden="true" /> Add device
         </Button>
-        <Dialog open={modalOpen} onOpenChange={setModalOpen}>
-          <DialogContent className="bg-[#FFFFFF] dark:bg-[#080808] border-[#D1E8D1] dark:border-[#1A2A1A]">
-            <DialogHeader>
-              <DialogTitle>Provision New Endpoint Node</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-               <div className="space-y-2">
-                <label className="text-sm font-medium opacity-80">Node Identifier Alias</label>
-                <Input 
-                  placeholder="e.g. ESP32-Sector-7"
-                  value={newDeviceName} 
-                  onChange={(e) => setNewDeviceName(e.target.value)}
-                  className="bg-[#F8FAF8] dark:bg-[#040404] border-[#D1E8D1] dark:border-[#1A2A1A]"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium opacity-80">Hardware Type</label>
-                <select 
-                  value={newDeviceType}
-                  onChange={(e) => setNewDeviceType(e.target.value)}
-                  className="flex h-10 w-full rounded-md border border-[#D1E8D1] dark:border-[#1A2A1A] bg-[#F8FAF8] dark:bg-[#040404] px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {DEVICE_TYPES.map(type => (
-                    <option key={type.id} value={type.id}>{type.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium opacity-80">Connection Method</label>
-                <select 
-                  value={newDeviceConnection}
-                  onChange={(e) => setNewDeviceConnection(e.target.value)}
-                  className="flex h-10 w-full rounded-md border border-[#D1E8D1] dark:border-[#1A2A1A] bg-[#F8FAF8] dark:bg-[#040404] px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {CONNECTION_METHODS.map(method => (
-                    <option key={method.id} value={method.id}>{method.name}</option>
-                  ))}
-                </select>
-              </div>
-
-            </div>
-            <Button onClick={registerDevice} disabled={!newDeviceName.trim()} className="w-full bg-[#10B981] text-black hover:bg-[#059669]">
-              Generate Keys & Register
-            </Button>
-          </DialogContent>
-        </Dialog>
       </div>
 
-      <Dialog open={instructionsModalOpen} onOpenChange={setInstructionsModalOpen}>
-        <DialogContent className="max-w-2xl bg-[#FFFFFF] dark:bg-[#080808] border-[#D1E8D1] dark:border-[#1A2A1A] max-h-[85vh] overflow-y-auto">
+      <Dialog open={modalOpen} onOpenChange={setModalOpen}>
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle>M2M Connection Guide</DialogTitle>
+            <DialogTitle>Add device</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="device-name">Device name</Label>
+              <Input
+                id="device-name"
+                placeholder="e.g. ESP32-Sector-7"
+                value={newDeviceName} 
+                onChange={(e) => setNewDeviceName(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="device-type">Hardware type</Label>
+              <select 
+                id="device-type"
+                value={newDeviceType}
+                onChange={(e) => setNewDeviceType(e.target.value)}
+                className="flex h-9 w-full rounded-lg border border-input bg-background px-3 py-1 text-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                {DEVICE_TYPES.map(type => (
+                  <option key={type.id} value={type.id}>{type.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="device-connection">Connection method</Label>
+              <select 
+                id="device-connection"
+                value={newDeviceConnection}
+                onChange={(e) => setNewDeviceConnection(e.target.value)}
+                className="flex h-9 w-full rounded-lg border border-input bg-background px-3 py-1 text-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                {CONNECTION_METHODS.map(method => (
+                  <option key={method.id} value={method.id}>{method.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <Button onClick={registerDevice} disabled={!newDeviceName.trim()} className="w-full">
+            Create device and key
+          </Button>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={instructionsModalOpen} onOpenChange={setInstructionsModalOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Device connection guide</DialogTitle>
           </DialogHeader>
           {registeredDevice && (
-            <div className="space-y-6 py-4">
-              <div className="flex items-start gap-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400">
-                <Settings size={24} className="shrink-0 mt-1" />
+            <div className="space-y-6 py-2">
+              <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-warning">
+                <ShieldAlert size={18} className="mt-0.5 shrink-0" aria-hidden="true" />
                 <div className="text-sm">
-                  <p className="font-bold mb-1">Store your Identity Token securely</p>
-                  <p>You will not be able to view this full token again. If it is lost, you must decommission this node and provision a new one.</p>
+                  <p className="font-semibold">Save this device token now</p>
+                  <p className="mt-0.5 text-muted-foreground">
+                    You won’t be able to view the full token again. If you lose it, remove this
+                    device and add it again to get a new token.
+                  </p>
                 </div>
               </div>
 
-              <div className="space-y-4">
-                <h3 className="font-bold tracking-tight">Code Integration</h3>
-                <p className="text-sm opacity-80">
-                   Use the following boilerplate code to connect your {DEVICE_TYPES.find(t => t.id === registeredDevice.type)?.name || 'Device'} to the BOTANIX telemetry mesh via {CONNECTION_METHODS.find(m => m.id === registeredDevice.connectionMethod)?.name || 'WiFi'}.
+              <div className="space-y-3">
+                <h3 className="text-[13px] font-semibold">Connection code</h3>
+                <p className="text-xs text-muted-foreground">
+                  Use this starting code to connect your {DEVICE_TYPES.find(t => t.id === registeredDevice.type)?.name || 'Device'} over {CONNECTION_METHODS.find(m => m.id === registeredDevice.connectionMethod)?.name || 'WiFi'}.
                 </p>
                 <div className="relative">
-                  <pre className="p-4 rounded-xl bg-[#F8FAF8] dark:bg-[#040404] border border-[#D1E8D1] dark:border-[#1A2A1A] text-xs font-mono overflow-x-auto text-[#1A2A1A] dark:text-[#E2E8F0]">
+                  <pre className="overflow-x-auto rounded-lg bg-muted/50 p-4 font-mono tabular text-xs">
                     <code>{getCodeSnippet(registeredDevice)}</code>
                   </pre>
                   <Button 
                     variant="outline" 
                     size="sm" 
                     onClick={() => copyToken(getCodeSnippet(registeredDevice), 'snippet')}
-                    className="absolute top-2 right-2 h-8 bg-[#FFFFFF] dark:bg-[#080808] border-[#D1E8D1] dark:border-[#1A2A1A]"
+                    className="absolute top-2 right-2"
                   >
-                    {copiedId === 'snippet' ? <Check size={14} className="mr-2 text-green-500" /> : <Copy size={14} className="mr-2" />}
-                    Copy Code
+                    {copiedId === 'snippet' ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+                    {copiedId === 'snippet' ? 'Copied' : 'Copy code'}
                   </Button>
                 </div>
               </div>
 
-              <Button onClick={() => setInstructionsModalOpen(false)} className="w-full bg-[#10B981] text-black hover:bg-[#059669]">
-                I have saved this code
+              <Button onClick={() => setInstructionsModalOpen(false)} className="w-full">
+                I’ve saved this code
               </Button>
             </div>
           )}
         </DialogContent>
       </Dialog>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
         {devices.map(([id, device]: any) => {
           const Icon = getDeviceIcon(device.type);
           const MethodIcon = getConnectionIcon(device.connectionMethod);
@@ -274,77 +282,79 @@ void loop() {
           const isRecentlySeen = device.lastSeen && !Number.isNaN(new Date(device.lastSeen).getTime()) && (new Date().getTime() - new Date(device.lastSeen).getTime() < 15000);
           
           return (
-            <Card key={id} className="border-[#D1E8D1] dark:border-[#1A2A1A] bg-[#FFFFFF] dark:bg-[#080808] shadow-[0_4px_24px_-4px_rgba(0,0,0,0.05)] hover:scale-[1.01] transition-transform duration-300 flex flex-col">
-              <CardHeader className="pb-3 border-b border-[#D1E8D1] dark:border-[#1A2A1A]">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-[#F8FAF8] dark:bg-[#040404] rounded-lg border border-[#D1E8D1] dark:border-[#1A2A1A]">
-                      <Icon size={20} className="text-[#10B981]" />
-                    </div>
-                    <div>
-                      <CardTitle className="text-lg">{device.name}</CardTitle>
-                      <div className="text-xs opacity-60 mt-0.5 flex gap-2 items-center">
+            <Card key={id} className="flex flex-col">
+              <CardHeader className="border-b border-border pb-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/50 text-muted-foreground">
+                      <Icon size={16} aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <CardTitle className="truncate">{device.name}</CardTitle>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
                         <span className="capitalize">{DEVICE_TYPES.find(t => t.id === device.type)?.name || 'ESP32 (Legacy)'}</span>
-                        <span>•</span>
-                        <span className="capitalize flex items-center gap-1">
-                          <MethodIcon size={10} />
+                        <span aria-hidden="true">·</span>
+                        <span className="flex items-center gap-1 capitalize">
+                          <MethodIcon size={12} aria-hidden="true" />
                           {CONNECTION_METHODS.find(m => m.id === device.connectionMethod)?.name || 'WiFi'}
                         </span>
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                     <span className="relative flex h-3 w-3" title={isRecentlySeen ? "Connected" : "Offline"}>
-                       {isRecentlySeen && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
-                       <span className={cn("relative inline-flex rounded-full h-3 w-3", isRecentlySeen ? "bg-green-500" : "bg-gray-400 dark:bg-gray-600")}></span>
-                     </span>
-                  </div>
+                  <span
+                    className={cn(
+                      'shrink-0 rounded-md px-2 py-0.5 text-xs font-medium',
+                      isRecentlySeen ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'
+                    )}
+                  >
+                    {isRecentlySeen ? 'Online' : 'Offline'}
+                  </span>
                 </div>
               </CardHeader>
-              <CardContent className="pt-4 space-y-4 flex-1 flex flex-col">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-xs uppercase opacity-60 font-semibold tracking-wider">
-                    <Fingerprint size={14} /> Identity Token (MQTT)
-                  </div>
+              <CardContent className="flex flex-1 flex-col pt-4">
+                <div className="space-y-1.5">
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Fingerprint size={13} aria-hidden="true" /> Device token (MQTT)
+                  </span>
                   <div className="flex items-center gap-2">
-                    <code className="flex-1 bg-[#F8FAF8] dark:bg-[#040404] p-2 rounded border border-[#D1E8D1] dark:border-[#1A2A1A] text-xs font-mono break-all text-amber-600 dark:text-amber-400">
-                       {device.token.substring(0, 8)}••••••••••••••••••••{device.token.substring(24, 32)}
+                    <code className="min-w-0 flex-1 break-all rounded-lg bg-muted/50 px-2.5 py-1.5 font-mono tabular text-xs">
+                      {device.token.substring(0, 8)}••••••••••••••••••••{device.token.substring(24, 32)}
                     </code>
                     <Button 
                       variant="outline" 
-                      size="icon" 
+                      size="sm" 
                       onClick={() => {
                         setRegisteredDevice(device);
                         setInstructionsModalOpen(true);
                       }}
-                      className="shrink-0 bg-transparent border-[#D1E8D1] dark:border-[#1A2A1A]"
-                      title="View Connection Guide"
+                      title="View connection guide"
                     >
-                      <Terminal size={16} />
+                      <Terminal size={14} aria-hidden="true" /> Guide
                     </Button>
                     <Button 
                       variant="outline" 
-                      size="icon" 
+                      size="sm" 
                       onClick={() => copyToken(device.token, id)}
-                      className="shrink-0 bg-transparent border-[#D1E8D1] dark:border-[#1A2A1A]"
+                      title="Copy device token"
                     >
-                      {copiedId === id ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}
+                      {copiedId === id ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+                      {copiedId === id ? 'Copied' : 'Copy'}
                     </Button>
                   </div>
                 </div>
 
-                <div className="space-y-1 mt-auto pt-4">
-                  <div className="flex items-center gap-2 text-xs uppercase opacity-60 font-semibold tracking-wider">
-                    <Calendar size={14} /> Last Seen
-                  </div>
-                  <div className="text-sm font-mono opacity-80">
-                     {device.lastSeen && !Number.isNaN(new Date(device.lastSeen).getTime()) ? formatDistanceToNow(new Date(device.lastSeen), { addSuffix: true }) : 'Never'}
+                <div className="mt-auto space-y-1 pt-4">
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Calendar size={13} aria-hidden="true" /> Last seen
+                  </span>
+                  <div className="text-sm text-muted-foreground">
+                    {device.lastSeen && !Number.isNaN(new Date(device.lastSeen).getTime()) ? formatDistanceToNow(new Date(device.lastSeen), { addSuffix: true }) : 'Never'}
                   </div>
                 </div>
 
-                <div className="pt-4 border-t border-[#D1E8D1] dark:border-[#1A2A1A] mt-auto flex gap-2">
-                  <Button onClick={() => removeDevice(id)} variant="ghost" className="w-full text-red-500 hover:bg-red-500/10 hover:text-red-600">
-                     {confirmRemoveId === id ? 'Click Again to Confirm Removal' : 'Decommission Node'}
+                <div className="mt-4 flex gap-2 border-t border-border pt-3">
+                  <Button onClick={() => removeDevice(id)} variant="destructive" className="w-full">
+                    {confirmRemoveId === id ? 'Click again to confirm removal' : 'Remove device'}
                   </Button>
                 </div>
               </CardContent>
@@ -353,14 +363,15 @@ void loop() {
         })}
 
         {devices.length === 0 && (
-           <div className="col-span-full border-2 border-dashed border-[#D1E8D1] dark:border-[#1A2A1A] rounded-2xl p-12 text-center flex flex-col items-center justify-center opacity-70">
-              <Network size={48} className="mb-4 opacity-50" />
-              <h3 className="text-xl font-bold mb-2">No active endpoints</h3>
-              <p className="max-w-md mx-auto">Provision an endpoint node to securely connect IoT hardware to the EDENS AI telemetry mesh.</p>
+           <div className="col-span-full flex flex-col items-center justify-center rounded-xl border border-dashed border-border p-12 text-center">
+              <Network size={32} className="mb-4 text-muted-foreground" aria-hidden="true" />
+              <h3 className="text-base font-semibold">No devices registered yet</h3>
+              <p className="mt-1.5 max-w-md text-sm text-muted-foreground">
+                Add a device to generate its connection token and pair your greenhouse hardware.
+              </p>
            </div>
         )}
       </div>
     </div>
   );
 }
-

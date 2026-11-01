@@ -42,15 +42,20 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-[#040404] text-[#F0F0F0]">
-          <div className="w-full max-w-md rounded-2xl bg-[#080808] p-8 border border-[#1A2A1A] text-center shadow-xl">
-            <h1 className="text-2xl font-bold text-red-500 mb-4">EDENS AI CRASHED</h1>
-            <p className="mb-6 opacity-70 font-mono text-sm">{this.state.error?.message}</p>
+        <div className="flex min-h-screen items-center justify-center bg-background p-4 text-foreground">
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-8 text-center">
+            <h1 className="text-lg font-semibold">Something went wrong</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              The app hit an unexpected error. Reloading usually fixes it.
+            </p>
+            <p className="mt-4 break-words rounded-lg bg-muted p-3 font-mono text-xs text-muted-foreground">
+              {this.state.error?.message}
+            </p>
             <button
               onClick={() => window.location.reload()}
-              className="px-6 py-2 bg-[#10B981] text-black font-semibold rounded-lg hover:opacity-90"
+              className="mt-6 h-11 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             >
-              Reload System
+              Reload the app
             </button>
           </div>
         </div>
@@ -66,8 +71,9 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#040404] text-[#10B981]">
-        <Loader2 size={28} className="animate-spin" />
+      <div className="flex min-h-screen items-center justify-center gap-2.5 bg-background text-muted-foreground">
+        <Loader2 size={20} className="animate-spin" aria-hidden="true" />
+        <span className="text-sm">Loading…</span>
       </div>
     );
   }

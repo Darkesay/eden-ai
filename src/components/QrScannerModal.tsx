@@ -30,41 +30,43 @@ export function QrCodeCard({
   };
 
   return (
-    <div className="rounded-2xl border border-[#10B981]/30 bg-[#070B08] p-5 text-[#F0F0F0] space-y-4">
+    <div className="rounded-xl border border-border bg-card p-5 text-card-foreground space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h4 className="font-semibold text-base text-white flex items-center gap-2">
-            <QrCode size={18} className="text-[#10B981]" />
+          <h4 className="font-semibold text-sm flex items-center gap-2">
+            <QrCode size={16} className="text-muted-foreground" aria-hidden="true" />
             {title}
           </h4>
-          <p className="text-xs text-[#9CA3AF] mt-1">{subtitle}</p>
+          <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>
         </div>
-        <span className="text-[10px] font-mono uppercase tracking-wider px-2.5 py-1 rounded-md bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30">
-          One-Time Token
+        <span className="shrink-0 rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground">
+          One-time token
         </span>
       </div>
 
-      <div className="flex justify-center bg-white p-3 rounded-xl w-fit mx-auto shadow-md">
+      <div className="flex justify-center bg-white p-3 rounded-lg border border-border w-fit mx-auto">
         <img src={qrDataUrl} alt="EDENS Enrollment QR Code" className="w-52 h-52 object-contain" />
       </div>
 
       <div className="space-y-2 text-xs">
-        <div className="flex items-center justify-between bg-[#0D1410] border border-[#1A2A1A] rounded-xl px-3 py-2">
-          <span className="font-mono text-[#D1FAE5] truncate mr-2">{enrollmentCode}</span>
-          <button
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2">
+          <span className="font-mono text-sm text-foreground truncate">{enrollmentCode}</span>
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={handleCopy}
-            className="flex items-center gap-1 text-[#10B981] hover:text-[#34D399] font-medium shrink-0"
+            className="shrink-0 text-brand"
           >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            {copied ? 'Copied' : 'Copy Code'}
-          </button>
+            {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+            {copied ? 'Copied' : 'Copy code'}
+          </Button>
         </div>
-        <div className="flex items-center justify-between text-[11px] text-[#9CA3AF]">
-          <span className="flex items-center gap-1 text-[#10B981]/90">
-            <ShieldCheck size={13} /> Revocable & non-secret
+        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <ShieldCheck size={13} className="text-success" aria-hidden="true" /> Revocable, not a secret
           </span>
-          <span>Expires: {new Date(expiresAt).toLocaleTimeString()}</span>
+          <span>Expires: <span className="font-mono tabular">{new Date(expiresAt).toLocaleTimeString()}</span></span>
         </div>
       </div>
     </div>
@@ -234,27 +236,35 @@ export function QrScannerModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-      <div className="w-full max-w-lg rounded-3xl border border-[#1A2A1A] bg-[#080C09] text-[#F0F0F0] shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#1A2A1A]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="w-full max-w-lg rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl overflow-hidden"
+      >
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-border">
           <div className="flex items-center gap-2.5">
-            <Camera size={20} className="text-[#10B981]" />
-            <h3 className="font-bold text-lg">{title}</h3>
+            <Camera size={18} className="text-muted-foreground" aria-hidden="true" />
+            <h3 className="text-sm font-semibold">{title}</h3>
           </div>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-sm"
             onClick={() => {
               stopCamera();
               onClose();
             }}
-            className="p-1.5 rounded-lg text-[#9CA3AF] hover:text-white hover:bg-white/10"
+            aria-label="Close QR scanner"
+            title="Close QR scanner"
           >
-            <X size={18} />
-          </button>
+            <X size={18} aria-hidden="true" />
+          </Button>
         </div>
 
-        <div className="p-6 space-y-5">
-          <div className="relative rounded-2xl overflow-hidden bg-black aspect-square max-h-72 mx-auto border border-[#10B981]/30 flex items-center justify-center">
+        <div className="p-5 space-y-5">
+          <div className="relative rounded-lg overflow-hidden bg-muted aspect-square max-h-72 mx-auto border border-border flex items-center justify-center">
             <video
               ref={videoRef}
               playsInline
@@ -264,33 +274,36 @@ export function QrScannerModal({
             <canvas ref={canvasRef} className="hidden" />
 
             {cameraState === 'active' && (
-              <div className="absolute inset-8 border-2 border-[#10B981]/80 rounded-2xl pointer-events-none shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+              <div className="absolute inset-8 border-2 border-brand/70 rounded-lg pointer-events-none" />
             )}
 
             {cameraState === 'starting' && (
-              <div className="flex flex-col items-center gap-2 text-sm text-[#9CA3AF] p-6 text-center">
-                <Loader2 size={28} className="animate-spin text-[#10B981]" />
-                <span>Opening mobile camera scanner...</span>
+              <div className="flex flex-col items-center gap-2 text-sm text-muted-foreground p-6 text-center">
+                <Loader2 size={24} className="animate-spin" aria-hidden="true" />
+                <span>Opening camera…</span>
               </div>
             )}
 
             {(cameraState === 'denied' || cameraState === 'unavailable') && (
               <div className="flex flex-col items-center gap-3 p-6 text-center">
-                <p className="text-xs text-amber-300 leading-relaxed">{cameraError}</p>
+                <p className="text-xs text-warning leading-relaxed">{cameraError}</p>
                 <Button
                   type="button"
                   variant="outline"
                   onClick={startCamera}
-                  className="border-[#10B981]/40 text-[#10B981] hover:bg-[#10B981]/10"
                 >
-                  <RefreshCw size={14} className="mr-1.5" /> Retry Camera
+                  <RefreshCw size={14} aria-hidden="true" /> Retry camera
                 </Button>
               </div>
             )}
           </div>
 
+          <p className="text-sm text-muted-foreground text-center">
+            Point the camera at the QR code on your greenhouse kit, or use one of the options below.
+          </p>
+
           {scanError && (
-            <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-xs text-red-300">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-xs text-destructive">
               {scanError}
             </div>
           )}
@@ -298,32 +311,33 @@ export function QrScannerModal({
           <div className="flex items-center justify-between gap-3 pt-1">
             <label className="flex-1 cursor-pointer">
               <input type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden" />
-              <span className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-[#1A2A1A] bg-[#0D1410] hover:border-[#10B981]/50 px-3 py-2.5 text-xs font-medium text-[#D1FAE5] transition-colors">
-                <ImageUp size={15} className="text-[#10B981]" />
-                Scan QR Photo / Screenshot
+              <span className="w-full inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border bg-background px-3 text-xs font-medium text-foreground hover:bg-muted transition-colors">
+                <ImageUp size={15} className="text-muted-foreground" aria-hidden="true" />
+                Scan QR photo or screenshot
               </span>
             </label>
           </div>
 
-          <div className="border-t border-[#1A2A1A] pt-4 space-y-2">
-            <label className="text-xs font-medium text-[#9CA3AF] flex items-center gap-1.5">
-              <KeyRound size={13} className="text-[#10B981]" />
+          <div className="border-t border-border pt-4 space-y-2">
+            <label htmlFor="manual-enrollment-code" className="text-xs font-medium text-foreground flex items-center gap-1.5">
+              <KeyRound size={13} className="text-muted-foreground" aria-hidden="true" />
               Or paste one-time enrollment code (e.g. enr_...)
             </label>
             <div className="flex gap-2">
               <Input
+                id="manual-enrollment-code"
                 value={manualCode}
                 onChange={(e) => setManualCode(e.target.value)}
                 placeholder="enr_..."
-                className="bg-[#040605] border-[#1A2A1A] text-white font-mono text-xs"
+                className="font-mono text-sm"
               />
               <Button
                 type="button"
                 disabled={!manualCode.trim() || submitting}
                 onClick={() => handleDecodedValue(manualCode)}
-                className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold shrink-0"
+                className="shrink-0"
               >
-                {submitting ? <Loader2 size={15} className="animate-spin" /> : 'Verify'}
+                {submitting ? <Loader2 size={15} className="animate-spin" aria-hidden="true" /> : 'Verify'}
               </Button>
             </div>
           </div>

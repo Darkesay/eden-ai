@@ -1,36 +1,32 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 @import "tailwindcss";
 
-@theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-}
-
-@layer utilities {
-  .text-shadow-neon {
-    text-shadow: 0 0 10px rgba(16, 185, 129, 0.5), 0 0 20px rgba(16, 185, 129, 0.3);
-  }
-}
-
-@keyframes wave {
-  0% { transform: translateX(0) translateZ(0) scaleY(1); }
-  50% { transform: translateX(-25%) translateZ(0) scaleY(0.55); }
-  100% { transform: translateX(-50%) translateZ(0) scaleY(1); }
-}
-
-.animate-wave {
-  animation: wave 4s linear infinite;
-}
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Design tokens — BOTANIX / EDENS AI greenhouse console.
+ *
+ * Roles, not appearances: every color is named by what it means and has a
+ * light and a dark value that both clear WCAG AA (4.5:1 for text under 18px).
+ * One accent (deep botanical green) + status colors that are only ever used
+ * for status. Monospace is reserved for telemetry values, IDs and keys.
+ */
+
 @theme inline {
     --font-heading: var(--font-sans);
-    --font-sans: 'Inter', sans-serif;
-    --font-mono: 'JetBrains Mono', monospace;
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+    /* Status (semantic — never used decoratively) */
+    --color-success: var(--success);
+    --color-warning: var(--warning);
+    --color-info: var(--info);
+    --color-brand: var(--brand);
+
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -62,6 +58,8 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+
+    /* One radius scale: controls 10px, cards 14px, inner boxes 8px */
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -72,48 +70,89 @@
 }
 
 :root {
-    --background: #FBFDFB;
-    --foreground: #0A0A0A;
+    /* Light appearance — neutral paper surfaces, one deep green accent */
+    --background: #F6F7F6;
+    --foreground: #121614;
     --card: #FFFFFF;
-    --card-foreground: #0A0A0A;
+    --card-foreground: #121614;
     --popover: #FFFFFF;
-    --popover-foreground: #0A0A0A;
-    --primary: #10B981;
-    --primary-foreground: #ffffff;
-    --secondary: #F0FDF4;
-    --secondary-foreground: #10B981;
-    --muted: #F3F4F6;
-    --muted-foreground: #6B7280;
-    --accent: #F0FDF4;
-    --accent-foreground: #10B981;
-    --destructive: #EF4444;
-    --destructive-foreground: #ffffff;
-    --border: #D1E8D1;
-    --input: #D1E8D1;
-    --ring: #10B981;
+    --popover-foreground: #121614;
+    --primary: #0E7A50;          /* white text on it: 5.4:1 */
+    --primary-foreground: #FFFFFF;
+    --secondary: #EEF2F0;
+    --secondary-foreground: #1B211E;
+    --muted: #EEF2F0;
+    --muted-foreground: #5C6661; /* 5.5:1 on --background */
+    --accent: #E6F2EB;           /* selected / active surface */
+    --accent-foreground: #0B5C3C;
+    --destructive: #B91C1C;
+    --destructive-foreground: #FFFFFF;
+    --border: #E3E7E4;
+    --input: #D6DCD8;
+    --ring: #0E7A50;
+    --brand: #0E7A50;            /* brand-colored text in light mode */
+    --success: #146C43;
+    --warning: #B45309;
+    --info: #1D4ED8;
     --radius: 0.625rem;
+
+    --sidebar: #FFFFFF;
+    --sidebar-foreground: #121614;
+    --sidebar-primary: #0E7A50;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #EEF2F0;
+    --sidebar-accent-foreground: #1B211E;
+    --sidebar-border: #E3E7E4;
+    --sidebar-ring: #0E7A50;
+
+    --chart-1: #0E7A50;
+    --chart-2: #1D4ED8;
+    --chart-3: #B45309;
+    --chart-4: #6B7280;
+    --chart-5: #B91C1C;
 }
 
 .dark {
-    --background: #050505;
-    --foreground: #FAFAFA;
-    --card: #0A0A0A;
-    --card-foreground: #FAFAFA;
-    --popover: #0A0A0A;
-    --popover-foreground: #FAFAFA;
-    --primary: #10B981;
-    --primary-foreground: #ffffff;
-    --secondary: #1F2937;
-    --secondary-foreground: #F9FAFB;
-    --muted: #111827;
-    --muted-foreground: #9CA3AF;
-    --accent: #111827;
-    --accent-foreground: #10B981;
-    --destructive: #7f1d1d;
-    --destructive-foreground: #fef2f2;
-    --border: #1F1F1F;
-    --input: #1F1F1F;
-    --ring: #10B981;
+    /* Dark appearance — near-black graphite, green reserved for accent + status */
+    --background: #0B0D0C;
+    --foreground: #E9EDEB;
+    --card: #141716;
+    --card-foreground: #E9EDEB;
+    --popover: #141716;
+    --popover-foreground: #E9EDEB;
+    --primary: #0E7A50;          /* white text on it: 5.4:1 */
+    --primary-foreground: #FFFFFF;
+    --secondary: #1E2321;
+    --secondary-foreground: #E9EDEB;
+    --muted: #1A1E1C;
+    --muted-foreground: #9AA4A0; /* 7.1:1 on --card */
+    --accent: #10241A;           /* selected / active surface */
+    --accent-foreground: #6FD3A9;
+    --destructive: #F87171;
+    --destructive-foreground: #2A0808;
+    --border: #262B29;
+    --input: #2E3431;
+    --ring: #45C690;
+    --brand: #45C690;            /* brand-colored text in dark mode: 8.5:1 on card */
+    --success: #4CD98C;
+    --warning: #FBBF24;
+    --info: #60A5FA;
+    --radius: 0.625rem;
+
+    --sidebar: #101312;
+    --sidebar-foreground: #E9EDEB;
+    --sidebar-primary: #45C690;
+    --sidebar-primary-foreground: #06170F;
+    --sidebar-accent: #1E2321;
+    --sidebar-accent-foreground: #E9EDEB;
+    --sidebar-border: #262B29;
+    --sidebar-ring: #45C690;
+
+    --chart-1: #45C690;
+    --chart-2: #60A5FA;
+    --chart-3: #FBBF24;
+    --chart-4: #9AA4A0;
+    --chart-5: #F87171;
 }
 
 @layer base {
@@ -121,12 +160,40 @@
     @apply border-border outline-ring/50;
     }
   body {
-    @apply bg-background text-foreground;
-    background-image: radial-gradient(circle at top right, rgba(16, 185, 129, 0.03) 0%, transparent 40%),
-                      radial-gradient(circle at bottom left, rgba(16, 185, 129, 0.03) 0%, transparent 40%);
-    background-attachment: fixed;
+    @apply bg-background text-foreground antialiased;
     }
   html {
     @apply font-sans;
     }
+  /* Instrument readouts: aligned digits in every telemetry value */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    }
+}
+
+/* Quiet scrollbars — containers scroll, chrome stays out of the way */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted-foreground) 35%, transparent) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted-foreground) 35%, transparent);
+  border-radius: 999px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -1,21 +1,51 @@
 import React, { useEffect, useState } from 'react';
-import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { Link, Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useMqtt } from '../lib/mqtt';
 import { useAuth } from '../lib/auth';
-import { Sun, Moon, LogOut, LayoutDashboard, Brain, Cpu, Sliders, Sprout } from 'lucide-react';
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import {
+  Sun,
+  Moon,
+  LogOut,
+  LayoutDashboard,
+  Brain,
+  Cpu,
+  Sliders,
+  Sprout,
+  Leaf,
+  PanelLeftClose,
+  PanelLeftOpen
+} from 'lucide-react';
+import { cn } from '../lib/utils';
 import { OnboardingTour } from './OnboardingTour';
 import { DataSourceBadge } from './DataSourceBadge';
 
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
+const NAV_ITEMS = [
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/greenhouses', label: 'Greenhouses', icon: Sprout, end: false },
+  { to: '/ai-lab', label: 'AI Lab', icon: Brain, end: false },
+  { to: '/devices', label: 'Devices', icon: Cpu, end: false },
+  { to: '/hardware', label: 'Hardware', icon: Sliders, end: false }
+] as const;
+
+const MQTT_LABEL: Record<string, string> = {
+  connected: 'Online',
+  connecting: 'Connecting',
+  demo: 'Demo',
+  disconnected: 'Offline'
+};
+
+const SIDEBAR_KEY = 'botanix_nav_collapsed';
+
+function StatusDot({ className }: { className?: string }) {
+  return <span className={cn('size-1.5 rounded-full', className)} aria-hidden="true" />;
 }
 
 export default function Layout() {
   const [isDark, setIsDark] = useState(true);
+  const [navCollapsed, setNavCollapsed] = useState(
+    () => typeof window !== 'undefined' && localStorage.getItem(SIDEBAR_KEY) === '1'
+  );
   const navigate = useNavigate();
-  const location = useLocation();
   const { status } = useMqtt();
   const { user, logout } = useAuth();
   const [forceTour, setForceTour] = useState(false);
@@ -40,15 +70,18 @@ export default function Layout() {
   }, []);
 
   const toggleTheme = () => {
-    if (isDark) {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('botanix_theme', 'light');
-      setIsDark(false);
-    } else {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('botanix_theme', 'dark');
-      setIsDark(true);
-    }
+    const next = !isDark;
+    setIsDark(next);
+    document.documentElement.classList.toggle('dark', next);
+    localStorage.setItem('botanix_theme', next ? 'dark' : 'light');
+  };
+
+  const toggleNav = () => {
+    setNavCollapsed((c) => {
+      const next = !c;
+      localStorage.setItem(SIDEBAR_KEY, next ? '1' : '0');
+      return next;
+    });
   };
 
   const handleLogout = async () => {
@@ -56,152 +89,254 @@ export default function Layout() {
     navigate('/login');
   };
 
-  const navLinks = [
-    { to: '/', label: 'Control Center' },
-    { to: '/greenhouses', label: 'Greenhouses' },
-    { to: '/ai-lab', label: 'AI Lab' },
-    { to: '/devices', label: 'Device Management' },
-    { to: '/hardware', label: 'Hardware Config' },
-  ];
+  const statusLabel = MQTT_LABEL[status] ?? status;
+  const statusDotClass =
+    status === 'connected'
+      ? 'bg-success'
+      : status === 'connecting'
+        ? 'bg-warning'
+        : status === 'demo'
+          ? 'bg-warning'
+          : 'bg-destructive';
+
+  // Avatar initials for the signed-in account shown in the sidebar footer
+  const initials = user
+    ? (user.displayName
+        .split(' ')
+        .filter(Boolean)
+        .map((part) => part[0])
+        .slice(0, 2)
+        .join('')
+        .toUpperCase() || user.email[0]?.toUpperCase() || '?')
+    : '';
 
   return (
-    <div className="min-h-screen bg-[#F8FAF8] dark:bg-[#040404] text-[#1A1A1A] dark:text-[#F0F0F0] font-sans transition-colors duration-500 relative pb-20 md:pb-0">
-      {/* Subtle radial gradient mesh */}
-      <div className="fixed inset-0 pointer-events-none transition-opacity duration-500">
-        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-[#10B981]/5 dark:bg-[#10B981]/10 blur-[120px]" />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-[#34D399]/5 dark:bg-[#34D399]/5 blur-[100px]" />
-      </div>
-
-      <header className="sticky top-0 z-50 bg-[#FFFFFF]/80 dark:bg-[#040404]/80 backdrop-blur-xl border-b border-[#D1E8D1] dark:border-[#1A2A1A] transition-colors duration-500">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex flex-col">
-            <div className="flex items-center gap-2">
-              <div className="text-xl font-bold tracking-tight text-[#059669] dark:text-[#10B981]">EDENS AI ✨🌿</div>
-            </div>
-            <div className="text-[9px] uppercase font-mono font-bold tracking-[0.2em] text-[#10B981] opacity-80">Powered by RA</div>
-          </div>
-
-          <nav className="hidden md:flex gap-1 ml-10">
-            {navLinks.map((link) => {
-              const isAiLab = link.to === '/ai-lab';
-              return (
-                <NavLink
-                  key={link.to}
-                  to={link.to}
-                  className={({ isActive }) => cn(
-                    "px-4 py-2 rounded-xl font-medium text-sm transition-all flex items-center gap-2",
-                    isActive 
-                      ? "bg-[#059669]/10 dark:bg-[#10B981]/10 text-[#059669] dark:text-[#10B981]" 
-                      : "hover:bg-[#059669]/5 dark:hover:bg-[#10B981]/5 opacity-70 hover:opacity-100"
-                  )}
-                >
-                  {isAiLab && (
-                    <img 
-                      src="https://i.imgur.com/WOeaqFK.png" 
-                      alt="AI Lab Logo" 
-                      className="w-6 h-6 rounded-lg shadow-[0_0_10px_rgba(16,185,129,0.3)]"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none';
-                        e.currentTarget.nextElementSibling?.classList.remove('hidden');
-                      }}
-                    />
-                  )}
-                  {isAiLab && <Brain size={16} className="hidden text-[#10B981]" />}
-                  {link.label}
-                </NavLink>
-              );
-            })}
-          </nav>
-
-          <div className="hidden md:flex items-center gap-3">
-            <DataSourceBadge variant="badge" />
-
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#FFFFFF] dark:bg-[#080808] border border-[#D1E8D1] dark:border-[#1A2A1A]">
-              <div className={cn(
-                "w-2 h-2 rounded-full",
-                status === 'connected' ? 'bg-[#10B981] animate-pulse' :
-                status === 'connecting' ? 'bg-amber-400 animate-pulse' :
-                status === 'demo' ? 'bg-yellow-500' : 'bg-red-500'
-              )} />
-              <span className="text-xs font-mono uppercase tracking-wider opacity-80">
-                MQTT: {status}
-              </span>
-            </div>
-
-            {user && (
-              <span className="hidden lg:inline-block text-xs font-medium opacity-75 truncate max-w-[140px]">
-                {user.displayName}
-              </span>
+    <div className="min-h-screen bg-background text-foreground">
+      {/* ---------------------------------------------------------------- */}
+      {/* Desktop side navigation — collapsible rail                       */}
+      {/* ---------------------------------------------------------------- */}
+      <aside
+        className={cn(
+          'fixed inset-y-0 left-0 z-40 hidden border-r border-border bg-card md:flex md:flex-col md:transition-[width] md:duration-200 md:ease-out',
+          navCollapsed ? 'md:w-[68px]' : 'md:w-60'
+        )}
+      >
+        {/* Brand */}
+        <div
+          className={cn(
+            'flex h-14 shrink-0 items-center border-b border-border px-4',
+            navCollapsed && 'justify-center px-0'
+          )}
+        >
+          <Link
+            to="/"
+            className="flex items-center gap-2.5"
+            title={navCollapsed ? 'EDENS AI — Dashboard' : undefined}
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <Leaf size={17} aria-hidden="true" />
+            </span>
+            {!navCollapsed && (
+              <span className="text-[15px] font-semibold tracking-tight">EDENS AI</span>
             )}
-            <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-white/5 transition-all">
-              <div className={cn("transition-transform duration-500", isDark ? "rotate-180" : "rotate-0")}>
-                {isDark ? <Moon size={20} /> : <Sun size={20} />}
-              </div>
-            </button>
-            <button onClick={handleLogout} title="Sign Out" className="p-2 rounded-full hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 transition-colors">
-              <LogOut size={20} />
-            </button>
-          </div>
+          </Link>
         </div>
-      </header>
 
-      {/* Mobile Bottom Nav */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#F8FAF8]/90 dark:bg-[#040404]/90 backdrop-blur-xl border-t border-[#D1E8D1] dark:border-[#1A2A1A] pb-safe transition-colors duration-500">
-        <div className="flex items-center justify-around h-16 px-2">
-          {navLinks.map((link) => {
-            const isAiLab = link.to === '/ai-lab';
-            return (
-              <NavLink
-                key={link.to}
-                to={link.to}
-                className={({ isActive }) => cn(
-                  "flex flex-col items-center justify-center w-full h-full gap-1 transition-colors",
-                  isActive 
-                    ? "text-[#059669] dark:text-[#10B981]" 
-                    : "text-gray-500 hover:text-gray-900 dark:hover:text-white"
-                )}
-              >
-                {link.to === '/' ? <LayoutDashboard size={20} /> : 
-                 link.to === '/greenhouses' ? <Sprout size={20} /> :
-                 link.to === '/hardware' ? <Sliders size={20} /> :
-                 isAiLab ? (
-                   <>
-                     <img 
-                       src="https://i.imgur.com/WOeaqFK.png" 
-                       alt="AI Lab Logo" 
-                       className="w-5 h-5 rounded shadow-[0_0_8px_rgba(16,185,129,0.3)]"
-                       onError={(e) => {
-                         e.currentTarget.style.display = 'none';
-                         e.currentTarget.nextElementSibling?.classList.remove('hidden');
-                       }}
-                     />
-                     <Brain size={20} className="hidden text-[#10B981]" />
-                   </>
-                 ) : 
-                 <Cpu size={20} />}
-                <span className="text-[10px] font-medium tracking-wide">{link.label}</span>
-              </NavLink>
-            );
-          })}
-          <button onClick={toggleTheme} className="flex flex-col items-center justify-center w-full h-full gap-1 text-gray-500 transition-all">
-            <div className={cn("transition-transform duration-500", isDark ? "rotate-180" : "rotate-0")}>
-              {isDark ? <Moon size={20} /> : <Sun size={20} />}
+        {/* Destinations */}
+        <nav aria-label="Main" className="custom-scrollbar flex-1 overflow-y-auto p-2">
+          <ul className="flex flex-col gap-1">
+            {NAV_ITEMS.map((item) => (
+              <li key={item.to}>
+                <NavLink
+                  to={item.to}
+                  end={item.end}
+                  title={navCollapsed ? item.label : undefined}
+                  className={({ isActive }) =>
+                    cn(
+                      'flex h-10 items-center gap-3 rounded-lg px-3 text-sm transition-colors',
+                      navCollapsed && 'justify-center px-0',
+                      isActive
+                        ? 'bg-muted font-medium text-foreground'
+                        : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                    )
+                  }
+                >
+                  <item.icon size={18} className="shrink-0" aria-hidden="true" />
+                  <span className={cn('truncate', navCollapsed && 'sr-only')}>{item.label}</span>
+                </NavLink>
+              </li>
+            ))}
+          </ul>
+        </nav>
+
+        {/* Footer — account context, collapse control, and sign out pinned to the rail bottom */}
+        <div className="shrink-0 border-t border-border p-2">
+          {/* Signed-in account — context for the sign-out action */}
+          {user && (
+            <div
+              className={cn(
+                'mb-1 flex items-center gap-2.5 rounded-lg px-2 py-1.5',
+                navCollapsed && 'justify-center px-0'
+              )}
+              title={navCollapsed ? `${user.displayName} — ${user.email}` : undefined}
+            >
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-semibold text-foreground">
+                {initials}
+              </span>
+              {!navCollapsed && (
+                <span className="min-w-0 leading-tight">
+                  <span className="block truncate text-[13px] font-medium text-foreground">
+                    {user.displayName}
+                  </span>
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {user.email}
+                  </span>
+                </span>
+              )}
             </div>
-            <span className="text-[10px] font-medium tracking-wide">Theme</span>
+          )}
+
+          {/* Collapse control */}
+          <button
+            type="button"
+            onClick={toggleNav}
+            aria-label={navCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            title={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!navCollapsed}
+            className={cn(
+              'flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+              navCollapsed && 'justify-center px-0'
+            )}
+          >
+            {navCollapsed ? (
+              <PanelLeftOpen size={17} aria-hidden="true" />
+            ) : (
+              <PanelLeftClose size={17} aria-hidden="true" />
+            )}
+            <span className={cn('font-medium', navCollapsed && 'sr-only')}>
+              {navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            </span>
+          </button>
+
+          {/* Sign out — the last action in the rail */}
+          <button
+            type="button"
+            onClick={handleLogout}
+            aria-label="Sign out"
+            title={navCollapsed ? 'Sign out' : undefined}
+            className={cn(
+              'flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive',
+              navCollapsed && 'justify-center px-0'
+            )}
+          >
+            <LogOut size={17} aria-hidden="true" />
+            <span className={cn('font-medium', navCollapsed && 'sr-only')}>Sign out</span>
           </button>
         </div>
+      </aside>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Content column                                                    */}
+      {/* ---------------------------------------------------------------- */}
+      <div
+        className={cn(
+          'md:transition-[padding-left] md:duration-200 md:ease-out',
+          navCollapsed ? 'md:pl-[68px]' : 'md:pl-60'
+        )}
+      >
+        <header className="sticky top-0 z-50 border-b border-border bg-background/85 backdrop-blur-lg">
+          <div className="flex h-14 items-center gap-4 px-4 md:px-6">
+            {/* Brand — mobile only (desktop brand lives in the sidebar) */}
+            <Link to="/" className="flex shrink-0 items-center gap-2.5 md:hidden">
+              <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                <Leaf size={17} aria-hidden="true" />
+              </span>
+              <span className="text-[15px] font-semibold tracking-tight">EDENS AI</span>
+            </Link>
+
+            {/* Data source context — desktop only, balances the bar */}
+            <span className="hidden md:block">
+              <DataSourceBadge variant="badge" />
+            </span>
+
+            <div className="ml-auto flex items-center gap-2">
+              <span
+                className="hidden h-8 items-center gap-1.5 rounded-full border border-border px-2.5 text-xs text-muted-foreground sm:flex"
+                title={`Message broker status: ${statusLabel}`}
+              >
+                <StatusDot className={statusDotClass} />
+                {statusLabel}
+              </span>
+
+              {user && (
+                <span className="hidden max-w-[150px] truncate text-xs text-muted-foreground xl:inline">
+                  {user.displayName}
+                </span>
+              )}
+
+              <button
+                type="button"
+                onClick={toggleTheme}
+                aria-label={isDark ? 'Switch to light appearance' : 'Switch to dark appearance'}
+                title={isDark ? 'Light appearance' : 'Dark appearance'}
+                className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {isDark ? <Sun size={17} /> : <Moon size={17} />}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                aria-label="Sign out"
+                title="Sign out"
+                className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+              >
+                <LogOut size={17} />
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {status === 'demo' && (
+          <div className="border-b border-warning/25 bg-warning/10 px-4 py-1.5 text-center text-xs font-medium text-warning">
+            Running in demo mode — no live broker connected
+          </div>
+        )}
+
+        <main className="mx-auto max-w-7xl px-4 py-8 pb-28 md:px-6 md:pb-10 lg:px-8">
+          <Outlet />
+        </main>
       </div>
 
-      {status === 'demo' && (
-        <div className="relative z-10 bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 px-4 py-2 text-center text-sm font-medium border-b border-yellow-500/30 backdrop-blur-md">
-          MQTT Offline – Running in Demo Mode
+      {/* Mobile bottom navigation — five destinations, always visible */}
+      <nav
+        aria-label="Main"
+        className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-lg md:hidden"
+      >
+        <div className="grid h-16 grid-cols-5">
+          {NAV_ITEMS.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                cn(
+                  'flex flex-col items-center justify-center gap-1 text-[11px] font-medium transition-colors',
+                  isActive ? 'text-brand' : 'text-muted-foreground'
+                )
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  <item.icon size={20} strokeWidth={isActive ? 2.2 : 1.8} />
+                  <span>{item.label}</span>
+                </>
+              )}
+            </NavLink>
+          ))}
         </div>
-      )}
+      </nav>
 
-      <main className="relative z-10 max-w-7xl mx-auto px-4 py-8">
-        <Outlet />
-      </main>
-      
       <OnboardingTour forceShow={forceTour} onClose={() => setForceTour(false)} />
     </div>
   );

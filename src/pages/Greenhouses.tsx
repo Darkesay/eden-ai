@@ -11,44 +11,49 @@ import {
   QrCode,
   RefreshCw,
   ShieldCheck,
-  Sprout,
   Thermometer,
   Wrench
 } from 'lucide-react';
 import { apiFetch, type GreenhouseSummary, useAuth } from '../lib/auth';
 import { QrCodeCard, QrScannerModal } from '../components/QrScannerModal';
 import { Button } from '../components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 
 function overallStatusBadge(status: GreenhouseSummary['overallStatus']) {
   switch (status) {
     case 'ONLINE':
-      return {
-        label: 'VERIFIED ONLINE',
-        cls: 'bg-[#10B981]/15 text-[#10B981] border-[#10B981]/40'
-      };
+      return { label: 'Online', cls: 'bg-success/10 text-success' };
     case 'PARTIAL':
-      return {
-        label: 'PARTIAL CHECK-IN',
-        cls: 'bg-teal-500/15 text-teal-400 border-teal-500/40'
-      };
+      return { label: 'Partial check-in', cls: 'bg-info/10 text-info' };
     case 'STALE':
-      return {
-        label: 'STALE SIGNAL',
-        cls: 'bg-amber-500/15 text-amber-400 border-amber-500/40'
-      };
+      return { label: 'Stale signal', cls: 'bg-warning/10 text-warning' };
     case 'SETUP_INCOMPLETE':
-      return {
-        label: 'SETUP REQUIRED',
-        cls: 'bg-slate-500/15 text-slate-300 border-slate-500/40'
-      };
+      return { label: 'Setup needed', cls: 'bg-muted text-muted-foreground' };
     default:
-      return {
-        label: 'OFFLINE',
-        cls: 'bg-red-500/15 text-red-400 border-red-500/40'
-      };
+      return { label: 'Offline', cls: 'bg-destructive/10 text-destructive' };
   }
+}
+
+function DeviceStatus({ label, icon: Icon, status, detail }: {
+  label: string;
+  icon: React.ElementType;
+  status: string;
+  detail: string;
+}) {
+  const statusCls =
+    status === 'CONNECTED' ? 'text-success' : status === 'STALE' ? 'text-warning' : 'text-muted-foreground';
+  return (
+    <div className="rounded-lg border border-border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <Icon size={13} aria-hidden="true" /> {label}
+        </span>
+        <span className={`text-xs font-medium ${statusCls}`}>{status.toLowerCase()}</span>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+    </div>
+  );
 }
 
 export default function Greenhouses() {
@@ -129,54 +134,38 @@ export default function Greenhouses() {
   };
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2.5">
-            <Sprout className="text-[#10B981]" size={28} />
-            My Greenhouses
-          </h1>
-          <p className="text-sm opacity-75 mt-1">
-            Claim an EDENS AI hardware kit via QR scan, enroll ESP32 devices, and monitor verified live data.
+          <h1 className="text-2xl font-semibold tracking-tight">Greenhouses</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Claim a kit with a QR scan, enroll its devices, and check verified live data.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleManualRefresh}
-            className="border-[#D1E8D1] dark:border-[#1A2A1A]"
-          >
-            <RefreshCw size={15} className={`mr-1.5 ${refreshing ? 'animate-spin' : ''}`} />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="ghost" onClick={handleManualRefresh}>
+            <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
             Refresh
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setScannerOpen(true)}
-            className="border-[#10B981]/50 text-[#059669] dark:text-[#10B981] hover:bg-[#10B981]/10"
-          >
-            <QrCode size={16} className="mr-1.5" />
-            Scan Kit / Invite QR
+          <Button type="button" variant="outline" onClick={() => setScannerOpen(true)}>
+            <QrCode size={15} aria-hidden="true" />
+            Scan QR
           </Button>
-          <Button
-            type="button"
-            onClick={() => navigate('/greenhouses/setup')}
-            className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-          >
-            <Plus size={16} className="mr-1.5" />
-            Add Greenhouse
+          <Button type="button" onClick={() => navigate('/greenhouses/setup')}>
+            <Plus size={15} aria-hidden="true" />
+            Add greenhouse
           </Button>
         </div>
       </div>
 
       {feedback && (
         <div
-          className={`rounded-2xl border px-4 py-3 text-sm ${
+          role={feedback.type === 'err' ? 'alert' : 'status'}
+          className={`rounded-lg border px-4 py-3 text-sm ${
             feedback.type === 'ok'
-              ? 'border-[#10B981]/40 bg-[#10B981]/10 text-[#10B981]'
-              : 'border-red-500/40 bg-red-500/10 text-red-400'
+              ? 'border-success/30 bg-success/10 text-success'
+              : 'border-destructive/30 bg-destructive/10 text-destructive'
           }`}
         >
           {feedback.text}
@@ -184,143 +173,106 @@ export default function Greenhouses() {
       )}
 
       {greenhouses.length === 0 ? (
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/80 dark:bg-[#080808]/90 p-8 text-center space-y-5">
-          <div className="mx-auto w-16 h-16 rounded-2xl bg-[#10B981]/10 border border-[#10B981]/30 flex items-center justify-center text-[#10B981]">
-            <QrCode size={32} />
+        <div className="mx-auto max-w-lg rounded-xl border border-border bg-card px-6 py-10 text-center">
+          <div className="mx-auto flex size-11 items-center justify-center rounded-xl bg-accent text-accent-foreground">
+            <QrCode size={22} aria-hidden="true" />
           </div>
-          <div className="max-w-lg mx-auto space-y-2">
-            <h2 className="text-xl font-bold">No Greenhouses Enrolled Yet</h2>
-            <p className="text-sm opacity-75">
-              Scan the QR label on your EDENS AI greenhouse kit or start the Guided Setup Wizard to register your
-              ESP32-CAM and Main ESP32 controller.
-            </p>
-          </div>
-          <div className="flex flex-wrap justify-center gap-3 pt-2">
-            <Button
-              type="button"
-              onClick={() => setScannerOpen(true)}
-              className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-            >
-              <QrCode size={16} className="mr-2" />
-              Scan Greenhouse Kit QR
+          <h2 className="mt-4 text-base font-semibold">No greenhouses yet</h2>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            Scan the QR label on your EDENS AI kit to claim it, or start the guided setup
+            wizard to enroll the controller and camera by hand.
+          </p>
+          <div className="mt-5 flex flex-wrap justify-center gap-2">
+            <Button type="button" onClick={() => setScannerOpen(true)}>
+              <QrCode size={15} aria-hidden="true" />
+              Scan kit QR
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => navigate('/greenhouses/setup')}
-              className="border-[#10B981]/40"
-            >
-              <Wrench size={16} className="mr-2" />
-              Manual Setup Wizard
+            <Button type="button" variant="outline" onClick={() => navigate('/greenhouses/setup')}>
+              <Wrench size={15} aria-hidden="true" />
+              Setup wizard
             </Button>
           </div>
-        </Card>
+        </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {greenhouses.map((gh) => {
             const badge = overallStatusBadge(gh.overallStatus);
             const readings = gh.controller.readings;
 
             return (
-              <Card
-                key={gh.id}
-                className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90 overflow-hidden shadow-sm hover:border-[#10B981]/40 transition-all"
-              >
-                <CardHeader className="pb-3 border-b border-[#D1E8D1] dark:border-[#1A2A1A]">
+              <Card key={gh.id} className="transition-colors hover:border-brand/40">
+                <CardHeader className="border-b border-border pb-3">
                   <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <CardTitle className="text-xl font-bold">{gh.name}</CardTitle>
-                      <div className="flex items-center gap-3 text-xs opacity-70 mt-1">
+                    <div className="min-w-0">
+                      <CardTitle className="truncate">{gh.name}</CardTitle>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                         <span className="flex items-center gap-1">
-                          <MapPin size={12} /> {gh.locationLabel}
+                          <MapPin size={12} aria-hidden="true" /> {gh.locationLabel}
                         </span>
-                        <span className="font-mono uppercase">{gh.cropType}</span>
-                        <span className="uppercase font-mono text-[10px] px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/5">
-                          {gh.role}
+                        <span className="capitalize">{gh.cropType}</span>
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium capitalize">
+                          {gh.role.toLowerCase()}
                         </span>
                       </div>
                     </div>
-                    <span
-                      className={`text-[10px] font-mono font-bold uppercase tracking-wider px-2.5 py-1 rounded-md border shrink-0 ${badge.cls}`}
-                    >
+                    <span className={`shrink-0 rounded-md px-2 py-1 text-xs font-medium ${badge.cls}`}>
                       {badge.label}
                     </span>
                   </div>
                 </CardHeader>
 
-                <CardContent className="p-5 space-y-4">
-                  <div className="grid grid-cols-2 gap-3 text-xs">
-                    <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3 space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="opacity-70 flex items-center gap-1.5 font-medium">
-                          <Camera size={13} className="text-[#14B8A6]" /> ESP32-CAM
-                        </span>
-                        <span
-                          className={`font-mono text-[10px] font-bold ${
-                            gh.camera.connectionStatus === 'CONNECTED'
-                              ? 'text-[#10B981]'
-                              : gh.camera.connectionStatus === 'STALE'
-                                ? 'text-amber-400'
-                                : 'opacity-60'
-                          }`}
-                        >
-                          {gh.camera.connectionStatus}
-                        </span>
-                      </div>
-                      <div className="text-[11px] opacity-75">
-                        {gh.camera.lastCaptureAt
-                          ? `Snapshot (${gh.camera.freshness}) • ${gh.camera.ageSeconds ?? 0}s ago`
-                          : 'No snapshot uploaded yet'}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3 space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="opacity-70 flex items-center gap-1.5 font-medium">
-                          <Cpu size={13} className="text-[#10B981]" /> Main ESP32
-                        </span>
-                        <span
-                          className={`font-mono text-[10px] font-bold ${
-                            gh.controller.connectionStatus === 'CONNECTED'
-                              ? 'text-[#10B981]'
-                              : gh.controller.connectionStatus === 'STALE'
-                                ? 'text-amber-400'
-                                : 'opacity-60'
-                          }`}
-                        >
-                          {gh.controller.connectionStatus}
-                        </span>
-                      </div>
-                      <div className="text-[11px] opacity-75">
-                        {gh.controller.lastTelemetryAt
-                          ? `Source: ${gh.controller.dataSource} • ${gh.controller.ageSeconds ?? 0}s ago`
-                          : 'No controller check-in yet'}
-                      </div>
-                    </div>
+                <CardContent className="space-y-3 pt-4">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <DeviceStatus
+                      label="ESP32-CAM"
+                      icon={Camera}
+                      status={gh.camera.connectionStatus}
+                      detail={
+                        gh.camera.lastCaptureAt
+                          ? `Snapshot (${gh.camera.freshness.toLowerCase()}) · ${gh.camera.ageSeconds ?? 0}s ago`
+                          : 'No snapshot uploaded yet'
+                      }
+                    />
+                    <DeviceStatus
+                      label="Main ESP32"
+                      icon={Cpu}
+                      status={gh.controller.connectionStatus}
+                      detail={
+                        gh.controller.lastTelemetryAt
+                          ? `${gh.controller.dataSource.toLowerCase()} · ${gh.controller.ageSeconds ?? 0}s ago`
+                          : 'No controller check-in yet'
+                      }
+                    />
                   </div>
 
                   {readings && gh.controller.dataSource !== 'DISCONNECTED' ? (
-                    <div className="grid grid-cols-3 gap-2 rounded-2xl bg-black/5 dark:bg-[#0D130F] p-3 text-center">
+                    <div className="grid grid-cols-3 gap-2 rounded-lg bg-muted/60 p-3 text-center">
                       <div>
-                        <div className="text-[10px] uppercase opacity-60 flex items-center justify-center gap-1">
-                          <Thermometer size={11} /> Temp
+                        <div className="flex items-center justify-center gap-1 text-[11px] text-muted-foreground">
+                          <Thermometer size={11} aria-hidden="true" /> Temp
                         </div>
-                        <div className="font-mono font-bold text-sm mt-0.5">{readings.temperature.toFixed(1)}°C</div>
+                        <div className="mt-0.5 font-mono tabular text-sm font-semibold">
+                          {readings.temperature.toFixed(1)}°C
+                        </div>
                       </div>
                       <div>
-                        <div className="text-[10px] uppercase opacity-60 flex items-center justify-center gap-1">
-                          <Droplets size={11} /> Humidity
+                        <div className="flex items-center justify-center gap-1 text-[11px] text-muted-foreground">
+                          <Droplets size={11} aria-hidden="true" /> Humidity
                         </div>
-                        <div className="font-mono font-bold text-sm mt-0.5">{readings.humidity.toFixed(0)}%</div>
+                        <div className="mt-0.5 font-mono tabular text-sm font-semibold">
+                          {readings.humidity.toFixed(0)}%
+                        </div>
                       </div>
                       <div>
-                        <div className="text-[10px] uppercase opacity-60">Soil</div>
-                        <div className="font-mono font-bold text-sm mt-0.5">{readings.soilMoisture.toFixed(0)}%</div>
+                        <div className="text-[11px] text-muted-foreground">Soil</div>
+                        <div className="mt-0.5 font-mono tabular text-sm font-semibold">
+                          {readings.soilMoisture.toFixed(0)}%
+                        </div>
                       </div>
                     </div>
                   ) : (
-                    <div className="rounded-2xl border border-dashed border-[#D1E8D1] dark:border-[#1A2A1A] px-3 py-2.5 text-xs opacity-70 text-center">
-                      Awaiting verified physical controller readings (no synthetic values shown).
+                    <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-center text-xs text-muted-foreground">
+                      Waiting for the first controller reading — no values are simulated.
                     </div>
                   )}
 
@@ -328,9 +280,9 @@ export default function Greenhouses() {
                     <Link
                       to={`/greenhouses/${gh.id}/setup`}
                       onClick={() => setActiveGreenhouseId(gh.id)}
-                      className="text-xs font-medium text-[#059669] dark:text-[#10B981] hover:underline flex items-center gap-1"
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
                     >
-                      <Wrench size={13} /> Device Setup Wizard
+                      <Wrench size={13} aria-hidden="true" /> Device setup
                     </Link>
 
                     <Button
@@ -340,9 +292,8 @@ export default function Greenhouses() {
                         setActiveGreenhouseId(gh.id);
                         navigate(`/greenhouses/${gh.id}`);
                       }}
-                      className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold rounded-xl"
                     >
-                      Open Greenhouse <ArrowRight size={14} className="ml-1" />
+                      Open <ArrowRight size={14} aria-hidden="true" />
                     </Button>
                   </div>
                 </CardContent>
@@ -352,51 +303,58 @@ export default function Greenhouses() {
         </div>
       )}
 
-      {/* Printable / Testable Kit Box QR Generator */}
-      <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/70 dark:bg-[#080808]/70">
-        <CardContent className="p-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      {/* Printable / testable kit box QR generator */}
+      <Card>
+        <CardHeader className="border-b border-border pb-3">
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h3 className="font-bold text-sm flex items-center gap-2">
-                <ShieldCheck size={16} className="text-[#10B981]" />
-                EDENS Kit Box QR Label Generator (Non-Secret One-Time Token)
-              </h3>
-              <p className="text-xs opacity-70 mt-0.5">
-                Generate a printable QR label for a new EDENS AI greenhouse kit to test or ship with physical hardware.
-              </p>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <ShieldCheck size={15} className="text-muted-foreground" aria-hidden="true" />
+                Kit QR label generator
+              </CardTitle>
+              <CardDescription className="mt-0.5">
+                Print a one-time QR label to test or ship with a physical kit.
+              </CardDescription>
             </div>
             <Button
               type="button"
               variant="outline"
               size="sm"
               onClick={() => setShowKitGenerator((v) => !v)}
-              className="border-[#10B981]/40 text-xs"
+              aria-expanded={showKitGenerator}
             >
-              {showKitGenerator ? 'Hide Generator' : 'Generate Kit QR Label'}
+              {showKitGenerator ? 'Hide' : 'Generate label'}
             </Button>
           </div>
+        </CardHeader>
 
-          {showKitGenerator && (
-            <div className="pt-2 grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+        {showKitGenerator && (
+          <CardContent className="pt-4">
+            <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-2">
               <form onSubmit={handleGenerateKitQr} className="space-y-3">
-                <label className="block text-xs font-medium opacity-80">Kit Serial Label</label>
-                <Input
-                  value={kitSerial}
-                  onChange={(e) => setKitSerial(e.target.value)}
-                  placeholder="EDENS-NG-KIT-01"
-                  className="bg-transparent border-[#D1E8D1] dark:border-[#1A2A1A] font-mono text-sm"
-                />
-                <p className="text-[11px] opacity-70">
-                  Contains only a revocable 60-minute enrollment code (`edens://enroll?...`). Permanent device keys are
-                  issued separately after account authentication.
+                <div className="space-y-1.5">
+                  <label htmlFor="kit-serial" className="block text-xs font-medium">
+                    Kit serial
+                  </label>
+                  <Input
+                    id="kit-serial"
+                    value={kitSerial}
+                    onChange={(e) => setKitSerial(e.target.value)}
+                    placeholder="EDENS-NG-KIT-01"
+                    className="font-mono text-sm"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  The label holds a revocable 60-minute enrollment code. Permanent device keys
+                  are issued after you sign in.
                 </p>
-                <Button
-                  type="submit"
-                  disabled={generatingQr}
-                  className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-                >
-                  {generatingQr ? <Loader2 size={15} className="animate-spin mr-1.5" /> : <QrCode size={15} className="mr-1.5" />}
-                  Issue One-Time Kit QR
+                <Button type="submit" disabled={generatingQr}>
+                  {generatingQr ? (
+                    <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                  ) : (
+                    <QrCode size={15} aria-hidden="true" />
+                  )}
+                  Issue QR label
                 </Button>
               </form>
 
@@ -409,8 +367,8 @@ export default function Greenhouses() {
                 />
               )}
             </div>
-          )}
-        </CardContent>
+          </CardContent>
+        )}
       </Card>
 
       <QrScannerModal

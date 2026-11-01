@@ -23,6 +23,7 @@ import { QrScannerModal } from '../components/QrScannerModal';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
 
 interface IssuedCredentialBundle {
   deviceId: string;
@@ -115,7 +116,7 @@ export default function GreenhouseSetupWizard() {
           setCropType(data.greenhouse.cropType);
           setDevices(data.devices || []);
           setInfoMsg(
-            'QR enrollment token redeemed. Note: hardware is NOT connected yet — proceed through Wi-Fi & credential provisioning below.'
+            'QR token redeemed. The hardware is not connected yet — continue through the Wi-Fi and credential steps below.'
           );
           await refreshSession();
           setStep(2);
@@ -275,137 +276,160 @@ export default function GreenhouseSetupWizard() {
     setLocationLabel(data.greenhouse.locationLabel);
     setCropType(data.greenhouse.cropType);
     setDevices(data.devices || []);
-    setInfoMsg(
-      'QR enrollment succeeded! Hardware is still unconfigured until you complete Steps 2–4 below.'
-    );
+    setInfoMsg('QR scan succeeded. The hardware is still unconfigured until you finish steps 2 to 4 below.');
     await refreshSession();
     setStep(2);
   };
 
+  const steps = [
+    { num: 1, label: 'Identity & QR' },
+    { num: 2, label: 'Wi-Fi method' },
+    { num: 3, label: 'Device keys' },
+    { num: 4, label: 'Verify check-in' }
+  ];
+
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => navigate('/greenhouses')}
-          className="text-xs font-medium opacity-75 hover:opacity-100 flex items-center gap-1.5"
-        >
-          <ArrowLeft size={15} /> Back to My Greenhouses
-        </button>
+    <div className="mx-auto max-w-4xl space-y-6">
+      <button
+        type="button"
+        onClick={() => navigate('/greenhouses')}
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ArrowLeft size={13} aria-hidden="true" /> All greenhouses
+      </button>
+
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Greenhouse setup</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Claim the kit, choose how it joins Wi-Fi, issue each device its own key, then verify
+            the first authenticated check-in.
+          </p>
+        </div>
         {ghId && (
-          <span className="text-xs font-mono opacity-60">Greenhouse ID: {ghId}</span>
+          <span className="font-mono tabular text-xs text-muted-foreground">ID {ghId}</span>
         )}
       </div>
 
-      <div>
-        <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Greenhouse Hardware Setup Wizard</h1>
-        <p className="text-sm opacity-75 mt-1">
-          Secure self-service onboarding for your ESP32-CAM crop camera and Main ESP32 controller.
-        </p>
-      </div>
-
       {/* Stepper */}
-      <div className="grid grid-cols-4 gap-2">
-        {[
-          { num: 1, label: '1. Identity / QR' },
-          { num: 2, label: '2. Wi-Fi Method' },
-          { num: 3, label: '3. Device Keys' },
-          { num: 4, label: '4. Verify Check-In' }
-        ].map((item) => (
-          <button
-            key={item.num}
-            type="button"
-            disabled={item.num > 1 && !ghId}
-            onClick={() => setStep(item.num as 1 | 2 | 3 | 4)}
-            className={`py-2.5 px-3 rounded-xl text-xs font-semibold border text-left transition-all ${
-              step === item.num
-                ? 'border-[#10B981] bg-[#10B981]/15 text-[#10B981]'
-                : item.num < step
-                  ? 'border-[#10B981]/30 bg-[#10B981]/5 opacity-90'
-                  : 'border-[#D1E8D1] dark:border-[#1A2A1A] opacity-50'
-            }`}
-          >
-            {item.label}
-          </button>
-        ))}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {steps.map((item) => {
+          const isActive = step === item.num;
+          const isDone = item.num < step;
+          return (
+            <button
+              key={item.num}
+              type="button"
+              disabled={item.num > 1 && !ghId}
+              aria-current={isActive ? 'step' : undefined}
+              onClick={() => setStep(item.num as 1 | 2 | 3 | 4)}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 text-left text-xs font-medium transition-colors ${
+                isActive
+                  ? 'border-brand/40 bg-accent text-accent-foreground'
+                  : isDone
+                    ? 'border-border text-foreground hover:bg-muted/50'
+                    : 'border-border text-muted-foreground hover:bg-muted/50'
+              } ${item.num > 1 && !ghId ? 'cursor-not-allowed opacity-50' : ''}`}
+            >
+              {isDone ? (
+                <Check size={14} className="shrink-0 text-success" aria-hidden="true" />
+              ) : (
+                <span
+                  className={`flex size-4 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold ${
+                    isActive ? 'border-brand/40 bg-background text-brand' : 'border-border'
+                  }`}
+                  aria-hidden="true"
+                >
+                  {item.num}
+                </span>
+              )}
+              {item.label}
+            </button>
+          );
+        })}
       </div>
 
       {infoMsg && (
-        <div className="rounded-2xl border border-[#10B981]/40 bg-[#10B981]/10 px-4 py-3 text-xs text-[#10B981]">
+        <div
+          role="status"
+          className="rounded-lg border border-success/30 bg-success/10 px-4 py-3 text-sm text-success"
+        >
           {infoMsg}
         </div>
       )}
 
       {errorMsg && (
-        <div className="rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-400">
+        <div
+          role="alert"
+          className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
           {errorMsg}
         </div>
       )}
 
-      {/* STEP 1: QR Claim or Name Greenhouse */}
+      {/* STEP 1: QR claim or register greenhouse */}
       {step === 1 && (
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <CardTitle className="text-lg">Step 1 — Claim Kit QR or Register Greenhouse</CardTitle>
+        <Card>
+          <CardHeader className="border-b border-border pb-3">
+            <CardTitle className="flex items-center gap-2 text-[13px] font-semibold">
+              <QrCode size={16} className="text-muted-foreground" aria-hidden="true" />
+              Claim a kit or register a greenhouse
+            </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="rounded-2xl border border-[#10B981]/30 bg-[#10B981]/5 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <CardContent className="space-y-6 pt-4">
+            <div className="flex flex-col gap-4 rounded-lg border border-border bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="space-y-1">
-                <div className="font-semibold text-sm flex items-center gap-2">
-                  <QrCode size={17} className="text-[#10B981]" /> Have an EDENS AI Kit QR Sticker?
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <QrCode size={16} className="text-muted-foreground" aria-hidden="true" />
+                  Have a kit QR sticker?
                 </div>
-                <p className="text-xs opacity-75">
-                  Scan the one-time QR code with your phone camera to bind the kit to your account.
+                <p className="text-xs text-muted-foreground">
+                  Scan the one-time code with your phone camera to bind the kit to your account.
                 </p>
               </div>
-              <Button
-                type="button"
-                onClick={() => setScannerOpen(true)}
-                className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold shrink-0"
-              >
-                <QrCode size={15} className="mr-1.5" /> Scan Kit QR
+              <Button type="button" onClick={() => setScannerOpen(true)} className="shrink-0">
+                <QrCode size={15} aria-hidden="true" /> Scan kit QR
               </Button>
             </div>
 
             <form onSubmit={handleCreateOrSaveStep1} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium opacity-80">Greenhouse Name</label>
+                  <Label htmlFor="gh-name">Greenhouse name</Label>
                   <Input
+                    id="gh-name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     required
-                    className="bg-transparent border-[#D1E8D1] dark:border-[#1A2A1A]"
+                    className="h-11"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium opacity-80">Location / Plot Label</label>
+                  <Label htmlFor="gh-location">Location or plot label</Label>
                   <Input
+                    id="gh-location"
                     value={locationLabel}
                     onChange={(e) => setLocationLabel(e.target.value)}
                     required
-                    className="bg-transparent border-[#D1E8D1] dark:border-[#1A2A1A]"
+                    className="h-11"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium opacity-80">Primary Crop</label>
+                  <Label htmlFor="gh-crop">Primary crop</Label>
                   <Input
+                    id="gh-crop"
                     value={cropType}
                     onChange={(e) => setCropType(e.target.value)}
                     required
-                    className="bg-transparent border-[#D1E8D1] dark:border-[#1A2A1A]"
+                    className="h-11"
                   />
                 </div>
               </div>
 
               <div className="flex justify-end">
-                <Button
-                  type="submit"
-                  disabled={busy}
-                  className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-                >
-                  {busy ? <Loader2 size={15} className="animate-spin mr-1.5" /> : null}
-                  Continue to Wi-Fi Setup <ArrowRight size={15} className="ml-1.5" />
+                <Button type="submit" disabled={busy}>
+                  {busy ? <Loader2 size={15} className="animate-spin" aria-hidden="true" /> : null}
+                  Continue to Wi-Fi setup <ArrowRight size={15} aria-hidden="true" />
                 </Button>
               </div>
             </form>
@@ -413,137 +437,143 @@ export default function GreenhouseSetupWizard() {
         </Card>
       )}
 
-      {/* STEP 2: Honest Wi-Fi Provisioning Selection */}
+      {/* STEP 2: Wi-Fi provisioning selection */}
       {step === 2 && (
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Wifi size={18} className="text-[#10B981]" /> Step 2 — Greenhouse 2.4 GHz Wi-Fi Provisioning
+        <Card>
+          <CardHeader className="border-b border-border pb-3">
+            <CardTitle className="flex items-center gap-2 text-[13px] font-semibold">
+              <Wifi size={16} className="text-muted-foreground" aria-hidden="true" />
+              Wi-Fi provisioning
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-5">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <CardContent className="space-y-5 pt-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <button
                 type="button"
                 onClick={() => setWifiMethod('guided_secrets_header')}
-                className={`text-left rounded-2xl border p-4 space-y-2 transition-all ${
+                aria-pressed={wifiMethod === 'guided_secrets_header'}
+                className={`space-y-2 rounded-lg border p-4 text-left transition-colors ${
                   wifiMethod === 'guided_secrets_header'
-                    ? 'border-[#10B981] bg-[#10B981]/10'
-                    : 'border-[#D1E8D1] dark:border-[#1A2A1A]'
+                    ? 'border-brand/40 bg-accent text-accent-foreground'
+                    : 'border-border hover:bg-muted/50'
                 }`}
               >
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-sm">Guided Header Provisioning</span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#10B981]/20 text-[#10B981]">
-                    SUPPORTED NOW
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold">Guided header files</span>
+                  <span className="rounded-md bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">
+                    Available now
                   </span>
                 </div>
-                <p className="text-xs opacity-75 leading-relaxed">
-                  Compatible with existing `edens_cloud_upload.h` firmware. Download pre-filled `camera_secrets.h` &
-                  `controller_secrets.h`, add your local 2.4 GHz Wi-Fi password offline, and flash once via USB.
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Works with the existing edens_cloud_upload.h firmware. Download pre-filled
+                  camera_secrets.h and controller_secrets.h, add your local 2.4 GHz Wi-Fi password
+                  offline, then flash once over USB.
                 </p>
               </button>
 
               <button
                 type="button"
                 onClick={() => setWifiMethod('softap_portal_pending')}
-                className={`text-left rounded-2xl border p-4 space-y-2 transition-all ${
+                aria-pressed={wifiMethod === 'softap_portal_pending'}
+                className={`space-y-2 rounded-lg border p-4 text-left transition-colors ${
                   wifiMethod === 'softap_portal_pending'
-                    ? 'border-amber-500 bg-amber-500/10'
-                    : 'border-[#D1E8D1] dark:border-[#1A2A1A]'
+                    ? 'border-brand/40 bg-accent text-accent-foreground'
+                    : 'border-border hover:bg-muted/50'
                 }`}
               >
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-sm">Phone SoftAP / BLE Captive Portal</span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-400">
-                    PENDING_FIRMWARE_SUPPORT
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold">Phone hotspot portal</span>
+                  <span className="rounded-md bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
+                    Not yet on firmware
                   </span>
                 </div>
-                <p className="text-xs opacity-75 leading-relaxed">
-                  Cloud bootstrap endpoint (`POST /api/devices/bootstrap`) is ready, but current ESP32 sketches do not
-                  yet host an `EDENS-SETUP-XXXX` Wi-Fi AP or NVS portal. Use Guided Header Provisioning for today&apos;s
-                  physical boards.
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  The cloud bootstrap endpoint is ready, but current ESP32 sketches do not yet host
+                  a setup access point or on-device portal. Use guided header files for today&apos;s
+                  boards.
                 </p>
               </button>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium opacity-80">
-                2.4 GHz Greenhouse Wi-Fi SSID Label (Optional — pre-fills downloaded header; password is NEVER sent to cloud)
-              </label>
+              <Label htmlFor="wifi-ssid">
+                2.4 GHz Wi-Fi network name
+                <span className="font-normal text-muted-foreground"> (optional)</span>
+              </Label>
               <Input
+                id="wifi-ssid"
                 value={wifiSsidHint}
                 onChange={(e) => setWifiSsidHint(e.target.value)}
                 placeholder="e.g. Greenhouse_2.4G"
-                className="bg-transparent border-[#D1E8D1] dark:border-[#1A2A1A] max-w-md"
+                className="max-w-md"
               />
+              <p className="text-xs text-muted-foreground">
+                Pre-fills the downloaded header files. Your password is never sent to the cloud.
+              </p>
             </div>
 
             {wifiMethod === 'softap_portal_pending' && (
-              <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-xs text-amber-300 flex items-start gap-2.5">
-                <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+              <div className="flex items-start gap-2.5 rounded-lg border border-warning/30 bg-warning/10 p-4 text-xs leading-relaxed text-warning">
+                <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
                 <div>
-                  <strong>Honest Hardware Capability Note:</strong> ESP32 chips only connect to 2.4 GHz Wi-Fi (not 5 GHz).
-                  Until Victor flashes SoftAP/NVS portal code onto the ESP32-CAM and Main ESP32 sketches, phone-only
-                  Wi-Fi entry cannot configure the boards wirelessly. Proceed to Step 3 to issue unique per-device keys.
+                  <span className="font-semibold">Hardware note:</span> ESP32 boards only connect
+                  to 2.4 GHz Wi-Fi, not 5 GHz. Until the setup-portal firmware is flashed onto the
+                  camera and controller, phone-only Wi-Fi entry cannot configure them wirelessly.
+                  Continue to step 3 to issue unique per-device keys.
                 </div>
               </div>
             )}
 
-            <div className="flex justify-between pt-2">
+            <div className="flex items-center justify-between pt-2">
               <Button type="button" variant="outline" onClick={() => setStep(1)}>
-                Back
+                <ArrowLeft size={15} aria-hidden="true" /> Back
               </Button>
-              <Button
-                type="button"
-                disabled={busy}
-                onClick={handleSaveStep2}
-                className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-              >
-                Continue to Device Credentials <ArrowRight size={15} className="ml-1.5" />
+              <Button type="button" disabled={busy} onClick={handleSaveStep2}>
+                Continue to device keys <ArrowRight size={15} aria-hidden="true" />
               </Button>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* STEP 3: Per-Device Credential Issuance */}
+      {/* STEP 3: Per-device credential issuance */}
       {step === 3 && (
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <KeyRound size={18} className="text-[#10B981]" /> Step 3 — Issue Unique Per-Device Credentials
+        <Card>
+          <CardHeader className="border-b border-border pb-3">
+            <CardTitle className="flex items-center gap-2 text-[13px] font-semibold">
+              <KeyRound size={16} className="text-muted-foreground" aria-hidden="true" />
+              Device keys
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-5">
-            <p className="text-xs opacity-75">
-              Each device receives its own revocable secret (`X-Camera-Key` / `X-Hardware-Key`). Only SHA-256 hashes are
-              stored in SQLite; download the generated `.h` file immediately after issuing.
+          <CardContent className="space-y-5 pt-4">
+            <p className="text-xs text-muted-foreground">
+              Each device gets its own revocable key, sent as the X-Camera-Key or X-Hardware-Key
+              header. Only SHA-256 hashes are stored. Download the generated .h file right after
+              issuing — the key is shown once.
             </p>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {devices.map((dev) => {
                 const issued = issuedMap[dev.id];
                 const isCam = dev.deviceType === 'esp32_cam';
 
                 return (
-                  <div
-                    key={dev.id}
-                    className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-4 space-y-3"
-                  >
+                  <div key={dev.id} className="space-y-3 rounded-lg border border-border p-4">
                     <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="font-bold text-sm flex items-center gap-1.5">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 text-sm font-semibold">
                           {isCam ? (
-                            <Camera size={15} className="text-[#14B8A6]" />
+                            <Camera size={15} className="text-muted-foreground" aria-hidden="true" />
                           ) : (
-                            <Cpu size={15} className="text-[#10B981]" />
+                            <Cpu size={15} className="text-muted-foreground" aria-hidden="true" />
                           )}
                           {dev.label}
                         </div>
-                        <div className="text-[11px] font-mono opacity-65 mt-0.5">ID: {dev.id}</div>
+                        <div className="mt-0.5 break-all font-mono text-[11px] text-muted-foreground">
+                          ID {dev.id}
+                        </div>
                       </div>
-                      <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
+                      <span className="shrink-0 rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium capitalize text-muted-foreground">
                         {dev.provisioningStatus}
                       </span>
                     </div>
@@ -553,29 +583,39 @@ export default function GreenhouseSetupWizard() {
                       size="sm"
                       disabled={busy}
                       onClick={() => handleIssueCredential(dev.id)}
-                      className="w-full bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
+                      className="w-full"
                     >
-                      {dev.hasCredentialIssued ? 'Rotate Unique Key' : 'Issue Unique Device Key'}
+                      {dev.hasCredentialIssued ? 'Rotate device key' : 'Issue device key'}
                     </Button>
 
                     {issued && (
-                      <div className="rounded-xl bg-[#060A07] border border-[#10B981]/40 p-3 space-y-2 text-xs text-[#E5E7EB]">
-                        <div className="flex items-center justify-between text-[11px] text-[#10B981]">
-                          <span>{issued.authHeaderName} (Shown Once)</span>
-                          <button
+                      <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-muted-foreground">
+                            {issued.authHeaderName} — shown once
+                          </span>
+                          <Button
                             type="button"
+                            variant="ghost"
+                            size="xs"
                             onClick={async () => {
                               await navigator.clipboard.writeText(issued.oneTimeDeviceKey);
                               setCopiedId(dev.id);
                               setTimeout(() => setCopiedId(null), 2000);
                             }}
-                            className="flex items-center gap-1 hover:underline"
+                            className="shrink-0"
+                            aria-label="Copy device key"
+                            title="Copy device key"
                           >
-                            {copiedId === dev.id ? <Check size={12} /> : <Copy size={12} />}
-                            {copiedId === dev.id ? 'Copied' : 'Copy Key'}
-                          </button>
+                            {copiedId === dev.id ? (
+                              <Check size={12} aria-hidden="true" />
+                            ) : (
+                              <Copy size={12} aria-hidden="true" />
+                            )}
+                            {copiedId === dev.id ? 'Copied' : 'Copy key'}
+                          </Button>
                         </div>
-                        <div className="font-mono text-[11px] break-all bg-black/60 p-2 rounded border border-white/10">
+                        <div className="break-all rounded-lg border border-border bg-background p-2 font-mono text-[11px]">
                           {issued.oneTimeDeviceKey}
                         </div>
                         <Button
@@ -588,9 +628,9 @@ export default function GreenhouseSetupWizard() {
                               issued.firmwareHeader.content
                             )
                           }
-                          className="w-full border-[#10B981]/40 text-[#10B981] hover:bg-[#10B981]/10 text-xs"
+                          className="w-full"
                         >
-                          <Download size={13} className="mr-1.5" />
+                          <Download size={13} aria-hidden="true" />
                           Download {issued.firmwareHeader.filename}
                         </Button>
                       </div>
@@ -600,29 +640,26 @@ export default function GreenhouseSetupWizard() {
               })}
             </div>
 
-            <div className="flex justify-between pt-2">
+            <div className="flex items-center justify-between pt-2">
               <Button type="button" variant="outline" onClick={() => setStep(2)}>
-                Back
+                <ArrowLeft size={15} aria-hidden="true" /> Back
               </Button>
-              <Button
-                type="button"
-                onClick={() => setStep(4)}
-                className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-              >
-                Continue to Safe Connection Test <ArrowRight size={15} className="ml-1.5" />
+              <Button type="button" onClick={() => setStep(4)}>
+                Continue to verification <ArrowRight size={15} aria-hidden="true" />
               </Button>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* STEP 4: Read-Only Non-Actuating Connection Test */}
+      {/* STEP 4: Read-only connection test */}
       {step === 4 && (
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-lg flex items-center gap-2">
-                <ShieldCheck size={18} className="text-[#10B981]" /> Step 4 — Read-Only Hardware Check-In Verification
+        <Card>
+          <CardHeader className="border-b border-border pb-3">
+            <div className="flex w-full flex-wrap items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-[13px] font-semibold">
+                <ShieldCheck size={16} className="text-muted-foreground" aria-hidden="true" />
+                Check-in verification
               </CardTitle>
               <Button
                 type="button"
@@ -631,53 +668,55 @@ export default function GreenhouseSetupWizard() {
                 disabled={busy}
                 onClick={runReadOnlyConnectionTest}
               >
-                <RefreshCw size={14} className={`mr-1.5 ${busy ? 'animate-spin' : ''}`} />
-                Re-Test Now
+                <RefreshCw size={14} className={busy ? 'animate-spin' : ''} aria-hidden="true" />
+                Retry connection
               </Button>
             </div>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="text-xs opacity-75">
-              Zero actuator commands are ever sent during verification (`actuationCommandsSent: 0`). Your greenhouse
-              turns green only after genuine authenticated uploads arrive from your ESP32 boards.
-            </div>
+          <CardContent className="space-y-4 pt-4">
+            <p className="text-xs text-muted-foreground">
+              Verification sends no actuator commands. Your greenhouse only shows as online once
+              genuine, authenticated uploads arrive from your own ESP32 boards.
+            </p>
 
             {connectionCheck && (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {connectionCheck.checks.map((chk) => (
                   <div
                     key={chk.id}
-                    className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3.5 flex items-start gap-3"
+                    className="flex items-start gap-3 rounded-lg border border-border p-3.5"
                   >
                     {chk.status === 'PASS' ? (
-                      <CheckCircle2 size={18} className="text-[#10B981] shrink-0 mt-0.5" />
+                      <CheckCircle2 size={17} className="mt-0.5 shrink-0 text-success" aria-hidden="true" />
                     ) : (
-                      <Clock size={18} className="text-amber-400 shrink-0 mt-0.5" />
+                      <Clock size={17} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
                     )}
-                    <div className="space-y-0.5">
-                      <div className="text-sm font-semibold flex items-center gap-2">
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
                         {chk.label}
-                        <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
-                          {chk.status}
+                        <span
+                          className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                            chk.status === 'PASS'
+                              ? 'bg-success/10 text-success'
+                              : 'bg-warning/10 text-warning'
+                          }`}
+                        >
+                          {chk.status === 'PASS' ? 'Passed' : 'Waiting'}
                         </span>
                       </div>
-                      <p className="text-xs opacity-75">{chk.detail}</p>
+                      <p className="text-xs text-muted-foreground">{chk.detail}</p>
                     </div>
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="flex justify-between pt-3">
+            <div className="flex items-center justify-between pt-3">
               <Button type="button" variant="outline" onClick={() => setStep(3)}>
-                Back to Credentials
+                <ArrowLeft size={15} aria-hidden="true" /> Back to keys
               </Button>
-              <Button
-                type="button"
-                onClick={() => navigate(`/greenhouses/${ghId}`)}
-                className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
-              >
-                Open Greenhouse Dashboard <ArrowRight size={15} className="ml-1.5" />
+              <Button type="button" onClick={() => navigate(`/greenhouses/${ghId}`)}>
+                Open dashboard <ArrowRight size={15} aria-hidden="true" />
               </Button>
             </div>
           </CardContent>

@@ -95,7 +95,12 @@ export function CameraStream({
 
   return (
     <div className={cn('space-y-4', className)}>
-      <div className="w-full aspect-video bg-[#050505] rounded-2xl overflow-hidden relative border border-[#222] shadow-[inset_0_0_50px_rgba(0,0,0,0.8)]">
+      <div
+        className={cn(
+          'w-full bg-muted rounded-lg overflow-hidden relative border border-border',
+          liveStreamCandidateUrl || latestFrame ? 'aspect-video' : ''
+        )}
+      >
         {liveStreamCandidateUrl ? (
           <img
             src={liveStreamCandidateUrl}
@@ -115,18 +120,18 @@ export function CameraStream({
             )}
           />
         ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-[#070908]">
-            <div className="w-14 h-14 rounded-2xl bg-[#10B981]/10 border border-[#10B981]/30 flex items-center justify-center mb-3">
+          <div className="flex min-h-[300px] w-full flex-col items-center justify-center p-6 pt-24 text-center bg-muted">
+            <div className="flex size-12 items-center justify-center rounded-lg border border-border bg-background mb-3">
               {status === 'RECONNECTING' || status === 'CONNECTING' ? (
-                <Loader2 size={26} className="text-amber-400 animate-spin" />
+                <Loader2 size={22} className="text-warning animate-spin" aria-hidden="true" />
               ) : (
-                <WifiOff size={26} className="text-gray-400" />
+                <WifiOff size={22} className="text-muted-foreground" aria-hidden="true" />
               )}
             </div>
-            <p className="font-bold text-white uppercase text-xs tracking-wider mb-1">
+            <p className="text-sm font-semibold text-foreground mb-1">
               {camera.statusHeadline}
             </p>
-            <p className="text-gray-400 max-w-md text-xs leading-relaxed mb-4">
+            <p className="text-muted-foreground max-w-md text-xs leading-relaxed mb-4">
               {camera.statusDetail}
             </p>
             <Button
@@ -134,10 +139,9 @@ export function CameraStream({
               variant="outline"
               onClick={() => void camera.reconnectNow()}
               disabled={camera.isRefreshing}
-              className="border-[#10B981]/40 text-[#10B981] hover:bg-[#10B981]/10 text-xs font-bold cursor-pointer"
             >
-              <RefreshCw size={13} className={cn('mr-1.5', camera.isRefreshing && 'animate-spin')} />
-              {camera.isRefreshing ? 'Checking...' : 'Check Camera Feed'}
+              <RefreshCw size={13} className={cn(camera.isRefreshing && 'animate-spin')} aria-hidden="true" />
+              {camera.isRefreshing ? 'Checking…' : 'Check camera feed'}
             </Button>
           </div>
         )}
@@ -147,33 +151,33 @@ export function CameraStream({
           <div className="flex flex-wrap items-center gap-1.5">
             <span
               className={cn(
-                'text-[10px] font-mono tabular-nums px-2.5 py-1 rounded-md backdrop-blur-md border font-bold flex items-center gap-1.5',
+                'flex items-center gap-1.5 rounded-lg border bg-background/80 px-2 py-1 text-xs font-medium',
                 connectionBadge === 'CONNECTED'
-                  ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-300'
+                  ? 'border-success/30 bg-success/10 text-success'
                   : connectionBadge === 'RECONNECTING'
-                  ? 'bg-amber-950/90 border-amber-500/40 text-amber-300'
-                  : 'bg-neutral-900/90 border-white/15 text-gray-300'
+                  ? 'border-warning/30 bg-warning/10 text-warning'
+                  : 'border-border bg-background/80 text-muted-foreground'
               )}
             >
               {status === 'LIVE_STREAM' ? (
                 <>
-                  <Radio size={11} className="text-emerald-400 animate-pulse" />
-                  CONNECTED · LIVE MJPEG
+                  <Radio size={12} className="animate-pulse" aria-hidden="true" />
+                  Connected · live MJPEG
                 </>
               ) : connectionBadge === 'CONNECTED' ? (
                 <>
-                  <Wifi size={11} className="text-emerald-400" />
-                  CONNECTED
+                  <Wifi size={12} aria-hidden="true" />
+                  Connected
                 </>
               ) : connectionBadge === 'RECONNECTING' ? (
                 <>
-                  <RefreshCw size={11} className="animate-spin text-amber-400" />
-                  RECONNECTING{camera.nextRetryInSeconds !== null ? ` (${camera.nextRetryInSeconds}s)` : ''}
+                  <RefreshCw size={12} className="animate-spin" aria-hidden="true" />
+                  Reconnecting{camera.nextRetryInSeconds !== null ? ` (${camera.nextRetryInSeconds}s)` : ''}
                 </>
               ) : (
                 <>
-                  <WifiOff size={11} className="text-gray-400" />
-                  DISCONNECTED
+                  <WifiOff size={12} aria-hidden="true" />
+                  Disconnected
                 </>
               )}
             </span>
@@ -181,54 +185,58 @@ export function CameraStream({
             {freshnessBadge && status !== 'LIVE_STREAM' && (
               <span
                 className={cn(
-                  'text-[10px] font-mono tabular-nums px-2.5 py-1 rounded-md backdrop-blur-md border font-bold flex items-center gap-1.5',
+                  'flex items-center gap-1.5 rounded-lg border bg-background/80 px-2 py-1 text-xs font-medium',
                   freshnessBadge === 'FRESH'
-                    ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-300'
-                    : 'bg-orange-950/90 border-orange-500/50 text-orange-300'
+                    ? 'border-success/30 bg-success/10 text-success'
+                    : 'border-warning/30 bg-warning/10 text-warning'
                 )}
               >
                 {freshnessBadge === 'FRESH' ? (
                   <>
-                    <FileCheck size={11} className="text-emerald-400" />
-                    FRESH · SNAPSHOT PREVIEW
+                    <FileCheck size={12} aria-hidden="true" />
+                    Fresh · snapshot preview
                   </>
                 ) : (
                   <>
-                    <AlertTriangle size={11} className="text-orange-400" />
-                    STALE · NOT LIVE
+                    <AlertTriangle size={12} aria-hidden="true" />
+                    Stale · not live
                   </>
                 )}
               </span>
             )}
           </div>
 
-          <span className="text-[10px] font-mono tabular-nums px-2.5 py-1 rounded-md bg-black/80 backdrop-blur-md border border-white/10 text-white/90 flex items-center gap-1.5">
-            <Clock size={11} className={latestFrame?.isFresh ? 'text-emerald-400' : 'text-gray-400'} />
-            {lastImageTimestamp
-              ? `${format(new Date(lastImageTimestamp), 'HH:mm:ss')} (${formatFrameAge(displayAgeSeconds)})`
-              : 'Last capture: None'}
+          <span className="flex items-center gap-1.5 rounded-lg border border-border bg-background/80 px-2 py-1 text-xs text-foreground">
+            <Clock size={12} className={cn(latestFrame?.isFresh ? 'text-success' : 'text-muted-foreground')} aria-hidden="true" />
+            <span className="font-mono tabular">
+              {lastImageTimestamp
+                ? `${format(new Date(lastImageTimestamp), 'HH:mm:ss')} (${formatFrameAge(displayAgeSeconds)})`
+                : 'Last capture: none'}
+            </span>
           </span>
         </div>
 
         {/* Stale Frame Honesty Warning */}
         {latestFrame && !latestFrame.isFresh && !camera.isLiveStreamVerified && (
-          <div className="absolute bottom-3 left-3 right-3 px-3 py-2 rounded-lg bg-orange-950/90 border border-orange-500/40 text-orange-200 text-[11px] font-mono tabular-nums flex items-center gap-2">
-            <AlertTriangle size={14} className="text-orange-400 shrink-0" />
+          <div className="absolute bottom-3 left-3 right-3 px-3 py-2 rounded-lg bg-warning/10 border border-warning/30 text-warning text-xs flex items-center gap-2">
+            <AlertTriangle size={14} className="shrink-0" aria-hidden="true" />
             <span>
-              Historical snapshot from {format(new Date(latestFrame.timestamp), 'yyyy-MM-dd HH:mm:ss')} ({formatFrameAge(displayAgeSeconds)}). Camera is not currently uploading live frames.
+              Historical snapshot from{' '}
+              <span className="font-mono tabular">{format(new Date(latestFrame.timestamp), 'yyyy-MM-dd HH:mm:ss')}</span>{' '}
+              (<span className="font-mono tabular">{formatFrameAge(displayAgeSeconds)}</span>). Camera is not currently uploading live frames.
             </span>
           </div>
         )}
 
         {uploadSuccessMessage && (
-          <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-lg bg-emerald-500 text-black font-bold text-xs flex items-center gap-1.5">
-            <Check size={14} /> {uploadSuccessMessage}
+          <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-lg bg-success/10 border border-success/30 text-success text-xs flex items-center gap-1.5">
+            <Check size={14} aria-hidden="true" /> {uploadSuccessMessage}
           </div>
         )}
 
         {uploadError && (
-          <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-lg bg-red-600/95 text-white font-bold text-xs flex items-center gap-1.5">
-            <AlertTriangle size={14} /> {uploadError}
+          <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs flex items-center gap-1.5">
+            <AlertTriangle size={14} aria-hidden="true" /> {uploadError}
           </div>
         )}
       </div>
@@ -240,10 +248,9 @@ export function CameraStream({
               type="button"
               onClick={handleSyncFreshFrame}
               disabled={camera.isRefreshing}
-              className="bg-[#10B981] hover:bg-[#059669] text-black font-bold h-10 px-4 rounded-xl cursor-pointer text-xs"
             >
-              <RefreshCw size={14} className={cn('mr-2', camera.isRefreshing && 'animate-spin')} />
-              {camera.isRefreshing ? 'Refreshing...' : 'Refresh Snapshot'}
+              <RefreshCw size={15} className={cn(camera.isRefreshing && 'animate-spin')} aria-hidden="true" />
+              {camera.isRefreshing ? 'Refreshing…' : 'Refresh snapshot'}
             </Button>
 
             {allowAdminTestUpload && (
@@ -254,7 +261,8 @@ export function CameraStream({
                   value={testCameraKey}
                   onChange={(e) => setTestCameraKey(e.target.value)}
                   placeholder="X-Camera-Key"
-                  className="h-10 w-36 px-2.5 rounded-xl bg-black/5 dark:bg-white/5 border border-emerald-500/30 text-xs font-mono focus:outline-none focus:border-emerald-500"
+                  aria-label="X-Camera-Key for test upload"
+                  className="h-9 w-36 rounded-lg border border-input bg-background px-2.5 text-xs font-mono text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                   title="Ephemeral X-Camera-Key header for testing POST /api/camera/upload (never stored)"
                 />
                 <input
@@ -267,21 +275,19 @@ export function CameraStream({
                 <Button
                   type="button"
                   variant="outline"
-                  size="sm"
                   disabled={isUploadingTest}
                   onClick={() => fileInputRef.current?.click()}
-                  className="border-emerald-500/30 hover:border-emerald-500 hover:bg-emerald-500/10 text-xs h-10 px-3 rounded-xl cursor-pointer"
                 >
-                  <Upload size={14} className="mr-1.5 text-emerald-500" />
-                  {isUploadingTest ? 'Uploading...' : 'Test Upload JPEG'}
+                  <Upload size={15} aria-hidden="true" />
+                  {isUploadingTest ? 'Uploading…' : 'Upload test JPEG'}
                 </Button>
               </>
             )}
           </div>
 
-          <div className="text-[11px] font-mono tabular-nums opacity-75 flex items-center gap-1.5">
-            <Camera size={12} className="text-emerald-400" />
-            <span>Auto-refreshing JPEG snapshot · Not a continuous video stream</span>
+          <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <Camera size={13} aria-hidden="true" />
+            <span>Auto-refreshing JPEG snapshot — not a continuous video stream</span>
           </div>
         </div>
       )}

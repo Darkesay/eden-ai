@@ -24,6 +24,35 @@ import { QrCodeCard } from '../components/QrScannerModal';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 
+function overallStatusBadge(status: string) {
+  switch (status) {
+    case 'ONLINE':
+      return { label: 'Online', cls: 'bg-success/10 text-success' };
+    case 'PARTIAL':
+      return { label: 'Partial check-in', cls: 'bg-info/10 text-info' };
+    case 'STALE':
+      return { label: 'Stale signal', cls: 'bg-warning/10 text-warning' };
+    case 'SETUP_INCOMPLETE':
+      return { label: 'Setup needed', cls: 'bg-muted text-muted-foreground' };
+    default:
+      return { label: 'Offline', cls: 'bg-destructive/10 text-destructive' };
+  }
+}
+
+function cameraFreshnessBadge(cam: any) {
+  if (!cam?.exists) return { label: 'Disconnected', cls: 'bg-destructive/10 text-destructive' };
+  if (cam.isFresh) return { label: cam.freshness, cls: 'bg-success/10 text-success' };
+  return { label: cam.freshness, cls: 'bg-warning/10 text-warning' };
+}
+
+function dataSourceBadge(tel: any) {
+  const ds = tel?.dataSource;
+  if (ds === 'REAL_HARDWARE') return { label: 'Real hardware', cls: 'bg-success/10 text-success' };
+  if (ds === 'CACHED') return { label: 'Cached', cls: 'bg-warning/10 text-warning' };
+  if (ds === 'STALE') return { label: 'Stale', cls: 'bg-warning/10 text-warning' };
+  return { label: 'Disconnected', cls: 'bg-destructive/10 text-destructive' };
+}
+
 export default function GreenhouseDetails() {
   const { greenhouseId } = useParams<{ greenhouseId: string }>();
   const navigate = useNavigate();
@@ -90,7 +119,7 @@ export default function GreenhouseDetails() {
       if (res.ok && data.success) {
         const passed = data.checks.filter((c: any) => c.status === 'PASS').length;
         setConnBanner(
-          `Safe Read-Only Check Complete (${passed}/${data.checks.length} checks verified, 0 actuator commands sent).`
+          `Safe read-only check complete — ${passed}/${data.checks.length} checks verified, no actuator commands sent.`
         );
       }
       await fetchDetails();
@@ -173,20 +202,20 @@ export default function GreenhouseDetails() {
 
   if (loading) {
     return (
-      <div className="py-20 flex flex-col items-center justify-center gap-3 opacity-75">
-        <Loader2 size={28} className="animate-spin text-[#10B981]" />
-        <span className="text-sm">Loading greenhouse state...</span>
+      <div className="flex flex-col items-center justify-center gap-3 py-20">
+        <Loader2 size={24} className="animate-spin text-muted-foreground" aria-hidden="true" />
+        <span className="text-sm text-muted-foreground">Loading greenhouse state…</span>
       </div>
     );
   }
 
   if (errorMsg || !detail?.greenhouse) {
     return (
-      <div className="max-w-xl mx-auto rounded-3xl border border-red-500/40 bg-red-500/10 p-8 text-center space-y-4">
-        <AlertTriangle size={28} className="mx-auto text-red-400" />
-        <p className="text-sm text-red-300">{errorMsg || 'Greenhouse not found.'}</p>
+      <div className="mx-auto max-w-xl space-y-4 rounded-xl border border-destructive/30 bg-destructive/10 p-8 text-center">
+        <AlertTriangle size={24} className="mx-auto text-destructive" aria-hidden="true" />
+        <p className="text-sm text-destructive">{errorMsg || 'Greenhouse not found.'}</p>
         <Button type="button" variant="outline" onClick={() => navigate('/greenhouses')}>
-          Return to My Greenhouses
+          Back to greenhouses
         </Button>
       </div>
     );
@@ -197,28 +226,32 @@ export default function GreenhouseDetails() {
   const tel = detail.latestTelemetry;
   const canManage = gh.role === 'owner' || gh.role === 'operator';
 
+  const statusBadge = overallStatusBadge(gh.overallStatus);
+  const freshBadge = cameraFreshnessBadge(cam);
+  const sourceBadge = dataSourceBadge(tel);
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="space-y-1">
+      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div className="space-y-1.5">
           <Link
             to="/greenhouses"
-            className="text-xs opacity-70 hover:opacity-100 inline-flex items-center gap-1"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
-            <ArrowLeft size={14} /> All Greenhouses
+            <ArrowLeft size={13} aria-hidden="true" /> All greenhouses
           </Link>
           <div className="flex flex-wrap items-center gap-2.5">
-            <h1 className="text-2xl md:text-3xl font-bold tracking-tight">{gh.name}</h1>
-            <span className="text-[10px] font-mono uppercase px-2.5 py-1 rounded-md border border-[#10B981]/30 bg-[#10B981]/10 text-[#10B981]">
-              {gh.overallStatus}
+            <h1 className="text-2xl font-semibold tracking-tight">{gh.name}</h1>
+            <span className={`rounded-md px-2 py-1 text-xs font-medium ${statusBadge.cls}`}>
+              {statusBadge.label}
             </span>
           </div>
-          <div className="flex items-center gap-3 text-xs opacity-75">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span className="flex items-center gap-1">
-              <MapPin size={13} /> {gh.locationLabel}
+              <MapPin size={12} aria-hidden="true" /> {gh.locationLabel}
             </span>
-            <span>Crop: {gh.cropType}</span>
-            <span className="font-mono">ID: {gh.id}</span>
+            <span className="capitalize">{gh.cropType}</span>
+            <span className="font-mono tabular">ID {gh.id}</span>
           </div>
         </div>
 
@@ -230,8 +263,8 @@ export default function GreenhouseDetails() {
             disabled={testingConn}
             onClick={handleRetryConnectionTest}
           >
-            <RefreshCw size={14} className={`mr-1.5 ${testingConn ? 'animate-spin' : ''}`} />
-            Retry Connection
+            <RefreshCw size={14} className={testingConn ? 'animate-spin' : ''} aria-hidden="true" />
+            Retry connection
           </Button>
           {canManage && (
             <>
@@ -241,19 +274,17 @@ export default function GreenhouseDetails() {
                 size="sm"
                 disabled={issuingQr}
                 onClick={handleIssueShareQr}
-                className="border-[#10B981]/40 text-[#059669] dark:text-[#10B981]"
               >
-                <QrCode size={14} className="mr-1.5" />
-                Share Invite QR
+                <QrCode size={14} aria-hidden="true" />
+                Share invite QR
               </Button>
               <Button
                 type="button"
                 size="sm"
                 onClick={() => navigate(`/greenhouses/${gh.id}/setup`)}
-                className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
               >
-                <Wrench size={14} className="mr-1.5" />
-                Setup Help & Keys
+                <Wrench size={14} aria-hidden="true" />
+                Setup help & keys
               </Button>
             </>
           )}
@@ -261,11 +292,20 @@ export default function GreenhouseDetails() {
       </div>
 
       {connBanner && (
-        <div className="rounded-2xl border border-[#10B981]/40 bg-[#10B981]/10 px-4 py-3 text-xs text-[#10B981] flex items-center justify-between">
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 rounded-lg border border-success/30 bg-success/10 px-4 py-3 text-sm text-success"
+        >
           <span>{connBanner}</span>
-          <button type="button" onClick={() => setConnBanner(null)} className="underline">
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            onClick={() => setConnBanner(null)}
+            className="shrink-0 text-success hover:text-success"
+          >
             Dismiss
-          </button>
+          </Button>
         </div>
       )}
 
@@ -275,71 +315,67 @@ export default function GreenhouseDetails() {
             qrDataUrl={shareQr.qrDataUrl}
             enrollmentCode={shareQr.enrollmentCode}
             expiresAt={shareQr.expiresAt}
-            title={`Member Invite QR (${gh.name})`}
+            title={`Member invite QR (${gh.name})`}
             subtitle="Valid for 30 minutes, single use. Grants operator access."
           />
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* ESP32-CAM Crop Snapshot & Manual AI Diagnosis */}
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader className="pb-3 border-b border-[#D1E8D1] dark:border-[#1A2A1A]">
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle className="text-base font-bold flex items-center gap-2">
-                <Camera size={17} className="text-[#14B8A6]" /> ESP32-CAM Crop Snapshot
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* ESP32-CAM crop snapshot & manual AI diagnosis */}
+        <Card>
+          <CardHeader className="border-b border-border pb-3">
+            <div className="flex w-full flex-wrap items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Camera size={16} className="text-muted-foreground" aria-hidden="true" />
+                Crop snapshot
               </CardTitle>
-              <div className="flex items-center gap-1.5 text-[10px] font-mono">
-                <span className="px-2 py-0.5 rounded bg-black/5 dark:bg-white/10">
-                  SNAPSHOT (NOT LIVE VIDEO)
+              <div className="flex items-center gap-2">
+                <span className="rounded-md bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                  Snapshot, not live video
                 </span>
-                <span
-                  className={`px-2 py-0.5 rounded font-bold ${
-                    cam?.isFresh
-                      ? 'bg-[#10B981]/20 text-[#10B981]'
-                      : cam?.exists
-                        ? 'bg-amber-500/20 text-amber-400'
-                        : 'bg-red-500/20 text-red-400'
-                  }`}
-                >
-                  {cam?.exists ? cam.freshness : 'DISCONNECTED'}
+                <span className={`rounded-md px-2 py-1 text-[11px] font-medium ${freshBadge.cls}`}>
+                  {freshBadge.label}
                 </span>
               </div>
             </div>
           </CardHeader>
 
-          <CardContent className="p-5 space-y-4">
+          <CardContent className="space-y-4 pt-4">
             {cam?.exists ? (
               <div className="space-y-2">
-                <div className="rounded-2xl overflow-hidden bg-black aspect-video border border-[#1A2A1A]">
+                <div className="aspect-video overflow-hidden rounded-lg border border-border bg-black">
                   <img
                     src={cam.base64 || cam.url}
-                    alt="Verified ESP32-CAM Greenhouse Snapshot"
-                    className="w-full h-full object-contain"
+                    alt="Latest verified greenhouse snapshot"
+                    className="h-full w-full object-contain"
                   />
                 </div>
-                <div className="flex items-center justify-between text-xs opacity-75 font-mono">
-                  <span>Captured: {new Date(cam.timestamp).toLocaleTimeString()}</span>
-                  <span>Age: {cam.ageSeconds}s • {(cam.sizeBytes / 1024).toFixed(1)} KB</span>
+                <div className="flex flex-wrap items-center justify-between gap-2 font-mono tabular text-[11px] text-muted-foreground">
+                  <span>Captured {new Date(cam.timestamp).toLocaleTimeString()}</span>
+                  <span>
+                    {cam.ageSeconds}s ago · {(cam.sizeBytes / 1024).toFixed(1)} KB
+                  </span>
                 </div>
               </div>
             ) : (
-              <div className="rounded-2xl border border-dashed border-[#D1E8D1] dark:border-[#1A2A1A] p-8 text-center space-y-2">
-                <Camera size={28} className="mx-auto opacity-40" />
-                <div className="text-sm font-medium">No ESP32-CAM Snapshot Uploaded Yet</div>
-                <p className="text-xs opacity-70">
-                  Issue a camera credential in Setup Help and flash `camera_secrets.h` so your ESP32-CAM posts verified
-                  JPEGs to `/api/camera/upload`.
+              <div className="space-y-2 rounded-lg border border-dashed border-border p-8 text-center">
+                <Camera size={24} className="mx-auto text-muted-foreground" aria-hidden="true" />
+                <div className="text-sm font-medium">No snapshot uploaded yet</div>
+                <p className="text-xs text-muted-foreground">
+                  Issue a camera credential in Setup help & keys and flash camera_secrets.h so your
+                  ESP32-CAM posts verified JPEGs to /api/camera/upload.
                 </p>
               </div>
             )}
 
-            <div className="border-t border-[#D1E8D1] dark:border-[#1A2A1A] pt-4 space-y-3">
+            <div className="space-y-3 border-t border-border pt-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <select
                   value={diagLang}
                   onChange={(e) => setDiagLang(e.target.value)}
-                  className="rounded-xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-transparent px-3 py-1.5 text-xs"
+                  aria-label="Diagnosis language"
+                  className="h-9 rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                 >
                   <option value="en">English (Nigeria)</option>
                   <option value="pcm">Nigerian Pidgin</option>
@@ -353,44 +389,44 @@ export default function GreenhouseDetails() {
                   size="sm"
                   disabled={!cam?.isFresh || diagnosing}
                   onClick={handleRunVisionDiagnosis}
-                  className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold"
                 >
                   {diagnosing ? (
-                    <Loader2 size={14} className="animate-spin mr-1.5" />
+                    <Loader2 size={14} className="animate-spin" aria-hidden="true" />
                   ) : (
-                    <Sparkles size={14} className="mr-1.5" />
+                    <Sparkles size={14} aria-hidden="true" />
                   )}
-                  Analyze Fresh Crop Snapshot
+                  Analyze fresh snapshot
                 </Button>
               </div>
 
               {!cam?.isFresh && cam?.exists && (
-                <p className="text-[11px] text-amber-400">
-                  Snapshot is {cam.freshness} ({cam.ageSeconds}s old). Live AI diagnosis requires a FRESH camera upload
-                  (&le;90s old).
+                <p className="text-xs text-warning">
+                  Snapshot is {cam.freshness} ({cam.ageSeconds}s old). Live diagnosis needs a fresh
+                  upload — no more than 90 seconds old.
                 </p>
               )}
 
               {diagnosisError && (
-                <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-400">
+                <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
                   {diagnosisError}
                 </div>
               )}
 
               {diagnosisResult && (
-                <div className="rounded-2xl border border-[#10B981]/30 bg-[#10B981]/5 p-4 space-y-2 text-xs">
-                  <div className="flex items-center justify-between font-bold text-sm">
-                    <span>{diagnosisResult.species}</span>
-                    <span className="text-[#10B981]">{diagnosisResult.healthStatus}</span>
+                <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-4 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-semibold">{diagnosisResult.species}</span>
+                    <span className="text-sm font-medium">{diagnosisResult.healthStatus}</span>
                   </div>
                   <p>
-                    <strong>Symptoms:</strong> {diagnosisResult.symptoms}
+                    <span className="font-semibold">Symptoms:</span> {diagnosisResult.symptoms}
                   </p>
                   <p>
-                    <strong>Likely Cause:</strong> {diagnosisResult.cause}
+                    <span className="font-semibold">Likely cause:</span> {diagnosisResult.cause}
                   </p>
                   <p>
-                    <strong>Recommendation:</strong> {diagnosisResult.recommendation}
+                    <span className="font-semibold">Recommendation:</span>{' '}
+                    {diagnosisResult.recommendation}
                   </p>
                 </div>
               )}
@@ -398,106 +434,99 @@ export default function GreenhouseDetails() {
           </CardContent>
         </Card>
 
-        {/* Main ESP32 Controller Telemetry & Hardware Interlocks */}
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader className="pb-3 border-b border-[#D1E8D1] dark:border-[#1A2A1A]">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base font-bold flex items-center gap-2">
-                <Activity size={17} className="text-[#10B981]" /> Main ESP32 Sensor Telemetry
+        {/* Main ESP32 controller telemetry & hardware interlocks */}
+        <Card>
+          <CardHeader className="border-b border-border pb-3">
+            <div className="flex w-full flex-wrap items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Activity size={16} className="text-muted-foreground" aria-hidden="true" />
+                Controller telemetry
               </CardTitle>
-              <span
-                className={`text-[10px] font-mono font-bold px-2.5 py-0.5 rounded ${
-                  tel?.dataSource === 'REAL_HARDWARE'
-                    ? 'bg-[#10B981]/20 text-[#10B981]'
-                    : tel?.dataSource === 'CACHED' || tel?.dataSource === 'STALE'
-                      ? 'bg-amber-500/20 text-amber-400'
-                      : 'bg-red-500/20 text-red-400'
-                }`}
-              >
-                {tel?.dataSource || 'DISCONNECTED'}
+              <span className={`rounded-md px-2 py-1 text-[11px] font-medium ${sourceBadge.cls}`}>
+                {sourceBadge.label}
               </span>
             </div>
           </CardHeader>
 
-          <CardContent className="p-5 space-y-4">
+          <CardContent className="space-y-4 pt-4">
             {tel?.exists && tel.readings ? (
               <>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3">
-                    <div className="text-[11px] opacity-70 flex items-center gap-1">
-                      <Thermometer size={12} className="text-[#10B981]" /> Air Temp
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="rounded-lg border border-border p-3">
+                    <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <Thermometer size={12} aria-hidden="true" /> Air temp
                     </div>
-                    <div className="text-xl font-mono font-bold mt-1">
+                    <div className="mt-1 font-mono tabular text-lg font-semibold">
                       {tel.readings.temperature.toFixed(1)}°C
                     </div>
                   </div>
-                  <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3">
-                    <div className="text-[11px] opacity-70 flex items-center gap-1">
-                      <Droplets size={12} className="text-sky-400" /> Humidity
+                  <div className="rounded-lg border border-border p-3">
+                    <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <Droplets size={12} aria-hidden="true" /> Humidity
                     </div>
-                    <div className="text-xl font-mono font-bold mt-1">
+                    <div className="mt-1 font-mono tabular text-lg font-semibold">
                       {tel.readings.humidity.toFixed(0)}%
                     </div>
                   </div>
-                  <div className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3">
-                    <div className="text-[11px] opacity-70">Soil Moisture</div>
-                    <div className="text-xl font-mono font-bold mt-1">
+                  <div className="rounded-lg border border-border p-3">
+                    <div className="text-[11px] text-muted-foreground">Soil moisture</div>
+                    <div className="mt-1 font-mono tabular text-lg font-semibold">
                       {tel.readings.soilMoisture.toFixed(0)}%
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3 text-xs">
-                  <div className="rounded-xl bg-black/5 dark:bg-white/5 p-2.5">
-                    <span className="opacity-65 block">Reservoir</span>
-                    <span className="font-mono font-semibold">
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="rounded-lg bg-muted/40 p-2.5">
+                    <span className="block text-[11px] text-muted-foreground">Reservoir</span>
+                    <span className="mt-0.5 block font-mono tabular font-medium">
                       {tel.readings.waterLevel !== null ? `${tel.readings.waterLevel}%` : 'Unreported'}
                     </span>
                   </div>
-                  <div className="rounded-xl bg-black/5 dark:bg-white/5 p-2.5">
-                    <span className="opacity-65 flex items-center gap-1">
-                      <Sun size={11} /> Sunlight
+                  <div className="rounded-lg bg-muted/40 p-2.5">
+                    <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <Sun size={12} aria-hidden="true" /> Sunlight
                     </span>
-                    <span className="font-mono font-semibold">
+                    <span className="mt-0.5 block font-mono tabular font-medium">
                       {tel.readings.sunlight !== null ? `${tel.readings.sunlight} lx` : 'Unreported'}
                     </span>
                   </div>
-                  <div className="rounded-xl bg-black/5 dark:bg-white/5 p-2.5">
-                    <span className="opacity-65 block">Battery</span>
-                    <span className="font-mono font-semibold">
+                  <div className="rounded-lg bg-muted/40 p-2.5">
+                    <span className="block text-[11px] text-muted-foreground">Battery</span>
+                    <span className="mt-0.5 block font-mono tabular font-medium">
                       {tel.readings.batteryVoltage !== null ? `${tel.readings.batteryVoltage}V` : 'Unreported'}
                     </span>
                   </div>
                 </div>
 
-                <div className="space-y-2 text-xs">
-                  <div className="font-semibold flex items-center gap-1.5">
-                    <ShieldCheck size={14} className="text-[#10B981]" /> Local ESP32 Safety Interlocks (Autonomous)
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                    <ShieldCheck size={14} aria-hidden="true" /> Safety interlocks (autonomous)
                   </div>
-                  <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {Object.entries(tel.interlocks || {}).map(([key, locked]) => (
                       <div
                         key={key}
-                        className={`rounded-xl px-3 py-2 border flex items-center justify-between ${
+                        className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${
                           locked
-                            ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
-                            : 'border-[#D1E8D1] dark:border-[#1A2A1A] opacity-80'
+                            ? 'border-warning/30 bg-warning/10 text-warning'
+                            : 'border-border text-muted-foreground'
                         }`}
                       >
-                        <span>{key}</span>
-                        <span>{locked ? 'LOCKED' : 'CLEAR'}</span>
+                        <span className="truncate font-mono">{key}</span>
+                        <span className="shrink-0 font-medium">{locked ? 'Locked' : 'Clear'}</span>
                       </div>
                     ))}
                   </div>
                 </div>
               </>
             ) : (
-              <div className="rounded-2xl border border-dashed border-[#D1E8D1] dark:border-[#1A2A1A] p-8 text-center space-y-2">
-                <Cpu size={28} className="mx-auto opacity-40" />
-                <div className="text-sm font-medium">No Controller Telemetry Uploaded Yet</div>
-                <p className="text-xs opacity-70">
-                  Zero synthetic values are displayed here. Configure `controller_secrets.h` on the Main ESP32 to push
-                  verified sensor JSON to `POST /api/telemetry/upload`.
+              <div className="space-y-2 rounded-lg border border-dashed border-border p-8 text-center">
+                <Cpu size={24} className="mx-auto text-muted-foreground" aria-hidden="true" />
+                <div className="text-sm font-medium">No controller telemetry yet</div>
+                <p className="text-xs text-muted-foreground">
+                  No synthetic values are shown here. Configure controller_secrets.h on the main
+                  ESP32 to push verified sensor JSON to /api/telemetry/upload.
                 </p>
               </div>
             )}
@@ -505,37 +534,43 @@ export default function GreenhouseDetails() {
         </Card>
       </div>
 
-      {/* Enrolled Hardware Devices & Audit Trail */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <CardTitle className="text-base font-bold">Enrolled Hardware Identities</CardTitle>
+      {/* Enrolled hardware devices & audit trail */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader className="border-b border-border pb-3">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Cpu size={16} className="text-muted-foreground" aria-hidden="true" />
+              Enrolled hardware
+            </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-3 pt-4">
             {(detail.devices || []).map((dev: any) => (
               <div
                 key={dev.id}
-                className="rounded-2xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-3.5 flex items-center justify-between gap-3 text-xs"
+                className="flex items-center justify-between gap-3 rounded-lg border border-border p-3.5"
               >
-                <div className="space-y-0.5">
-                  <div className="font-bold text-sm">{dev.label}</div>
-                  <div className="font-mono opacity-65">
-                    {dev.id} {dev.credentialPrefix ? `• Key ${dev.credentialPrefix}...` : '• No key issued'}
+                <div className="min-w-0 space-y-0.5">
+                  <div className="text-sm font-semibold">{dev.label}</div>
+                  <div className="break-all font-mono text-[11px] text-muted-foreground">
+                    {dev.id}
+                    {dev.credentialPrefix ? ` · Key ${dev.credentialPrefix}…` : ' · No key issued'}
                   </div>
-                  <div className="opacity-70">
-                    Status: <span className="font-mono uppercase">{dev.provisioningStatus}</span>
-                    {dev.lastSeenAt ? ` • Last seen ${new Date(dev.lastSeenAt).toLocaleTimeString()}` : ''}
+                  <div className="text-xs text-muted-foreground">
+                    <span className="capitalize">{dev.provisioningStatus}</span>
+                    {dev.lastSeenAt
+                      ? ` · Last seen ${new Date(dev.lastSeenAt).toLocaleTimeString()}`
+                      : ''}
                   </div>
                 </div>
                 {canManage && dev.provisioningStatus !== 'revoked' && dev.hasCredentialIssued && (
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="destructive"
                     size="sm"
                     onClick={() => handleRevokeDevice(dev.id)}
-                    className="border-red-500/40 text-red-400 hover:bg-red-500/10 shrink-0"
+                    className="shrink-0"
                   >
-                    <ShieldAlert size={13} className="mr-1" /> Revoke
+                    <ShieldAlert size={13} aria-hidden="true" /> Revoke
                   </Button>
                 )}
               </div>
@@ -543,41 +578,44 @@ export default function GreenhouseDetails() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-3xl border border-[#D1E8D1] dark:border-[#1A2A1A] bg-white/90 dark:bg-[#080808]/90">
-          <CardHeader>
-            <CardTitle className="text-base font-bold">Security & Onboarding Audit Log</CardTitle>
+        <Card>
+          <CardHeader className="border-b border-border pb-3">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <ShieldCheck size={16} className="text-muted-foreground" aria-hidden="true" />
+              Security & onboarding log
+            </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2.5 max-h-72 overflow-y-auto text-xs">
+          <CardContent className="custom-scrollbar max-h-72 space-y-2 overflow-y-auto pt-4 text-xs">
             {(detail.enrollmentTokens || [])
               .filter((t: any) => !t.usedAt && !t.revokedAt)
               .map((tok: any) => (
                 <div
                   key={tok.id}
-                  className="rounded-xl border border-[#10B981]/30 bg-[#10B981]/5 p-2.5 flex items-center justify-between"
+                  className="flex items-center justify-between gap-2 rounded-lg border border-success/30 bg-success/10 p-2.5"
                 >
-                  <div>
-                    <span className="font-mono font-semibold">{tok.tokenPrefix}...</span> • Active {tok.purpose}
+                  <div className="min-w-0 truncate text-success">
+                    <span className="font-mono font-medium">{tok.tokenPrefix}…</span>
+                    <span className="text-xs"> · Active {tok.purpose}</span>
                   </div>
-                  <button
+                  <Button
                     type="button"
+                    variant="destructive"
+                    size="xs"
                     onClick={() => handleRevokeToken(tok.id)}
-                    className="text-red-400 hover:underline font-medium"
+                    className="shrink-0"
                   >
-                    Revoke QR
-                  </button>
+                    Revoke
+                  </Button>
                 </div>
               ))}
 
             {(detail.auditEvents || []).map((ev: any) => (
-              <div
-                key={ev.id}
-                className="rounded-xl border border-[#D1E8D1] dark:border-[#1A2A1A] p-2.5 flex items-start gap-2"
-              >
-                <CheckCircle2 size={14} className="text-[#10B981] shrink-0 mt-0.5" />
-                <div>
-                  <div className="font-medium">{ev.summary}</div>
-                  <div className="font-mono text-[10px] opacity-60">
-                    {ev.eventType} • {new Date(ev.createdAt).toLocaleString()}
+              <div key={ev.id} className="flex items-start gap-2.5 rounded-lg border border-border p-2.5">
+                <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <div className="min-w-0">
+                  <div className="text-[13px] font-medium">{ev.summary}</div>
+                  <div className="mt-0.5 break-all font-mono tabular text-[11px] text-muted-foreground">
+                    {ev.eventType} · {new Date(ev.createdAt).toLocaleString()}
                   </div>
                 </div>
               </div>

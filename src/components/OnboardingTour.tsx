@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
-import { ChevronRight, ChevronLeft, Check, Sparkles, Sprout } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Check, Sprout } from 'lucide-react';
 import { Button } from './ui/button';
 
 const TOUR_STEPS = [
@@ -47,7 +47,7 @@ const TOUR_STEPS = [
     target: 'body',
     title: "You're All Set, Farmer!",
     content: "Your greenhouse is now being monitored by EDENS AI, powered by RA. Explore the dashboard, check your Activity Log to see autonomous decisions, and watch your crops thrive.",
-    subtitle: "Happy growing! 🌱",
+    subtitle: "Happy growing!",
     route: '/',
     isCenter: true,
     isFinal: true,
@@ -188,49 +188,24 @@ export function OnboardingTour({ forceShow = false, onClose }: { forceShow?: boo
     return (
       <motion.div 
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[100] bg-black text-white flex flex-col items-center justify-center p-6 overflow-hidden"
+        className="fixed inset-0 z-[100] bg-background flex flex-col items-center justify-center p-6"
       >
-        <div className="absolute inset-0 z-0 opacity-40">
-           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[80vw] h-[80vw] max-w-[800px] max-h-[800px] bg-[#10B981] rounded-full mix-blend-screen filter blur-[120px] animate-pulse" />
-        </div>
-        
-        <div className="z-10 flex flex-col items-center max-w-lg text-center space-y-8">
-           <motion.div 
-             initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: 0.2, type: "spring", stiffness: 100 }}
-             className="relative flex items-center justify-center"
-           >
-             <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#10B981] to-emerald-900 flex items-center justify-center mb-6 shadow-[0_0_50px_rgba(16,185,129,0.5)]">
-               <Sprout size={48} className="text-white" />
-             </div>
-           </motion.div>
-           
-           <div className="space-y-4">
-             <motion.h1 initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.4 }} className="text-4xl md:text-5xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
-               Welcome to EDENS AI
-             </motion.h1>
-             <motion.p initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.6 }} className="text-lg md:text-xl text-gray-400">
-               Your intelligent greenhouse, powered by RA.
-             </motion.p>
-           </div>
-
-           {/* Simple plant growth animation representation */}
-           <motion.div 
-             initial={{ height: 0, opacity: 0 }} animate={{ height: 80, opacity: 1 }} transition={{ delay: 1, duration: 3, ease: "easeOut" }}
-             className="w-1 bg-gradient-to-t from-emerald-900 via-emerald-500 to-[#10B981] rounded-full relative overflow-visible flex justify-center"
-           >
-             <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 3, type: "spring" }} className="absolute -top-4 text-[#10B981]">
-                <Sprout size={32} />
-             </motion.div>
-           </motion.div>
-
-           <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 1.5 }} className="flex flex-col gap-4 w-full pt-8">
-             <button onClick={nextStep} className="group relative w-full flex items-center justify-center gap-2 bg-gradient-to-r from-[#10B981] to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white font-bold tracking-wide h-14 rounded-2xl shadow-[0_0_30px_rgba(16,185,129,0.3)] transition-all hover:shadow-[0_0_40px_rgba(16,185,129,0.5)] hover:scale-[1.02]">
-               <Sparkles size={20} className="group-hover:animate-spin" /> Take the Tour
-             </button>
-             <button onClick={skipTour} className="text-sm text-gray-500 hover:text-white transition-colors underline underline-offset-4">
-               Skip to Dashboard
-             </button>
-           </motion.div>
+        <div className="w-full max-w-sm rounded-xl border border-border bg-card p-8 shadow-sm text-center">
+          <span className="mx-auto flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+            <Sprout size={24} aria-hidden="true" />
+          </span>
+          <h1 className="mt-5 text-2xl font-semibold">Welcome to EDENS AI</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Your intelligent greenhouse, powered by RA. Take a short tour to learn your way around.
+          </p>
+          <div className="mt-7 flex flex-col items-center gap-3">
+            <Button type="button" className="w-full" onClick={nextStep}>
+              Start tour
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={skipTour}>
+              Skip
+            </Button>
+          </div>
         </div>
       </motion.div>
     );
@@ -240,47 +215,25 @@ export function OnboardingTour({ forceShow = false, onClose }: { forceShow?: boo
 
   return (
     <div className="fixed inset-0 z-[100] pointer-events-none flex items-center justify-center overflow-hidden">
-      {/* Target Highlight Glow & Overlay */}
+      {/* Target Highlight Ring & Overlay */}
       {targetRect && !currentStep.isCenter ? (
         <motion.div
            layout
-           initial={{ opacity: 0, scale: 0.9 }}
-           animate={{ opacity: 1, scale: 1.03 }}
+           initial={{ opacity: 0, scale: 0.98 }}
+           animate={{ opacity: 1, scale: 1 }}
            exit={{ opacity: 0 }}
-           transition={{ type: "spring", stiffness: 100, damping: 20 }}
-           className="absolute border-2 border-[#10B981] rounded-3xl pointer-events-none z-[101]"
+           transition={{ type: "spring", stiffness: 150, damping: 22 }}
+           className="absolute rounded-xl border-2 border-brand/70 pointer-events-none z-[101]"
            style={{
              top: targetRect.top - 8,
              left: targetRect.left - 8,
              width: targetRect.width + 16,
              height: targetRect.height + 16,
-             boxShadow: '0 0 0 9999px rgba(0,0,0,0.7), 0 0 30px rgba(16,185,129,0.6), inset 0 0 20px rgba(16,185,129,0.2)'
+             boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)'
            }}
         />
       ) : (
-        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm transition-all duration-500 pointer-events-auto z-[101]" />
-      )}
-
-      {/* Confetti on Final Step */}
-      {currentStep.isFinal && (
-         <div className="absolute inset-0 pointer-events-none z-[105] flex items-center justify-center overflow-hidden">
-           {[...Array(50)].map((_, i) => (
-             <motion.div
-               key={i}
-               initial={{ opacity: 1, scale: 0, x: 0, y: 0 }}
-               animate={{ 
-                 opacity: 0, 
-                 scale: Math.random() * 2 + 1,
-                 x: (Math.random() - 0.5) * window.innerWidth * 1.5,
-                 y: (Math.random() - 0.5) * window.innerHeight * 1.5,
-                 rotate: Math.random() * 360
-               }}
-               transition={{ duration: 2 + Math.random(), ease: "easeOut" }}
-               className="absolute w-3 h-3 bg-[#10B981] rounded-sm"
-               style={{ backgroundColor: ['#10B981', '#34D399', '#059669', '#FBBF24'][Math.floor(Math.random() * 4)] }}
-             />
-           ))}
-         </div>
+        <div className="absolute inset-0 bg-black/55 transition-all duration-500 pointer-events-auto z-[101]" />
       )}
 
       {/* Tooltip Card */}
@@ -296,7 +249,7 @@ export function OnboardingTour({ forceShow = false, onClose }: { forceShow?: boo
           exit={{ opacity: 0, y: -20, scale: 0.95 }}
           transition={{ type: "spring", stiffness: 120, damping: 20 }}
           className={cn(
-            "pointer-events-auto absolute z-[102] bg-white/90 dark:bg-[#080808]/90 backdrop-blur-xl border border-[#D1E8D1] dark:border-[#10B981]/50 rounded-2xl shadow-2xl overflow-hidden flex flex-col",
+            "pointer-events-auto absolute z-[102] bg-popover border border-border rounded-xl shadow-lg overflow-hidden flex flex-col",
             currentStep.isCenter ? "w-full max-w-md mx-4" : "w-[calc(100%-32px)] max-w-sm mx-4 sm:mx-0"
           )}
           style={
@@ -311,49 +264,49 @@ export function OnboardingTour({ forceShow = false, onClose }: { forceShow?: boo
               : { position: 'relative' }
           }
         >
-           <div className="absolute top-0 left-0 right-0 h-1 bg-[#10B981]/20">
+           <div className="absolute top-0 left-0 right-0 h-1 bg-muted">
              <motion.div 
-               className="h-full bg-[#10B981]" 
+               className="h-full bg-primary" 
                initial={{ width: 0 }} 
                animate={{ width: `${((stepIndex + 1) / TOUR_STEPS.length) * 100}%` }} 
              />
            </div>
 
-           <div className="p-6 pt-8 space-y-4">
+           <div className="p-6 pt-7 space-y-4">
              {currentStep.isFinal && (
-               <div className="flex justify-center mb-4 text-[#10B981] animate-bounce">
-                  <Check size={48} className="drop-shadow-[0_0_15px_rgba(16,185,129,0.5)]" />
+               <div className="flex justify-center text-brand">
+                 <Check size={28} aria-hidden="true" />
                </div>
              )}
              
              <div className={cn("space-y-2", currentStep.isCenter && "text-center")}>
-                <h3 id={`tour-title-${stepIndex}`} className="text-xl font-bold tracking-tight flex items-center justify-center gap-2">
-                   {currentStep.title} {currentStep.isFinal && <Sprout size={20} className="text-[#10B981]" />}
+                <h3 id={`tour-title-${stepIndex}`} className="text-sm font-semibold flex items-center justify-center gap-2">
+                   {currentStep.title}
                 </h3>
-                <p id={`tour-desc-${stepIndex}`} className="text-sm opacity-80 leading-relaxed text-[#1A1A1A] dark:text-[#E2E8F0]">{currentStep.content}</p>
-                {currentStep.subtitle && <p className="text-sm font-bold text-[#10B981] mt-2">{currentStep.subtitle}</p>}
+                <p id={`tour-desc-${stepIndex}`} className="text-sm leading-relaxed text-muted-foreground">{currentStep.content}</p>
+                {currentStep.subtitle && <p className="text-sm font-medium text-foreground mt-2">{currentStep.subtitle}</p>}
              </div>
            </div>
 
-           <div className="p-4 bg-black/5 dark:bg-white/5 border-t border-[#D1E8D1] dark:border-[#1A2A1A] flex items-center justify-between">
-             <button onClick={skipTour} className="text-xs font-semibold text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors underline underline-offset-2">
-               Skip Tour
-             </button>
+           <div className="p-4 bg-muted/50 border-t border-border flex items-center justify-between gap-3">
+             <Button onClick={skipTour} variant="ghost" size="sm" className="text-muted-foreground">
+               Skip
+             </Button>
              <div className="flex gap-4 items-center">
-                <div className="flex gap-1.5 hidden sm:flex">
+                <div className="flex gap-1.5 hidden sm:flex" aria-hidden="true">
                   {TOUR_STEPS.map((_, i) => (
-                    <div key={i} className={cn("h-1.5 rounded-full transition-all duration-300", i === stepIndex ? "bg-[#10B981] w-4" : "bg-gray-300 dark:bg-gray-700 w-1.5")} />
+                    <div key={i} className={cn("h-1.5 rounded-full transition-all duration-300", i === stepIndex ? "bg-brand w-4" : "bg-border w-1.5")} />
                   ))}
                 </div>
                 <div className="flex gap-2">
-                  <Button onClick={prevStep} variant="outline" size="icon" className="h-9 w-9 rounded-xl pointer-events-auto" disabled={stepIndex === 0}>
-                    <ChevronLeft size={16} />
+                  <Button onClick={prevStep} variant="outline" size="icon" className="pointer-events-auto" disabled={stepIndex === 0} aria-label="Previous step" title="Previous step">
+                    <ChevronLeft size={16} aria-hidden="true" />
                   </Button>
-                  <Button onClick={nextStep} className="bg-[#10B981] hover:bg-[#059669] text-white font-bold h-9 px-4 rounded-xl pointer-events-auto shadow-[0_0_10px_rgba(16,185,129,0.2)]">
+                  <Button onClick={nextStep} size="sm" className="pointer-events-auto">
                     {currentStep.isFinal ? (
-                      <span className="flex items-center gap-1">Finish <Check size={16} /></span>
+                      <span className="flex items-center gap-1">Finish <Check size={16} aria-hidden="true" /></span>
                     ) : (
-                      <span className="flex items-center gap-1">Next <ChevronRight size={16} /></span>
+                      <span className="flex items-center gap-1">Next <ChevronRight size={16} aria-hidden="true" /></span>
                     )}
                   </Button>
                 </div>

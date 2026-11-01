@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Loader2, Lock, Mail, Sprout, User } from 'lucide-react';
+import { Loader2, Leaf } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
 import { Button } from '../components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 
 export default function Login() {
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -55,128 +55,127 @@ export default function Login() {
     }
   };
 
+  const switchMode = (next: 'login' | 'register') => {
+    setMode(next);
+    setErrorMsg('');
+  };
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#040404] text-[#F0F0F0] p-4 font-sans">
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-[#10B981]/5 blur-[120px] rounded-full" />
-        <div className="absolute -bottom-1/2 -right-1/2 w-full h-full bg-[#10B981]/5 blur-[120px] rounded-full" />
-      </div>
+    <div className="flex min-h-screen items-center justify-center bg-background p-4 text-foreground">
+      <div className="w-full max-w-sm space-y-7">
+        {/* Brand */}
+        <div className="flex flex-col items-center text-center">
+          <span className="flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+            <Leaf size={22} aria-hidden="true" />
+          </span>
+          <h1 className="mt-4 text-xl font-semibold tracking-tight">EDENS AI</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Your greenhouse, perfectly managed.
+          </p>
+        </div>
 
-      <Card className="w-full max-w-md bg-[#080808] border-[#1A2A1A] z-10 shadow-2xl rounded-3xl overflow-hidden">
-        <CardHeader className="space-y-3 pb-5 pt-8 text-center">
-          <div className="mx-auto w-12 h-12 bg-[#1A2A1A] rounded-2xl flex items-center justify-center border border-[#10B981]/30 text-[#10B981] mb-1">
-            <Sprout size={28} />
-          </div>
-          <CardTitle className="text-3xl font-bold tracking-tight text-white flex flex-col items-center gap-1">
-            <span className="text-[#10B981]">EDENS AI</span>
-          </CardTitle>
-          <CardDescription className="text-[#808080] text-sm tracking-wide flex flex-col items-center gap-1">
-            <span>Self-Service Smart Greenhouse Platform</span>
-            <span className="text-[10px] uppercase font-bold tracking-[0.08em] text-[#10B981]/70">
-              Powered by RA
-            </span>
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="px-8 pb-9 space-y-5">
-          <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-[#040404] border border-[#1A2A1A]">
+        <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
+          {/* Mode switch */}
+          <div
+            role="tablist"
+            aria-label="Sign in or create account"
+            className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
+          >
             <button
               type="button"
-              onClick={() => {
-                setMode('login');
-                setErrorMsg('');
-              }}
-              className={`py-2 text-xs font-semibold rounded-lg transition-colors ${
+              role="tab"
+              aria-selected={mode === 'login'}
+              onClick={() => switchMode('login')}
+              className={`h-8 rounded-md text-sm font-medium transition-colors ${
                 mode === 'login'
-                  ? 'bg-[#10B981] text-black'
-                  : 'text-[#9CA3AF] hover:text-white'
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              Sign In
+              Sign in
             </button>
             <button
               type="button"
-              onClick={() => {
-                setMode('register');
-                setErrorMsg('');
-              }}
-              className={`py-2 text-xs font-semibold rounded-lg transition-colors ${
+              role="tab"
+              aria-selected={mode === 'register'}
+              onClick={() => switchMode('register')}
+              className={`h-8 rounded-md text-sm font-medium transition-colors ${
                 mode === 'register'
-                  ? 'bg-[#10B981] text-black'
-                  : 'text-[#9CA3AF] hover:text-white'
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              Create Account
+              Create account
             </button>
           </div>
 
           {errorMsg && (
-            <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-xs text-red-300">
+            <div
+              role="alert"
+              className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+            >
               {errorMsg}
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="mt-5 space-y-4">
             {mode === 'register' && (
-              <div className="relative">
-                <div className="absolute left-3 top-3.5 text-[#10B981]/60">
-                  <User size={18} />
-                </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="displayName">Grower or farm name</Label>
                 <Input
-                  placeholder="Grower / Farm Name"
+                  id="displayName"
+                  placeholder="e.g. Ada's Farm"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   required
-                  className="pl-10 bg-[#040404] border-[#1A2A1A] focus-visible:ring-[#10B981] text-[#F0F0F0] rounded-xl h-12"
+                  className="h-11"
                 />
               </div>
             )}
 
-            <div className="relative">
-              <div className="absolute left-3 top-3.5 text-[#10B981]/60">
-                <Mail size={18} />
-              </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="email">Email</Label>
               <Input
+                id="email"
                 type="email"
-                placeholder="Email address"
+                placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="pl-10 bg-[#040404] border-[#1A2A1A] focus-visible:ring-[#10B981] text-[#F0F0F0] rounded-xl h-12"
+                autoComplete="email"
+                className="h-11"
               />
             </div>
 
-            <div className="relative">
-              <div className="absolute left-3 top-3.5 text-[#10B981]/60">
-                <Lock size={18} />
-              </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="password">Password</Label>
               <Input
+                id="password"
                 type="password"
-                placeholder={mode === 'register' ? 'Password (min 8 characters)' : 'Password'}
+                placeholder={mode === 'register' ? 'At least 8 characters' : 'Your password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={mode === 'register' ? 8 : 1}
-                className="pl-10 bg-[#040404] border-[#1A2A1A] focus-visible:ring-[#10B981] text-[#F0F0F0] rounded-xl h-12"
+                autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                className="h-11"
               />
             </div>
 
             <Button
               type="submit"
+              size="lg"
               disabled={submitting}
-              className="w-full bg-[#10B981] hover:bg-[#059669] text-black font-semibold tracking-wide rounded-xl h-12 transition-all mt-2"
+              className="mt-1 w-full"
             >
-              {submitting ? (
-                <Loader2 size={18} className="animate-spin" />
-              ) : mode === 'login' ? (
-                'Sign In to EDENS AI'
-              ) : (
-                'Create Grower Account'
-              )}
+              {submitting && <Loader2 size={16} className="animate-spin" aria-hidden="true" />}
+              {mode === 'login' ? 'Sign in' : 'Create account'}
             </Button>
           </form>
-        </CardContent>
-      </Card>
+        </div>
+
+        <p className="text-center text-xs text-muted-foreground">Powered by RA</p>
+      </div>
     </div>
   );
 }

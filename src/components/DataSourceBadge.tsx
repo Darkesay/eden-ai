@@ -2,13 +2,37 @@ import React, { useEffect, useState } from 'react';
 import { hardwareService } from '../lib/hardwareService';
 import { DataSource } from '../lib/hardwareTypes';
 import { cn } from '../lib/utils';
-import { Radio, RefreshCw, AlertTriangle, ShieldCheck, Cpu, WifiOff, Clock } from 'lucide-react';
+import { RefreshCw, AlertTriangle, ShieldCheck, Cpu, WifiOff, Clock } from 'lucide-react';
 
 interface DataSourceBadgeProps {
   className?: string;
   showFreshness?: boolean;
   variant?: 'badge' | 'banner' | 'pill';
 }
+
+const BADGE_LABEL: Record<DataSource, string> = {
+  REAL_HARDWARE: 'Live hardware',
+  SIMULATED: 'Simulation',
+  CACHED: 'Cached',
+  STALE: 'Stale',
+  DISCONNECTED: 'Offline'
+};
+
+const BADGE_TONE: Record<DataSource, string> = {
+  REAL_HARDWARE: 'bg-success/10 text-success',
+  SIMULATED: 'bg-info/10 text-info',
+  CACHED: 'bg-warning/10 text-warning',
+  STALE: 'bg-warning/10 text-warning',
+  DISCONNECTED: 'bg-destructive/10 text-destructive'
+};
+
+const BADGE_DOT: Record<DataSource, string> = {
+  REAL_HARDWARE: 'bg-success',
+  SIMULATED: 'bg-info',
+  CACHED: 'bg-warning',
+  STALE: 'bg-warning',
+  DISCONNECTED: 'bg-destructive'
+};
 
 export function DataSourceBadge({
   className,
@@ -36,151 +60,103 @@ export function DataSourceBadge({
 
   const config = hardwareService.getConfig();
 
+  const freshnessText =
+    freshnessSec < 2 ? 'updated now' : `updated ${freshnessSec}s ago`;
+
   if (variant === 'banner') {
-    if (dataSource === 'REAL_HARDWARE') {
-      return (
-        <div className={cn(
-          "px-4 py-2 rounded-2xl bg-[#10B981]/10 border border-[#10B981]/30 flex flex-wrap items-center justify-between gap-2 text-xs",
-          className
-        )}>
-          <div className="flex items-center gap-2 text-[#10B981]">
-            <ShieldCheck size={16} className="animate-pulse" />
-            <span className="font-bold uppercase tracking-wider">Connected to Real ESP32 Hardware</span>
-            <span className="opacity-70 font-mono">({config.controllerHost})</span>
-          </div>
-          {showFreshness && (
-            <div className="flex items-center gap-1.5 text-[11px] font-mono text-[#10B981]/80">
-              <Clock size={12} />
-              <span>Freshness: {freshnessSec < 2 ? 'live' : `${freshnessSec}s ago`}</span>
-            </div>
-          )}
-        </div>
-      );
-    }
+    const notice: Record<DataSource, { icon: React.ElementType; title: string; note: string; cta?: string }> = {
+      REAL_HARDWARE: {
+        icon: ShieldCheck,
+        title: 'Live hardware connected',
+        note: config.controllerHost ? `Controller at ${config.controllerHost} · ${freshnessText}` : freshnessText
+      },
+      CACHED: {
+        icon: RefreshCw,
+        title: 'Cached telemetry',
+        note: `Showing the last reading while polling retries · last seen ${freshnessSec}s ago`
+      },
+      STALE: {
+        icon: AlertTriangle,
+        title: 'Stale telemetry',
+        note: `Readings are ${freshnessSec}s old — don't treat these as live`
+      },
+      DISCONNECTED: {
+        icon: WifiOff,
+        title: 'Hardware offline',
+        note: 'No signal from the main ESP32 controller',
+        cta: 'Open hardware settings'
+      },
+      SIMULATED: {
+        icon: Cpu,
+        title: 'Simulation mode',
+        note: 'Values are simulated for testing — not real greenhouse readings',
+        cta: 'Connect real hardware'
+      }
+    };
 
-    if (dataSource === 'CACHED') {
-      return (
-        <div className={cn(
-          "px-4 py-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-500",
-          className
-        )}>
-          <div className="flex items-center gap-2">
-            <RefreshCw size={15} className="animate-spin" />
-            <span className="font-bold uppercase tracking-wider">CACHED HARDWARE TELEMETRY</span>
-            <span className="opacity-80 text-[11px]">— Recent reading buffered while polling retries...</span>
-          </div>
-          <div className="flex items-center gap-1 text-[11px] font-mono font-bold">
-            <Clock size={12} />
-            <span>Last seen: {freshnessSec}s ago</span>
-          </div>
-        </div>
-      );
-    }
+    const item = notice[dataSource];
+    const tone =
+      dataSource === 'REAL_HARDWARE'
+        ? 'border-success/30 bg-success/10 text-success'
+        : dataSource === 'DISCONNECTED'
+          ? 'border-destructive/30 bg-destructive/10 text-destructive'
+          : dataSource === 'SIMULATED'
+            ? 'border-info/30 bg-info/10 text-info'
+            : 'border-warning/30 bg-warning/10 text-warning';
 
-    if (dataSource === 'STALE') {
-      return (
-        <div className={cn(
-          "px-4 py-2.5 rounded-2xl bg-orange-500/10 border border-orange-500/30 flex flex-wrap items-center justify-between gap-2 text-xs text-orange-500",
+    return (
+      <div
+        className={cn(
+          'flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-xs',
+          tone,
           className
-        )}>
-          <div className="flex items-center gap-2">
-            <AlertTriangle size={15} />
-            <span className="font-bold uppercase tracking-wider">STALE HARDWARE TELEMETRY</span>
-            <span className="opacity-80 text-[11px]">— Readings are outdated ({freshnessSec}s old). Do not treat as live.</span>
-          </div>
-          <div className="flex items-center gap-1 text-[11px] font-mono font-bold">
-            <Clock size={12} />
-            <span>Last seen: {freshnessSec}s ago</span>
-          </div>
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <item.icon size={15} className="shrink-0" aria-hidden="true" />
+          <span className="font-medium">{item.title}</span>
+          <span className="truncate opacity-80">{item.note}</span>
         </div>
-      );
-    }
-
-    if (dataSource === 'DISCONNECTED') {
-      return (
-        <div className={cn(
-          "px-4 py-2.5 rounded-2xl bg-red-500/10 border border-red-500/30 flex flex-wrap items-center justify-between gap-2 text-xs text-red-500",
-          className
-        )}>
-          <div className="flex items-center gap-2">
-            <WifiOff size={16} />
-            <span className="font-bold uppercase tracking-wider">HARDWARE DISCONNECTED</span>
-            <span className="opacity-80 text-[11px]">— No active signal from main ESP32 controller</span>
-          </div>
+        {item.cta && (
           <a
             href="/hardware"
-            className="px-2.5 py-1 rounded-xl bg-red-500/20 hover:bg-red-500/30 font-bold uppercase tracking-widest text-[10px] text-red-400 underline"
+            className="shrink-0 rounded-md border border-current/30 px-2.5 py-1 font-medium transition-opacity hover:opacity-80"
           >
-            Configure Hardware →
+            {item.cta}
           </a>
-        </div>
-      );
-    }
-
-    // SIMULATED BANNER
-    return (
-      <div className={cn(
-        "px-4 py-2.5 rounded-2xl bg-purple-500/10 border border-purple-500/30 flex flex-wrap items-center justify-between gap-2 text-xs text-purple-400",
-        className
-      )}>
-        <div className="flex items-center gap-2">
-          <Cpu size={16} />
-          <div>
-            <span className="font-bold uppercase tracking-wider">SIMULATION MODE ACTIVE</span>
-            <span className="opacity-80 text-[11px] ml-2 text-foreground/80">
-              Values are simulated for testing. Not actual greenhouse hardware readings.
-            </span>
-          </div>
-        </div>
-        <a
-          href="/hardware"
-          className="px-2.5 py-1 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 font-bold uppercase tracking-widest text-[10px] text-purple-300"
-        >
-          Connect Real Hardware
-        </a>
+        )}
       </div>
     );
   }
 
-  // Variant: Badge / Pill
+  // Variant: badge / pill — compact status chip for headers
   return (
-    <div className={cn(
-      "inline-flex items-center gap-2 px-3 py-1 rounded-xl font-mono text-[11px] font-bold border tracking-wider uppercase backdrop-blur-md shadow-sm transition-all",
-      dataSource === 'REAL_HARDWARE' && "bg-[#10B981]/15 text-[#10B981] border-[#10B981]/40",
-      dataSource === 'SIMULATED' && "bg-purple-500/15 text-purple-400 border-purple-500/40",
-      dataSource === 'CACHED' && "bg-amber-500/15 text-amber-500 border-amber-500/40",
-      dataSource === 'STALE' && "bg-orange-500/15 text-orange-500 border-orange-500/40",
-      dataSource === 'DISCONNECTED' && "bg-red-500/15 text-red-500 border-red-500/40",
-      className
-    )}>
-      <span className={cn(
-        "w-2 h-2 rounded-full",
-        dataSource === 'REAL_HARDWARE' && "bg-[#10B981] animate-ping",
-        dataSource === 'SIMULATED' && "bg-purple-400",
-        dataSource === 'CACHED' && "bg-amber-500 animate-pulse",
-        dataSource === 'STALE' && "bg-orange-500",
-        dataSource === 'DISCONNECTED' && "bg-red-500"
-      )} />
-
-      <span>
-        {dataSource === 'REAL_HARDWARE' && 'REAL HARDWARE'}
-        {dataSource === 'SIMULATED' && 'SIMULATED DATA'}
-        {dataSource === 'CACHED' && 'CACHED DATA'}
-        {dataSource === 'STALE' && 'STALE DATA'}
-        {dataSource === 'DISCONNECTED' && 'DISCONNECTED'}
-      </span>
+    <span
+      className={cn(
+        'inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium',
+        BADGE_TONE[dataSource],
+        className
+      )}
+      title={
+        dataSource === 'REAL_HARDWARE' && showFreshness
+          ? `Sensor data ${freshnessText}`
+          : BADGE_LABEL[dataSource]
+      }
+    >
+      <span className={cn('size-1.5 shrink-0 rounded-full', BADGE_DOT[dataSource])} aria-hidden="true" />
+      <span className="truncate">{BADGE_LABEL[dataSource]}</span>
 
       {showFreshness && dataSource === 'REAL_HARDWARE' && (
-        <span className="opacity-70 text-[10px] lowercase">
-          · {freshnessSec < 2 ? 'live' : `${freshnessSec}s`}
-        </span>
+        <span className="hidden text-muted-foreground lg:inline">· {freshnessText}</span>
       )}
 
       {showFreshness && (dataSource === 'CACHED' || dataSource === 'STALE') && (
-        <span className="opacity-70 text-[10px] lowercase">
-          · {freshnessSec}s old
-        </span>
+        <span className="hidden text-muted-foreground lg:inline">· {freshnessSec}s ago</span>
       )}
-    </div>
+
+      {showFreshness && (dataSource === 'CACHED' || dataSource === 'STALE') && (
+        <Clock size={11} className="hidden shrink-0 text-muted-foreground lg:inline" aria-hidden="true" />
+      )}
+    </span>
   );
 }

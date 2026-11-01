@@ -735,8 +735,8 @@ export default function AiLab() {
         {
           role: 'assistant',
           content: isKeyError
-            ? `⚠️ [AI Service Unconfigured — Not a Live Gemini Answer]: ${errDetail}`
-            : `⚠️ [AI Service Error — Not a Live Gemini Answer]: ${errDetail}`,
+            ? `AI service unconfigured — not a live Gemini answer: ${errDetail}`
+            : `AI service error — not a live Gemini answer: ${errDetail}`,
           timestamp: new Date().toISOString(),
           languageId: selectedLangId
         }
@@ -755,80 +755,80 @@ export default function AiLab() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <Dialog>
-            <DialogTrigger render={<button type="button" className="relative shrink-0 cursor-pointer block p-0 bg-transparent border-0 outline-none hover:scale-105 transition-transform" />}>
+            <DialogTrigger render={<button type="button" aria-label="View EDENS AI logo" className="relative block shrink-0 cursor-pointer border-0 bg-transparent p-0 outline-none" />}>
               <img 
                 src="https://i.imgur.com/WOeaqFK.png" 
                 alt="EDENS AI Logo" 
-                className={cn(
-                  "w-10 h-10 md:w-14 md:h-14 rounded-2xl shadow-[0_0_25px_rgba(16,185,129,0.4)] object-cover",
-                  analyzing && "animate-pulse shadow-[0_0_35px_rgba(16,185,129,0.7)]"
-                )}
+                className="size-11 rounded-xl border border-border object-cover md:size-14"
                 onError={(e) => {
                   e.currentTarget.style.display = 'none';
                   e.currentTarget.nextElementSibling?.classList.remove('hidden');
                   e.currentTarget.nextElementSibling?.classList.add('flex');
                 }}
               />
-              <div className="hidden w-10 h-10 md:w-14 md:h-14 rounded-2xl bg-[#10B981]/10 text-[#10B981] flex-col items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.3)]">
-                <Leaf size={26} className={cn(analyzing && "animate-pulse")} />
+              <div className="hidden size-11 flex-col items-center justify-center rounded-xl bg-accent text-accent-foreground md:size-14">
+                <Leaf size={26} aria-hidden="true" />
               </div>
             </DialogTrigger>
-            <DialogContent className="max-w-[95vw] md:max-w-2xl bg-[#111] border-[#333] p-1 overflow-hidden shadow-2xl rounded-2xl flex items-center justify-center">
+            <DialogContent className="flex max-w-[95vw] items-center justify-center overflow-hidden p-2 md:max-w-2xl">
               <DialogHeader className="sr-only">
                 <DialogTitle>EDENS AI Logo</DialogTitle>
               </DialogHeader>
-              <img src="https://i.imgur.com/WOeaqFK.png" alt="EDENS AI Logo" className="w-full h-auto max-h-[85vh] object-contain rounded-xl" />
+              <img src="https://i.imgur.com/WOeaqFK.png" alt="EDENS AI Logo" className="h-auto max-h-[85vh] w-full rounded-lg object-contain" />
             </DialogContent>
           </Dialog>
 
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-3xl font-extrabold tracking-tight">EDENS AI Lab</h1>
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-widest bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 uppercase">
-                🇳🇬 Multilingual
+              <h1 className="text-2xl font-semibold tracking-tight">EDENS AI Lab</h1>
+              <span className="rounded-full border border-border bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+                Multilingual
               </span>
             </div>
-            <p className="text-[11px] font-mono uppercase tracking-[0.2em] font-bold text-[#10B981] mt-0.5">
-              Powered by RA · Native Nigerian Botanical Intelligence
+            <p className="mt-1 text-sm text-muted-foreground">
+              Powered by RA · Native Nigerian botanical intelligence
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
           <HardwareSetupGuide variant="icon" />
-          <div className="flex items-center gap-3 bg-[#FFFFFF]/60 dark:bg-[#040404]/60 border border-[#D1E8D1] dark:border-[#1A2A1A] px-4 py-2 rounded-xl backdrop-blur-md">
-             <Bot size={18} className={isVisionAgentEnabled ? "text-[#10B981]" : "text-gray-400"} />
-             <span className="text-xs font-bold uppercase tracking-wider">Autonomous Vision</span>
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-2">
+             <Bot size={18} className={isVisionAgentEnabled ? "text-brand" : "text-muted-foreground"} aria-hidden="true" />
+             <span className="text-xs font-medium text-foreground">Autonomous vision</span>
              <button 
+               type="button"
                onClick={() => store.setValue('agent_VisionAgent_enabled', !isVisionAgentEnabled)}
-               className={cn("w-10 h-5 rounded-full relative transition-colors duration-300", isVisionAgentEnabled ? "bg-[#10B981]" : "bg-gray-300 dark:bg-gray-700")}
+               className={cn("relative h-5 w-10 shrink-0 rounded-full transition-colors duration-300", isVisionAgentEnabled ? "bg-primary" : "bg-input")}
+               role="switch"
+               aria-checked={isVisionAgentEnabled}
                aria-label="Toggle autonomous vision agent"
              >
-               <div className={cn("absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-300", isVisionAgentEnabled ? "translate-x-5" : "translate-x-0")} />
+               <div className={cn("absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform duration-300", isVisionAgentEnabled ? "translate-x-5" : "translate-x-0")} />
              </button>
           </div>
         </div>
       </div>
 
       {/* Nigerian Language Selector Bar */}
-      <div className="bg-gradient-to-r from-[#10B981]/10 via-[#059669]/5 to-transparent border border-[#10B981]/30 rounded-2xl p-4 backdrop-blur-md">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+      <div className="rounded-xl border border-border bg-card p-4">
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-[#10B981]/20 flex items-center justify-center text-[#10B981]">
-              <Languages size={18} />
+            <div className="flex size-8 items-center justify-center rounded-lg bg-accent text-accent-foreground">
+              <Languages size={16} aria-hidden="true" />
             </div>
             <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-[#10B981]">
-                Communication Language / Harshe / Asụsụ / Èdè
+              <span className="text-[13px] font-semibold text-foreground">
+                Communication language / Harshe / Asụsụ / Èdè
               </span>
-              <p className="text-[11px] opacity-70">
+              <p className="text-xs text-muted-foreground">
                 Choose your native Nigerian tongue for live diagnosis, voice readouts, and agronomist chat
               </p>
             </div>
           </div>
           
-          <div className="text-[11px] font-mono px-3 py-1 rounded-lg bg-[#10B981]/15 text-[#10B981] font-semibold flex items-center gap-1.5 self-start sm:self-auto">
-            <Radio size={12} className="animate-pulse" /> Active: {activeLanguage.nativeName} ({activeLanguage.name})
+          <div className="flex items-center gap-1.5 self-start rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-accent-foreground sm:self-auto">
+            <span className="size-1.5 shrink-0 rounded-full bg-success animate-pulse" aria-hidden="true" /> Active: {activeLanguage.nativeName} ({activeLanguage.name})
           </div>
         </div>
 
@@ -839,17 +839,22 @@ export default function AiLab() {
             return (
               <button
                 key={lang.id}
+                type="button"
                 onClick={() => handleSelectLanguage(lang.id)}
+                aria-pressed={isSelected}
+                aria-label={`${lang.name} (${lang.nativeName})`}
                 className={cn(
-                  "px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border cursor-pointer",
+                  "flex h-8 cursor-pointer items-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors",
                   isSelected
-                    ? "bg-[#10B981] text-black border-[#10B981] shadow-[0_0_15px_rgba(16,185,129,0.35)] scale-105"
-                    : "bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 hover:border-[#10B981]/50 text-foreground opacity-80 hover:opacity-100"
+                    ? "border-brand/40 bg-accent text-accent-foreground"
+                    : "border-border bg-background text-foreground hover:bg-muted"
                 )}
               >
-                <span>{lang.flag}</span>
-                <span className="font-semibold">{lang.name}</span>
-                <span className={cn("text-[10px] opacity-75 font-normal", isSelected ? "text-black/80" : "text-muted-foreground")}>
+                <span className="text-[11px] font-semibold text-muted-foreground" aria-hidden="true">
+                  {lang.id === 'pcm' ? 'PD' : lang.id === 'tiv' ? 'TI' : lang.id === 'efi' ? 'EF' : lang.id.toUpperCase().slice(0, 2)}
+                </span>
+                <span className="font-medium">{lang.name}</span>
+                <span className={cn("text-[11px] font-normal", isSelected ? "text-accent-foreground/70" : "text-muted-foreground")}>
                   ({lang.nativeName})
                 </span>
               </button>
@@ -862,93 +867,93 @@ export default function AiLab() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2 items-start">
         
         {/* Camera Stream & Capture Card */}
-        <Card id="tour-ai-camera" className="border border-[#14B8A6]/20 dark:border-white/5 bg-[#FFFFFF]/80 dark:bg-[#080808]/80 backdrop-blur-xl rounded-3xl shadow-[0_4px_24px_-4px_rgba(20,184,166,0.05)] flex flex-col relative group overflow-hidden">
-          <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#14B8A6]" />
-          <CardHeader className="pb-3 border-b border-[#D1E8D1] dark:border-[#1A2A1A] flex flex-row flex-wrap items-center justify-between gap-2">
+        <Card id="tour-ai-camera" className="flex flex-col">
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="text-[10px] font-bold font-sans uppercase tracking-[0.05em] flex items-center gap-2 text-[#808080]">
-                <Camera size={14} className="text-[#14B8A6]" /> GREENHOUSE CLOUD CAMERA
-              </div>
+              <span className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
+                <Camera size={16} className="text-muted-foreground" aria-hidden="true" /> Greenhouse cloud camera
+              </span>
               <span
                 className={cn(
-                  "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[10px] font-mono tabular-nums font-bold border",
+                  "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-medium",
                   camera.connectionBadge === 'CONNECTED'
-                    ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
+                    ? "bg-success/10 text-success"
                     : camera.connectionBadge === 'RECONNECTING'
-                    ? "bg-sky-500/10 text-sky-400 border-sky-500/30"
+                    ? "bg-warning/10 text-warning"
                     : camera.status === 'ERROR'
-                    ? "bg-red-500/10 text-red-400 border-red-500/30"
-                    : "bg-zinc-500/10 text-zinc-400 border-zinc-500/30"
+                    ? "bg-destructive/10 text-destructive"
+                    : "bg-muted text-muted-foreground"
                 )}
               >
                 {camera.connectionBadge === 'CONNECTED' ? (
-                  <Wifi size={11} />
+                  <Wifi size={12} aria-hidden="true" />
                 ) : camera.connectionBadge === 'RECONNECTING' ? (
-                  <RefreshCw size={11} className="animate-spin" />
+                  <RefreshCw size={12} className="animate-spin" aria-hidden="true" />
                 ) : (
-                  <WifiOff size={11} />
+                  <WifiOff size={12} aria-hidden="true" />
                 )}
-                {camera.connectionBadge}
+                {camera.connectionBadge === 'CONNECTED' ? 'Connected' : camera.connectionBadge === 'RECONNECTING' ? 'Reconnecting' : 'Offline'}
               </span>
 
               {camera.freshnessBadge && (
                 <span
                   className={cn(
-                    "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono tabular-nums font-bold border",
+                    "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium",
                     camera.freshnessBadge === 'FRESH'
-                      ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30"
-                      : "bg-amber-500/10 text-amber-500 border-amber-500/30"
+                      ? "bg-success/10 text-success"
+                      : "bg-warning/10 text-warning"
                   )}
                 >
-                  {camera.freshnessBadge}
+                  {camera.freshnessBadge === 'FRESH' ? 'Fresh' : 'Stale'}
                 </span>
               )}
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-mono text-muted-foreground hidden sm:inline">
-                Snapshot Preview
+              <span className="hidden text-[11px] text-muted-foreground sm:inline">
+                Snapshot preview
               </span>
-              <div className="text-[10px] font-mono text-[#14B8A6] font-bold">
+              <span className="rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-foreground">
                 {activeLanguage.name}
-              </div>
+              </span>
             </div>
           </CardHeader>
 
           <CardContent className="flex-1 space-y-4 p-4 sm:p-6">
             {/* Connection & Last-Image Timestamp Telemetry Strip */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 px-3 py-2 rounded-xl bg-black/[0.03] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 text-[11px] font-mono">
-              <div className="flex items-center gap-2 min-w-0" title={camera.statusDetail}>
+            <div className="grid grid-cols-1 gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-[11px] sm:grid-cols-2">
+              <div className="flex min-w-0 items-center gap-2" title={camera.statusDetail}>
                 <span
                   className={cn(
-                    "w-2 h-2 rounded-full shrink-0",
+                    "size-1.5 shrink-0 rounded-full",
                     camera.connectionBadge === 'CONNECTED'
-                      ? "bg-emerald-500 animate-pulse"
+                      ? "bg-success animate-pulse"
                       : camera.freshnessBadge === 'STALE'
-                      ? "bg-amber-500"
+                      ? "bg-warning"
                       : camera.connectionBadge === 'RECONNECTING'
-                      ? "bg-sky-400 animate-ping"
+                      ? "bg-info animate-pulse"
                       : camera.status === 'ERROR'
-                      ? "bg-red-500"
-                      : "bg-zinc-500"
+                      ? "bg-destructive"
+                      : "bg-border"
                   )}
+                  aria-hidden="true"
                 />
-                <span className="truncate font-semibold">{camera.statusHeadline}</span>
+                <span className="truncate font-medium text-foreground">{camera.statusHeadline}</span>
               </div>
 
-              <div className="flex items-center sm:justify-end gap-1.5 text-muted-foreground tabular-nums">
-                <Clock size={12} className="text-[#14B8A6] shrink-0" />
+              <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground sm:justify-end">
+                <Clock size={12} className="shrink-0" aria-hidden="true" />
                 <span className="truncate">
-                  Last Capture:{' '}
+                  Last capture:{' '}
                   {camera.lastImageTimestamp
-                    ? `${format(new Date(camera.lastImageTimestamp), 'yyyy-MM-dd HH:mm:ss')} (${formatFrameAge(camera.displayAgeSeconds)})`
+                    ? <span className="font-mono tabular">{`${format(new Date(camera.lastImageTimestamp), 'yyyy-MM-dd HH:mm:ss')} (${formatFrameAge(camera.displayAgeSeconds)})`}</span>
                     : 'None received'}
                 </span>
               </div>
             </div>
 
             {/* Viewport */}
-            <div className="w-full aspect-video bg-[#050505] rounded-2xl overflow-hidden relative border border-[#222] shadow-[inset_0_0_50px_rgba(0,0,0,0.8)]">
+            <div className="relative aspect-video w-full overflow-hidden rounded-lg border border-border bg-muted">
               {/* Optional local MJPEG stream when verified on local gateway */}
               {!customImagePreview && camera.liveStreamCandidateUrl && (
                 <img
@@ -965,139 +970,144 @@ export default function AiLab() {
 
               {customImagePreview ? (
                 <div className="relative w-full h-full">
-                  <img src={customImagePreview} alt="Uploaded Leaf Photo" className="w-full h-full object-contain" />
-                  <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-lg border border-blue-500/50 text-[10px] font-mono text-blue-400 font-bold">
-                    <Leaf size={12} /> MANUAL LEAF PHOTO UPLOAD
+                  <img src={customImagePreview} alt="Uploaded Leaf Photo" className="h-full w-full object-contain" />
+                  <div className="absolute top-3 left-3 flex items-center gap-2 rounded-md border border-border bg-background/95 px-2.5 py-1 text-[11px] font-medium text-foreground">
+                    <Leaf size={13} className="text-brand" aria-hidden="true" /> Uploaded leaf photo
                   </div>
                   <button
                     type="button"
                     onClick={() => setCustomImagePreview(null)}
-                    className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/80 hover:bg-black px-2.5 py-1.5 rounded-lg border border-white/20 text-[10px] font-mono text-white cursor-pointer"
+                    aria-label="Return to camera feed"
+                    title="Return to camera feed"
+                    className="absolute top-3 right-3 flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background/95 px-2.5 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
                   >
-                    <RotateCcw size={11} /> Return to Camera Feed
+                    <RotateCcw size={12} aria-hidden="true" /> Return to camera feed
                   </button>
                 </div>
               ) : camera.isLiveStreamVerified && camera.liveStreamCandidateUrl ? (
                 <div className="absolute inset-0 pointer-events-none">
-                  <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/85 backdrop-blur-md px-3 py-1.5 rounded-lg border border-emerald-500/50 text-[10px] font-mono font-bold text-emerald-400">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                    CONNECTED · LIVE MJPEG STREAM
+                  <div className="absolute top-3 left-3 flex items-center gap-2 rounded-md border border-border bg-background/95 px-2.5 py-1 text-[11px] font-medium text-success">
+                    <span className="size-1.5 rounded-full bg-success animate-pulse" aria-hidden="true" />
+                    Connected · live MJPEG stream
                   </div>
                 </div>
               ) : camera.latestFrame ? (
-                <div className="relative w-full h-full">
+                <div className="relative h-full w-full">
                   <img
                     key={camera.latestFrame.id}
                     src={camera.latestFrame.url}
                     alt="ESP32-CAM Greenhouse Snapshot"
                     className={cn(
-                      "w-full h-full object-cover transition-opacity duration-300",
+                      "h-full w-full object-cover transition-opacity duration-300",
                       !camera.latestFrame.isFresh && "opacity-80"
                     )}
                   />
                   <div
                     className={cn(
-                      "absolute top-2.5 left-2.5 right-2.5 sm:right-auto flex items-center gap-2 bg-black/85 backdrop-blur-md px-2.5 py-1.5 rounded-lg border text-[10px] font-mono tabular-nums font-bold",
+                      "absolute top-2.5 left-2.5 right-2.5 flex items-center gap-2 rounded-md border bg-background/95 px-2.5 py-1 text-[11px] font-medium sm:right-auto",
                       camera.latestFrame.isFresh
-                        ? "border-emerald-500/50 text-emerald-400"
-                        : "border-amber-500/50 text-amber-400"
+                        ? "border-border text-success"
+                        : "border-border text-warning"
                     )}
                   >
                     <span
                       className={cn(
-                        "w-2 h-2 rounded-full shrink-0",
+                        "size-1.5 shrink-0 rounded-full",
                         camera.latestFrame.isFresh
-                          ? "bg-emerald-500 animate-pulse"
-                          : "bg-amber-500"
+                          ? "bg-success animate-pulse"
+                          : "bg-warning"
                       )}
+                      aria-hidden="true"
                     />
                     <span className="truncate">
                       {camera.latestFrame.isFresh
-                        ? `FRESH · AUTO-REFRESHING JPEG SNAPSHOT (NOT LIVE VIDEO) · ${Math.max(1, Math.round(camera.latestFrame.sizeBytes / 1024))} KB`
-                        : `STALE · HISTORICAL SNAPSHOT (NOT LIVE) · ${Math.max(1, Math.round(camera.latestFrame.sizeBytes / 1024))} KB`}
+                        ? `Fresh · auto-refreshing JPEG snapshot (not live video) · ${Math.max(1, Math.round(camera.latestFrame.sizeBytes / 1024))} KB`
+                        : `Stale · historical snapshot (not live) · ${Math.max(1, Math.round(camera.latestFrame.sizeBytes / 1024))} KB`}
                     </span>
                   </div>
 
-                  <div className="absolute bottom-2.5 left-2.5 right-2.5 flex flex-wrap items-center justify-between gap-2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-lg text-[10px] font-mono text-gray-200 tabular-nums">
-                    <span>
+                  <div className="absolute bottom-2.5 left-2.5 right-2.5 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-background/95 px-3 py-1 text-[11px] text-foreground">
+                    <span className="font-mono tabular">
                       Captured: {format(new Date(camera.latestFrame.timestamp), 'yyyy-MM-dd HH:mm:ss')} (
                       {formatFrameAge(camera.displayAgeSeconds)})
                     </span>
-                    <span className="text-[#14B8A6]">
-                      ESP32-CAM Cloud Snapshot
+                    <span className="text-muted-foreground">
+                      ESP32-CAM cloud snapshot
                     </span>
                   </div>
                 </div>
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-gray-400 font-sans flex-col gap-2.5 p-5 sm:p-6 text-center absolute inset-0 z-10 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#0D1312] to-[#040606]">
-                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-[#14B8A6]/10 flex items-center justify-center border border-[#14B8A6]/30">
+                <div className="absolute inset-0 z-10 flex h-full w-full flex-col items-center justify-center gap-2.5 bg-muted p-5 text-center sm:p-6">
+                  <div className="flex size-12 items-center justify-center rounded-lg border border-border bg-background sm:size-14">
                     {camera.connectionBadge === 'RECONNECTING' ? (
-                      <RefreshCw size={24} className="text-[#14B8A6] animate-spin" />
+                      <RefreshCw size={22} className="text-muted-foreground animate-spin" aria-hidden="true" />
                     ) : (
-                      <Camera size={24} className="text-[#14B8A6]" />
+                      <Camera size={22} className="text-muted-foreground" aria-hidden="true" />
                     )}
                   </div>
-                  <span className="tracking-wider font-bold text-white uppercase text-xs">
+                  <span className="text-sm font-semibold text-foreground">
                     {camera.status === 'ERROR'
-                      ? 'Camera Feed Configuration Pending'
+                      ? 'Camera feed configuration pending'
                       : camera.connectionBadge === 'RECONNECTING'
-                      ? `Reconnecting to Cloud Feed${camera.nextRetryInSeconds !== null ? ` (${camera.nextRetryInSeconds}s)` : ''}`
-                      : 'Disconnected · No Camera Image Available'}
+                      ? `Reconnecting to cloud feed${camera.nextRetryInSeconds !== null ? ` (${camera.nextRetryInSeconds}s)` : ''}`
+                      : 'Disconnected · no camera image available'}
                   </span>
-                  <span className="text-gray-400 max-w-md text-[11px] leading-relaxed">
+                  <span className="max-w-md text-xs leading-relaxed text-muted-foreground">
                     {camera.statusDetail}
                   </span>
-                  <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
-                    <button
+                  <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+                    <Button
                       type="button"
+                      size="sm"
+                      variant="outline"
                       onClick={() => void camera.reconnectNow()}
                       disabled={camera.isRefreshing}
-                      className="text-[#14B8A6] text-[10px] font-mono font-bold uppercase tracking-wider border border-[#14B8A6]/35 bg-[#14B8A6]/10 hover:bg-[#14B8A6]/20 px-3 py-1.5 rounded-lg cursor-pointer"
                     >
-                      {camera.isRefreshing ? 'Checking...' : 'Check Camera Feed'}
-                    </button>
+                      {camera.isRefreshing ? 'Checking…' : 'Check camera feed'}
+                    </Button>
                   </div>
                 </div>
               )}
-
-              <div className="absolute inset-0 pointer-events-none bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPgo8cmVjdCB3aWR0aD0iNCIgaGVpZ2h0PSIxIiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMDUpIi8+Cjwvc3ZnPg==')] opacity-40 mix-blend-overlay" />
             </div>
 
             {/* Stale / Reconnect Banner when stored image is old or connection is retrying */}
             {!customImagePreview && (camera.freshnessBadge === 'STALE' || camera.connectionBadge === 'RECONNECTING' || camera.errorMessage) && (
-              <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs">
-                <div className="flex items-start gap-2 text-amber-600 dark:text-amber-400">
-                  <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-xs">
+                <div className="flex min-w-0 items-start gap-2 text-warning">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
                   <span className="text-[11px] leading-relaxed">
                     {camera.errorMessage || camera.statusDetail}
                   </span>
                 </div>
-                <button
+                <Button
                   type="button"
+                  size="sm"
+                  variant="outline"
                   onClick={() => void camera.reconnectNow()}
-                  className="shrink-0 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-600 dark:text-amber-300 text-[10px] font-mono font-bold uppercase cursor-pointer"
+                  className="shrink-0"
                 >
                   Refresh
-                </button>
+                </Button>
               </div>
             )}
 
             {/* Action bar: User-Triggered AI Diagnosis, Upload Leaf Photo, Refresh */}
-            <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3">
+            <div className="flex flex-col gap-2.5 sm:flex-row">
               <Button
                 onClick={handleCapture}
                 disabled={analyzing}
-                className="flex-1 bg-[#14B8A6] hover:bg-[#0D9488] text-white font-bold tracking-wide min-h-12 h-auto py-2.5 px-4 rounded-2xl shadow-[0_4px_20px_rgba(20,184,166,0.3)] border-0 cursor-pointer transition-all text-xs sm:text-sm"
+                size="lg"
+                className="flex-1"
               >
-                <Camera className="mr-2 shrink-0" size={18} />
+                <Camera aria-hidden="true" size={16} />
                 <span className="truncate">
                   {analyzing
-                    ? 'Analyzing plant frame...'
+                    ? 'Analyzing plant frame…'
                     : customImagePreview
-                    ? `Diagnose Uploaded Photo (${activeLanguage.name})`
+                    ? `Diagnose uploaded photo (${activeLanguage.name})`
                     : camera.latestFrame?.isFresh || camera.status === 'LIVE_STREAM'
-                    ? `Diagnose Fresh Camera Image (${activeLanguage.name})`
-                    : `Diagnose Greenhouse Camera (${activeLanguage.name})`}
+                    ? `Diagnose fresh camera image (${activeLanguage.name})`
+                    : `Diagnose greenhouse camera (${activeLanguage.name})`}
                 </span>
               </Button>
 
@@ -1115,9 +1125,9 @@ export default function AiLab() {
                   onClick={() => plantImageInputRef.current?.click()}
                   disabled={analyzing}
                   variant="outline"
-                  className="flex-1 sm:flex-initial h-12 rounded-2xl border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5 font-semibold text-xs px-4 cursor-pointer"
+                  className="flex-1 sm:flex-initial"
                 >
-                  <Upload className="mr-1.5 shrink-0" size={16} /> Upload Leaf Photo
+                  <Upload size={15} aria-hidden="true" /> Upload leaf photo
                 </Button>
 
                 <Button
@@ -1125,10 +1135,12 @@ export default function AiLab() {
                   onClick={() => void camera.refreshNow(false)}
                   disabled={camera.isRefreshing}
                   title="Check for newer greenhouse camera snapshot"
+                  aria-label="Check for newer greenhouse camera snapshot"
                   variant="outline"
-                  className="h-12 w-12 p-0 rounded-2xl border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5 flex items-center justify-center shrink-0 cursor-pointer"
+                  size="icon"
+                  className="shrink-0"
                 >
-                  <RefreshCw size={16} className={cn(camera.isRefreshing && "animate-spin text-[#14B8A6]")} />
+                  <RefreshCw size={16} className={cn(camera.isRefreshing && "animate-spin")} aria-hidden="true" />
                 </Button>
               </div>
             </div>
@@ -1137,90 +1149,85 @@ export default function AiLab() {
 
         {/* Diagnostics Report Panel */}
         <Card className={cn(
-          "border bg-[#FFFFFF]/80 dark:bg-[#080808]/80 backdrop-blur-xl rounded-3xl overflow-hidden hover:scale-[1.01] transition-transform duration-300 relative group flex flex-col",
-          analyzing || result ? "border-[#10B981]/50 shadow-[0_0_30px_rgba(16,185,129,0.1)]" : "border-[#E8F0E8] dark:border-white/10"
+          "flex flex-col",
+          analyzing || result ? "border-brand/40" : ""
         )}>
-          <CardHeader className="pb-4 border-b border-black/5 dark:border-white/5 flex flex-row items-center justify-between">
-            <div className="text-[10px] w-max font-bold uppercase tracking-[0.2em] flex items-center gap-2 opacity-70">
-              <Info size={14} className="text-[#10B981]" /> 
-              {activeLanguage.id === 'ha' ? 'RAHOTON BINCIKEN SHUKA' :
-               activeLanguage.id === 'yo' ? 'ÌRÒYÌN ÀYẸ̀WÒ OHUN Ọ̀GBÌN' :
-               activeLanguage.id === 'ig' ? 'AKWỤKWỌ NKỌWA AHỤIKE OSISI' :
-               activeLanguage.id === 'pcm' ? 'PLANT HEALTH DIAGNOSTICS REPORT' :
-               'BOTANICAL DIAGNOSTICS REPORT'}
-            </div>
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+            <span className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
+              <Info size={16} className="text-muted-foreground" aria-hidden="true" />
+              {activeLanguage.id === 'ha' ? 'Rahoton binciken shuka' :
+               activeLanguage.id === 'yo' ? 'Ìròyìn àyẹ̀wò ohun ọ̀gbìn' :
+               activeLanguage.id === 'ig' ? 'Akwụkwọ nkọwa ahụike osisi' :
+               activeLanguage.id === 'pcm' ? 'Plant health diagnostics report' :
+               'Botanical diagnostics report'}
+            </span>
 
             {result && (
-              <button
+              <Button
                 type="button"
+                size="sm"
+                variant="outline"
                 onClick={() => playSpeech(`${result.speciesLocal || result.species}. ${result.healthStatusLocal || result.healthStatus}. ${result.symptoms}. ${result.cause}. ${result.recommendation}`, 'diag-header')}
                 className={cn(
-                  "flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold transition-all border cursor-pointer",
-                  currentPlayingId === 'diag-header'
-                    ? "bg-red-500/20 text-red-400 border-red-500/40 animate-pulse" 
-                    : "bg-[#10B981]/10 text-[#10B981] border-[#10B981]/30 hover:bg-[#10B981]/20"
+                  currentPlayingId === 'diag-header' && "border-destructive/40 bg-destructive/10 text-destructive"
                 )}
               >
                 {isGeneratingSpeech === 'diag-header' ? (
-                  <Loader2 size={14} className="animate-spin" />
+                  <Loader2 size={14} className="animate-spin" aria-hidden="true" />
                 ) : currentPlayingId === 'diag-header' ? (
-                  <Square size={14} />
+                  <Square size={14} aria-hidden="true" />
                 ) : (
-                  <Volume2 size={14} />
+                  <Volume2 size={14} aria-hidden="true" />
                 )}
                 <span>
                   {currentPlayingId === 'diag-header'
                     ? (activeLanguage.id === 'ha' ? 'Dakata' : activeLanguage.id === 'yo' ? 'Dúró' : activeLanguage.id === 'ig' ? 'Kwụsị' : 'Stop')
-                    : (activeLanguage.id === 'ha' ? 'Saurari Rahoto' : activeLanguage.id === 'yo' ? 'Gbọ́ Ìròyìn' : activeLanguage.id === 'ig' ? 'Gee Ntị' : 'Listen Aloud')}
+                    : (activeLanguage.id === 'ha' ? 'Saurari rahoto' : activeLanguage.id === 'yo' ? 'Gbọ́ ìròyìn' : activeLanguage.id === 'ig' ? 'Gee ntị' : 'Listen aloud')}
                 </span>
-              </button>
+              </Button>
             )}
           </CardHeader>
-          <CardContent className="p-6 flex-1">
+          <CardContent className="flex-1 p-4 sm:p-6">
             <div className="relative h-full min-h-[400px]">
               {analyzing ? (
-                 <div className="absolute inset-0 flex flex-col justify-center items-center">
-                    <div className="w-[140px] h-[5px] bg-black/10 dark:bg-white/10 rounded-full overflow-hidden">
-                      <motion.div 
-                        className="h-full bg-[#10B981]"
-                        animate={{ x: ["-100%", "100%", "-100%"] }}
-                        transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
-                        style={{ width: "100%" }}
-                      />
+                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
+                    <Loader2 size={22} className="animate-spin text-muted-foreground" aria-hidden="true" />
+                    <div className="text-sm font-medium text-foreground">
+                      EDENS AI is analyzing in {activeLanguage.name}…
                     </div>
-                    <div className="mt-8 font-mono text-xs uppercase tracking-[0.2em] text-[#10B981] font-bold">
-                      EDENS AI IS COMMUNICATING IN {activeLanguage.name.toUpperCase()}...
-                    </div>
-                    <div className="text-[11px] opacity-60 mt-2 font-mono">
-                      {activeLanguage.welcomeGreeting.slice(0, 45)}...
+                    <div className="max-w-xs text-xs text-muted-foreground">
+                      {activeLanguage.welcomeGreeting.slice(0, 45)}…
                     </div>
                  </div>
               ) : diagnosisError ? (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-6">
-                  <div className="p-5 rounded-2xl bg-red-500/10 border border-red-500/30 max-w-md space-y-2">
-                    <div className="flex items-center justify-center gap-2 text-red-500 font-bold text-xs uppercase tracking-wider">
-                      <AlertTriangle size={16} />
-                      <span>Image Diagnosis Error</span>
+                <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center">
+                  <div className="max-w-md space-y-2 rounded-lg border border-destructive/30 bg-destructive/10 p-5">
+                    <div className="flex items-center justify-center gap-2 text-xs font-semibold text-destructive">
+                      <AlertTriangle size={16} aria-hidden="true" />
+                      <span>Diagnosis error</span>
                     </div>
-                    <p className="text-xs leading-relaxed text-foreground/90">{diagnosisError}</p>
-                    <button
+                    <p className="text-xs leading-relaxed text-foreground">{diagnosisError}</p>
+                    <Button
                       type="button"
+                      size="sm"
+                      variant="outline"
                       onClick={() => setDiagnosisError(null)}
-                      className="mt-2 px-3 py-1 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-400 text-[11px] font-bold cursor-pointer"
                     >
                       Dismiss
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : !result ? (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-8">
-                    <Leaf size={48} className="opacity-15 mb-4 text-[#10B981]" />
-                    <div className="font-mono text-xs uppercase tracking-[0.2em] opacity-60 font-bold leading-relaxed">
+                <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center">
+                    <div className="mb-4 flex size-12 items-center justify-center rounded-lg bg-muted">
+                      <Leaf size={24} className="text-muted-foreground" aria-hidden="true" />
+                    </div>
+                    <div className="text-sm font-medium leading-relaxed text-foreground">
                       No active report.<br/>
                       Capture a frame to receive instant analysis in {activeLanguage.name}.
                     </div>
-                    <div className="mt-4 text-xs max-w-sm opacity-50 italic">
-                      "EDENS AI can communicate fluently in Hausa, Igbo, Yoruba, Naija Pidgin, and other Nigerian native tongues."
+                    <div className="mt-3 max-w-sm text-xs leading-relaxed text-muted-foreground">
+                      EDENS AI communicates in Hausa, Igbo, Yoruba, Naija Pidgin, and other Nigerian languages.
                     </div>
                  </div>
               ) : (
@@ -1229,116 +1236,109 @@ export default function AiLab() {
                    animate={{ opacity: 1, y: 0 }}
                    className="space-y-6"
                  >
-                   <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-black/[0.03] dark:bg-white/[0.04] border border-black/5 dark:border-white/10 text-[10px] font-mono tabular-nums">
-                     <span className="font-bold text-[#10B981]">
+                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
+                     <span className="font-medium text-foreground">
                        {result.imageSource === 'ESP32_CAM_FRESH'
-                         ? `PROVENANCE: FRESH ESP32-CAM CLOUD SNAPSHOT (${result.frameId || 'VERIFIED'})`
-                         : 'PROVENANCE: MANUAL LEAF PHOTOGRAPH UPLOAD'}
+                         ? `Source: fresh ESP32-CAM cloud snapshot (${result.frameId || 'verified'})`
+                         : 'Source: manual leaf photo upload'}
                      </span>
                      {result.frameTimestamp && (
-                       <span className="opacity-75">
+                       <span className="font-mono tabular text-muted-foreground">
                          Captured {format(new Date(result.frameTimestamp), 'yyyy-MM-dd HH:mm:ss')}
                        </span>
                      )}
                    </div>
 
-                   <div className="flex items-start justify-between">
-                     <div>
-                        <div className="text-[10px] uppercase opacity-50 font-bold tracking-[0.2em] mb-1">
-                          {activeLanguage.id === 'ha' ? 'Nau\'in Shuka' : activeLanguage.id === 'yo' ? 'Orúkọ Ohun Ọ̀gbìn' : activeLanguage.id === 'ig' ? 'Aha Osisi' : 'Identified Species'}
+                   <div className="flex flex-wrap items-start justify-between gap-3">
+                     <div className="min-w-0">
+                        <div className="mb-1 text-xs text-muted-foreground">
+                           {activeLanguage.id === 'ha' ? "Nau'in shuka" : activeLanguage.id === 'yo' ? 'Orúkọ ohun ọ̀gbìn' : activeLanguage.id === 'ig' ? 'Aha osisi' : 'Identified species'}
                         </div>
-                        <div className="text-2xl md:text-3xl font-serif text-[#10B981]">
+                        <div className="text-2xl font-semibold tracking-tight text-foreground">
                           {result.speciesLocal || result.species}
                         </div>
                         {result.speciesLocal && result.species !== result.speciesLocal && (
-                          <div className="text-xs opacity-60 mt-0.5 font-mono">
-                            Scientific/Common: {result.species}
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            Scientific/common: {result.species}
                           </div>
                         )}
                      </div>
 
                      <div className={cn(
-                        "flex items-center gap-2 px-4 py-2 rounded-xl font-bold border-2 text-xs uppercase tracking-wider shadow-sm",
-                        result.healthStatus === 'Healthy' ? "bg-[#10B981]/10 border-[#10B981]/30 text-[#10B981]" :
-                        result.healthStatus === 'Stressed' ? "bg-amber-500/10 border-amber-500/30 text-amber-500" :
-                        "bg-red-500/10 border-red-500/30 text-red-500"
+                        "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium",
+                        result.healthStatus === 'Healthy' ? "bg-success/10 text-success" :
+                        result.healthStatus === 'Stressed' ? "bg-warning/10 text-warning" :
+                        "bg-destructive/10 text-destructive"
                       )}>
-                         {result.healthStatus === 'Healthy' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+                         {result.healthStatus === 'Healthy' ? <CheckCircle size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}
                          <span>{result.healthStatusLocal || result.healthStatus}</span>
                       </div>
                    </div>
 
-                   <div className="space-y-4 pt-4 border-t border-black/5 dark:border-white/5">
+                   <div className="space-y-4 border-t border-border pt-4">
                      <div>
-                        <div className="text-[10px] uppercase opacity-60 font-bold tracking-[0.15em] mb-1.5 flex items-center gap-1.5 text-[#10B981]">
-                          <Info size={12} />
-                          {activeLanguage.id === 'ha' ? 'Alamomin Cutar da Aka Gani' : activeLanguage.id === 'yo' ? 'Àwọn Àmì Tó Hàn' : activeLanguage.id === 'ig' ? 'Ihe Ịrịba Ama A Hụrụ' : 'Visible Symptoms'}
+                        <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                          <Info size={13} aria-hidden="true" />
+                          {activeLanguage.id === 'ha' ? 'Alamomin cutar da aka gani' : activeLanguage.id === 'yo' ? 'Àwọn àmì tó hàn' : activeLanguage.id === 'ig' ? 'Ihe ịrịba ama a hụrụ' : 'Visible symptoms'}
                         </div>
-                        <div className="text-[13px] font-medium leading-relaxed opacity-95 p-3.5 bg-black/5 dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/5">
+                        <div className="rounded-lg border border-border bg-muted/40 p-3.5 text-[13px] leading-relaxed text-foreground">
                           {result.symptoms || "Babu wata matsala / None detected."}
                         </div>
                      </div>
 
                      <div>
-                        <div className="text-[10px] uppercase opacity-60 font-bold tracking-[0.15em] mb-1.5 flex items-center gap-1.5 text-amber-500">
-                          <AlertTriangle size={12} />
-                          {activeLanguage.id === 'ha' ? 'Abin da Ya Haifar da Matsalar' : activeLanguage.id === 'yo' ? 'Ohun Tó Fa Ìṣòro Yìí' : activeLanguage.id === 'ig' ? 'Ihe Kpatara Nsogbu a' : 'Likely Cause'}
+                        <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                          <AlertTriangle size={13} aria-hidden="true" />
+                          {activeLanguage.id === 'ha' ? 'Abin da ya haifar da matsalar' : activeLanguage.id === 'yo' ? 'Ohun tó fa ìṣòro yìí' : activeLanguage.id === 'ig' ? 'Ihe kpatara nsogbu a' : 'Likely cause'}
                         </div>
-                        <div className="text-[13px] font-medium leading-relaxed opacity-95 p-3.5 bg-black/5 dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/5">
+                        <div className="rounded-lg border border-border bg-muted/40 p-3.5 text-[13px] leading-relaxed text-foreground">
                           {result.cause || "N/A"}
                         </div>
                      </div>
 
-                     <div className="bg-[#10B981]/10 p-4 rounded-2xl border border-[#10B981]/20 relative overflow-hidden">
-                        <div className="absolute top-0 left-0 w-1.5 h-full bg-[#10B981]" />
-                        <div className="text-[10px] text-[#10B981] font-bold tracking-[0.15em] mb-2 uppercase flex items-center gap-1.5">
-                          <Leaf size={14} />
-                          {activeLanguage.id === 'ha' ? 'Shawarar Masana & Hanyar Magani (Tattaunawa)' : 
-                           activeLanguage.id === 'yo' ? 'Ìtọ́jú & Ìmọ̀ràn Olùtọ́jú (Àbájáde)' : 
-                           activeLanguage.id === 'ig' ? 'Usoro Ọgwụgwọ & Ndụmọdụ' : 
-                           activeLanguage.id === 'pcm' ? 'Action & Treatment Recommendation' : 
-                           'Recommended Agronomic Action'}
+                     <div className="rounded-lg border border-brand/30 bg-accent p-4">
+                        <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-accent-foreground">
+                          <Leaf size={14} aria-hidden="true" />
+                          {activeLanguage.id === 'ha' ? 'Shawarar masana & hanyar magani' : 
+                           activeLanguage.id === 'yo' ? 'Ìtọ́jú & ìmọ̀ràn olùtọ́jú' : 
+                           activeLanguage.id === 'ig' ? 'Usoro ọgwụgwọ & ndụmọdụ' : 
+                           activeLanguage.id === 'pcm' ? 'Action & treatment recommendation' : 
+                           'Recommended agronomic action'}
                         </div>
-                        <div className="text-[13px] font-medium leading-relaxed dark:text-[#E2E8F0]">
+                        <div className="text-[13px] leading-relaxed text-foreground">
                           {result.recommendation}
                         </div>
 
                         {/* Direct Audio playback trigger inside recommendation card */}
-                        <div className="pt-3 mt-3 border-t border-[#10B981]/20 flex flex-wrap items-center justify-between gap-2">
-                          <button
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                          <Button
                             type="button"
+                            size="sm"
+                            variant="outline"
                             onClick={() => playSpeech(`${result.speciesLocal || result.species}. ${result.symptoms}. ${result.cause}. ${result.recommendation}`, 'diag-card')}
                             className={cn(
-                              "flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-sm",
-                              currentPlayingId === 'diag-card'
-                                ? "bg-red-500/20 text-red-400 border border-red-500/40"
-                                : "bg-[#10B981]/20 hover:bg-[#10B981]/30 text-[#10B981] border border-[#10B981]/40"
+                              currentPlayingId === 'diag-card' && "border-destructive/40 bg-destructive/10 text-destructive"
                             )}
                           >
                             {isGeneratingSpeech === 'diag-card' ? (
                               <>
-                                <Loader2 size={13} className="animate-spin" />
-                                <span>Generating Speech...</span>
+                                <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                                <span>Generating speech…</span>
                               </>
                             ) : currentPlayingId === 'diag-card' ? (
                               <>
-                                <Square size={13} />
-                                <span>Stop Audio</span>
-                                <div className="flex items-center gap-0.5 ml-1">
-                                  <span className="w-1 h-3 bg-red-400 rounded animate-bounce" />
-                                  <span className="w-1 h-2 bg-red-400 rounded animate-bounce [animation-delay:0.15s]" />
-                                  <span className="w-1 h-3 bg-red-400 rounded animate-bounce [animation-delay:0.3s]" />
-                                </div>
+                                <Square size={13} aria-hidden="true" />
+                                <span>Stop audio</span>
                               </>
                             ) : (
                               <>
-                                <Volume2 size={13} />
+                                <Volume2 size={13} aria-hidden="true" />
                                 <span>Listen in {activeLanguage.name} ({activeLanguage.nativeName})</span>
                               </>
                             )}
-                          </button>
+                          </Button>
 
-                          <span className="text-[10px] font-mono opacity-60 text-foreground">
+                          <span className="text-xs text-muted-foreground">
                             Voice: {voicePersona} · {activeLanguage.name}
                           </span>
                         </div>
@@ -1352,26 +1352,26 @@ export default function AiLab() {
       </div>
 
       {/* Interactive AI Agronomist Communication Hub */}
-      <Card className="border border-[#10B981]/30 bg-[#FFFFFF]/90 dark:bg-[#070707]/90 backdrop-blur-xl rounded-3xl overflow-hidden shadow-xl">
-        <CardHeader className="p-5 pb-3 border-b border-[#D1E8D1] dark:border-[#1A2A1A] flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <Card>
+        <CardHeader className="flex flex-col border-b border-border pb-3 md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#10B981]/15 text-[#10B981] flex items-center justify-center border border-[#10B981]/30 shrink-0">
-              <MessageSquare size={20} />
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground">
+              <MessageSquare size={20} aria-hidden="true" />
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-base font-bold">
+                <h2 className="text-[15px] font-semibold tracking-tight">
                   {activeLanguage.id === 'ha' ? 'Tattaunawa da Masanin Noma na EDENS AI' :
                    activeLanguage.id === 'yo' ? 'Ibaraẹnisọrọ pẹ̀lú Onímọ̀ Ọ̀gbìn EDENS AI' :
                    activeLanguage.id === 'ig' ? 'Mkparịta ụka Agronomist EDENS AI' :
                    activeLanguage.id === 'pcm' ? 'Talk to EDENS AI Plant Doctor' :
-                   'EDENS AI Multilingual Agronomist Consultation'}
+                   'EDENS AI multilingual agronomist consultation'}
                 </h2>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#10B981]/20 text-[#10B981] font-mono font-bold">
+                <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                   {activeLanguage.name}
                 </span>
               </div>
-              <p className="text-xs opacity-70">
+              <p className="mt-0.5 text-xs text-muted-foreground">
                 Speak or type in Hausa, Yoruba, Igbo, Pidgin, or English with live voice responses
               </p>
             </div>
@@ -1384,51 +1384,54 @@ export default function AiLab() {
               type="button"
               onClick={handleToggleAutoSpeak}
               title="Toggle automatic voice speech for assistant responses"
+              aria-pressed={autoSpeak}
               className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all cursor-pointer",
+                "flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors",
                 autoSpeak
-                  ? "bg-[#10B981]/20 border-[#10B981]/40 text-[#10B981] shadow-[0_0_12px_rgba(16,185,129,0.2)]"
-                  : "bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 opacity-60 hover:opacity-100"
+                  ? "border-brand/40 bg-accent text-accent-foreground"
+                  : "border-border bg-background text-foreground hover:bg-muted"
               )}
             >
-              {autoSpeak ? <Volume2 size={14} /> : <VolumeX size={14} />}
-              <span className="font-bold">Speech</span>: {autoSpeak ? "AUTO ON" : "OFF"}
+              {autoSpeak ? <Volume2 size={14} aria-hidden="true" /> : <VolumeX size={14} aria-hidden="true" />}
+              <span className="font-medium">Speech:</span> {autoSpeak ? "Auto on" : "Off"}
             </button>
 
             {/* Voice Persona Selector */}
-            <div className="flex items-center gap-1.5 text-xs bg-black/5 dark:bg-white/5 px-2.5 py-1.5 rounded-xl border border-black/10 dark:border-white/10">
-              <Headphones size={13} className="text-[#10B981] shrink-0" />
+            <div className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5">
+              <Headphones size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+              <label htmlFor="ai-voice-persona" className="sr-only">Voice persona</label>
               <select 
+                id="ai-voice-persona"
                 value={voicePersona}
                 onChange={(e) => handleSelectVoicePersona(e.target.value)}
-                className="bg-transparent text-xs font-medium text-foreground outline-none cursor-pointer"
-                title="Select Gemini Voice Persona"
+                className="cursor-pointer bg-transparent text-xs font-medium text-foreground outline-none"
+                title="Select Gemini voice persona"
               >
-                <option value="Kore" className="bg-[#111] text-white">Kore (Warm Botanist)</option>
-                <option value="Zephyr" className="bg-[#111] text-white">Zephyr (Smooth Expert)</option>
-                <option value="Puck" className="bg-[#111] text-white">Puck (Energetic Voice)</option>
-                <option value="Fenrir" className="bg-[#111] text-white">Fenrir (Deep Voice)</option>
+                <option value="Kore">Kore (Warm botanist)</option>
+                <option value="Zephyr">Zephyr (Smooth expert)</option>
+                <option value="Puck">Puck (Energetic voice)</option>
+                <option value="Fenrir">Fenrir (Deep voice)</option>
               </select>
             </div>
 
-            <div className="flex items-center gap-2 text-xs font-mono bg-black/5 dark:bg-white/5 px-3 py-1.5 rounded-xl border border-black/10 dark:border-white/10">
+            <div className="flex h-8 items-center gap-2 rounded-lg border border-border bg-background px-2.5 text-xs">
               <span className={cn(
-                "w-2 h-2 rounded-full shrink-0",
-                hardwareDataSource === 'REAL_HARDWARE' ? "bg-emerald-500" :
-                hardwareDataSource === 'CACHED' ? "bg-amber-500 animate-pulse" :
-                hardwareDataSource === 'STALE' ? "bg-orange-500" :
-                hardwareDataSource === 'SIMULATED' ? "bg-purple-400" : "bg-red-500"
-              )} />
-              <span className="font-bold text-[10px] uppercase tracking-wider text-foreground">
+                "size-1.5 shrink-0 rounded-full",
+                hardwareDataSource === 'REAL_HARDWARE' ? "bg-success" :
+                hardwareDataSource === 'CACHED' ? "bg-warning animate-pulse" :
+                hardwareDataSource === 'STALE' ? "bg-warning" :
+                hardwareDataSource === 'SIMULATED' ? "bg-info" : "bg-destructive"
+              )} aria-hidden="true" />
+              <span className="font-medium text-foreground">
                 {hardwareDataSource}
-                {isTelemetryStale && hardwareDataSource === 'REAL_HARDWARE' ? ' (STALE)' : ''}
+                {isTelemetryStale && hardwareDataSource === 'REAL_HARDWARE' ? ' (stale)' : ''}
               </span>
               {hardwareDataSource === 'DISCONNECTED' ? (
-                <span className="opacity-70 text-[10px] hidden sm:inline text-red-400">
+                <span className="hidden text-[11px] text-destructive sm:inline">
                   No live sensor signal
                 </span>
               ) : (
-                <span className="opacity-70 text-[10px] hidden sm:inline">
+                <span className="hidden font-mono tabular text-[11px] text-muted-foreground sm:inline">
                   {Number(tempVal).toFixed(1)}°C · {Number(humVal).toFixed(0)}% Hum · {Number(soilVal).toFixed(0)}% Soil
                 </span>
               )}
@@ -1436,18 +1439,19 @@ export default function AiLab() {
           </div>
         </CardHeader>
 
-        <CardContent className="p-5 space-y-4">
+        <CardContent className="p-4 sm:p-5 space-y-4">
           {/* Quick sample question chips */}
           <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
-            <span className="text-[10px] font-bold uppercase tracking-wider opacity-60 shrink-0">
-              {activeLanguage.id === 'ha' ? 'Misalan Tambayoyi:' : activeLanguage.id === 'yo' ? 'Àpẹẹrẹ Ìbéèrè:' : activeLanguage.id === 'ig' ? 'Ụfọdụ Ajụjụ:' : 'Quick Prompts:'}
+            <span className="shrink-0 text-xs font-medium text-muted-foreground">
+              {activeLanguage.id === 'ha' ? 'Misalan Tambayoyi:' : activeLanguage.id === 'yo' ? 'Àpẹẹrẹ Ìbéèrè:' : activeLanguage.id === 'ig' ? 'Ụfọdụ Ajụjụ:' : 'Quick prompts:'}
             </span>
             {activeLanguage.sampleQuestions.map((q, idx) => (
               <button
                 key={idx}
+                type="button"
                 onClick={() => handleSendChat(q)}
                 disabled={isSending || isRecording}
-                className="shrink-0 text-xs px-3 py-1.5 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-[#10B981]/15 hover:border-[#10B981]/40 border border-black/10 dark:border-white/10 text-foreground transition-all cursor-pointer font-medium"
+                className="h-8 shrink-0 cursor-pointer rounded-lg border border-border px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
               >
                 {q}
               </button>
@@ -1457,7 +1461,7 @@ export default function AiLab() {
           {/* Conversation history area */}
           <div 
             ref={chatScrollRef}
-            className="h-[340px] overflow-y-auto space-y-3.5 p-4 rounded-2xl bg-black/5 dark:bg-black/40 border border-black/5 dark:border-white/5 font-sans"
+            className="custom-scrollbar h-[340px] overflow-y-auto space-y-3.5 rounded-lg border border-border bg-muted/40 p-4"
           >
             {chatMessages.map((msg, i) => {
               const isAssistant = msg.role === 'assistant';
@@ -1471,29 +1475,32 @@ export default function AiLab() {
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   className={cn(
-                    "flex flex-col max-w-[88%] md:max-w-[80%] rounded-2xl p-4 text-xs md:text-sm leading-relaxed",
+                    "flex max-w-[88%] flex-col rounded-lg p-4 text-sm leading-relaxed md:max-w-[80%]",
                     isAssistant
-                      ? "mr-auto bg-white dark:bg-[#121212] border border-[#D1E8D1] dark:border-white/10 text-foreground shadow-sm"
-                      : "ml-auto bg-[#10B981] text-black font-medium shadow-[0_2px_12px_rgba(16,185,129,0.25)]"
+                      ? "mr-auto border border-border bg-card text-foreground"
+                      : "ml-auto bg-primary font-medium text-primary-foreground"
                   )}
                 >
-                  <div className="flex items-center justify-between gap-3 mb-1.5">
+                  <div className="mb-1.5 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <span className={cn(
-                        "text-[10px] font-bold uppercase tracking-wider",
-                        isAssistant ? "text-[#10B981]" : "text-black/75"
+                        "text-[11px] font-semibold",
+                        isAssistant ? "text-muted-foreground" : "text-primary-foreground"
                       )}>
-                        {isAssistant ? `EDENS AI (${activeLanguage.name})` : 'You (Farmer)'}
+                        {isAssistant ? `EDENS AI (${activeLanguage.name})` : 'You (farmer)'}
                       </span>
                       {msg.isVoiceInput && (
-                        <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-black/15 text-black">
-                          <Mic size={9} /> Voice Note
+                        <span className={cn(
+                          "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium",
+                          isAssistant ? "bg-muted text-muted-foreground" : "bg-primary-foreground/15 text-primary-foreground"
+                        )}>
+                          <Mic size={11} aria-hidden="true" /> Voice note
                         </span>
                       )}
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <span className={cn("text-[9px] opacity-60", isAssistant ? "" : "text-black/60")}>
+                      <span className={cn("text-[11px]", isAssistant ? "text-muted-foreground" : "text-primary-foreground/80")}>
                         {format(new Date(msg.timestamp), 'HH:mm')}
                       </span>
 
@@ -1504,33 +1511,28 @@ export default function AiLab() {
                           onClick={() => playSpeech(msg.content, msgId)}
                           title={isPlaying ? "Stop listening" : `Listen in ${activeLanguage.name}`}
                           className={cn(
-                            "flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[11px] font-medium transition-all cursor-pointer border",
+                            "flex h-7 cursor-pointer items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors",
                             isPlaying
-                              ? "bg-red-500/20 text-red-400 border-red-500/40"
+                              ? "border-destructive/40 bg-destructive/10 text-destructive"
                               : isGenerating
-                              ? "bg-[#10B981]/20 text-[#10B981] border-[#10B981]/40"
-                              : "hover:bg-[#10B981]/15 text-[#10B981] border-[#10B981]/20 bg-[#10B981]/5"
+                              ? "border-border bg-muted text-muted-foreground"
+                              : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
                           )}
                         >
                           {isGenerating ? (
                             <>
-                              <Loader2 size={11} className="animate-spin text-[#10B981]" />
-                              <span className="text-[9px]">Voice...</span>
+                              <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+                              <span>Voice…</span>
                             </>
                           ) : isPlaying ? (
                             <>
-                              <Square size={10} />
-                              <span className="text-[9px] font-bold">Stop</span>
-                              <div className="flex items-center gap-0.5">
-                                <span className="w-0.5 h-2 bg-red-400 rounded animate-bounce" />
-                                <span className="w-0.5 h-1.5 bg-red-400 rounded animate-bounce [animation-delay:0.15s]" />
-                                <span className="w-0.5 h-2.5 bg-red-400 rounded animate-bounce [animation-delay:0.3s]" />
-                              </div>
+                              <Square size={12} aria-hidden="true" />
+                              <span>Stop</span>
                             </>
                           ) : (
                             <>
-                              <Volume2 size={12} />
-                              <span className="text-[9px] font-bold">Speech</span>
+                              <Volume2 size={12} aria-hidden="true" />
+                              <span>Speech</span>
                             </>
                           )}
                         </button>
@@ -1546,9 +1548,9 @@ export default function AiLab() {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="flex items-center gap-2 p-3 rounded-2xl bg-white dark:bg-[#121212] border border-[#10B981]/30 max-w-[65%] text-xs font-mono text-[#10B981]"
+                className="flex max-w-[65%] items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
               >
-                <Sparkles size={14} className="animate-spin text-[#10B981]" />
+                <Sparkles size={14} className="text-brand" aria-hidden="true" />
                 <span>EDENS AI ń ronu / analyzing in {activeLanguage.name}...</span>
               </motion.div>
             )}
@@ -1561,29 +1563,17 @@ export default function AiLab() {
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
-                className="p-3.5 rounded-2xl bg-gradient-to-r from-red-500/15 via-red-500/10 to-transparent border border-red-500/30 flex flex-wrap items-center justify-between gap-3 shadow-[0_0_20px_rgba(239,68,68,0.2)]"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3.5"
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 rounded-full bg-red-500 animate-ping" />
+                  <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-destructive" aria-hidden="true" />
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs font-bold text-red-500 uppercase tracking-widest">
-                      REC {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')}
+                    <span className="font-mono tabular text-xs font-semibold text-destructive">
+                      Recording {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')}
                     </span>
-                    <span className="text-xs font-medium text-foreground">
-                      Listening in <strong className="text-[#10B981]">{activeLanguage.name} ({activeLanguage.nativeName})</strong>...
+                    <span className="text-xs text-foreground">
+                      Listening in <span className="font-medium text-destructive">{activeLanguage.name} ({activeLanguage.nativeName})</span>…
                     </span>
-                  </div>
-
-                  {/* Pulsing Audio visualizer bars */}
-                  <div className="flex items-center gap-1 pl-2">
-                    {[...Array(6)].map((_, idx) => (
-                      <motion.span
-                        key={idx}
-                        className="w-1 bg-red-500 rounded-full"
-                        animate={{ height: ['4px', `${12 + (idx % 3) * 8}px`, '4px'] }}
-                        transition={{ repeat: Infinity, duration: 0.6 + (idx * 0.1), ease: 'easeInOut' }}
-                      />
-                    ))}
                   </div>
                 </div>
 
@@ -1593,25 +1583,25 @@ export default function AiLab() {
                     size="sm"
                     variant="ghost"
                     onClick={cancelRecording}
-                    className="text-xs hover:bg-red-500/20 text-red-400 hover:text-red-300 h-8 px-3 rounded-xl cursor-pointer"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                   >
-                    <X size={14} className="mr-1" /> Discard
+                    <X size={14} aria-hidden="true" /> Discard
                   </Button>
                   <Button
                     type="button"
                     size="sm"
+                    variant="outline"
                     onClick={() => stopAndTranscribe(false)}
-                    className="bg-[#10B981] hover:bg-[#059669] text-black font-bold h-8 px-3.5 rounded-xl cursor-pointer text-xs shadow-md"
                   >
-                    <Check size={14} className="mr-1" /> Transcribe
+                    <Check size={14} aria-hidden="true" /> Transcribe
                   </Button>
                   <Button
                     type="button"
                     size="sm"
+                    variant="destructive"
                     onClick={() => stopAndTranscribe(true)}
-                    className="bg-red-600 hover:bg-red-700 text-white font-bold h-8 px-3.5 rounded-xl cursor-pointer text-xs shadow-md"
                   >
-                    <Send size={12} className="mr-1" /> Send Voice
+                    <Send size={14} aria-hidden="true" /> Send voice
                   </Button>
                 </div>
               </motion.div>
@@ -1623,15 +1613,15 @@ export default function AiLab() {
             <motion.div
               initial={{ opacity: 0, y: -5 }}
               animate={{ opacity: 1, y: 0 }}
-              className="p-3 rounded-2xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-between text-xs text-blue-500 dark:text-blue-400"
+              className="flex items-center justify-between gap-3 rounded-lg border border-info/30 bg-info/10 px-3.5 py-2.5 text-xs text-info"
             >
               <div className="flex items-center gap-2">
-                <Loader2 size={16} className="animate-spin text-blue-500" />
-                <span className="font-semibold">
+                <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                <span className="font-medium">
                   Uploading and validating voice note for speech transcription...
                 </span>
               </div>
-              <span className="text-[10px] font-mono opacity-70">EDENS AI Pipeline</span>
+              <span className="text-[11px] text-muted-foreground">EDENS AI pipeline</span>
             </motion.div>
           )}
 
@@ -1640,15 +1630,15 @@ export default function AiLab() {
             <motion.div
               initial={{ opacity: 0, y: -5 }}
               animate={{ opacity: 1, y: 0 }}
-              className="p-3 rounded-2xl bg-[#10B981]/10 border border-[#10B981]/30 flex items-center justify-between text-xs text-[#10B981]"
+              className="flex items-center justify-between gap-3 rounded-lg border border-info/30 bg-info/10 px-3.5 py-2.5 text-xs text-info"
             >
               <div className="flex items-center gap-2">
-                <Loader2 size={16} className="animate-spin text-[#10B981]" />
-                <span className="font-semibold">
-                  EDENS AI ń gbọ́ / Transcribing & understanding speech in {activeLanguage.name} ({activeLanguage.nativeName})...
+                <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                <span className="font-medium">
+                  EDENS AI ń gbọ́ / Transcribing &amp; understanding speech in {activeLanguage.name} ({activeLanguage.nativeName})...
                 </span>
               </div>
-              <span className="text-[10px] font-mono opacity-70">Powered by Gemini AI</span>
+              <span className="text-[11px] text-muted-foreground">Powered by Gemini AI</span>
             </motion.div>
           )}
 
@@ -1658,27 +1648,27 @@ export default function AiLab() {
               initial={{ opacity: 0, y: -4 }}
               animate={{ opacity: 1, y: 0 }}
               className={cn(
-                "p-4 rounded-2xl border space-y-2.5 shadow-sm",
+                "space-y-2.5 rounded-lg border p-4",
                 voiceError.type === 'permission' || voiceError.type === 'insecure-context'
-                  ? "bg-amber-500/10 border-amber-500/30 text-amber-500"
+                  ? "border-warning/30 bg-warning/10 text-warning"
                   : voiceError.type === 'ai-service'
-                  ? "bg-red-500/10 border-red-500/30 text-red-500"
-                  : "bg-blue-500/10 border-blue-500/30 text-blue-500 dark:text-blue-400"
+                  ? "border-destructive/30 bg-destructive/10 text-destructive"
+                  : "border-info/30 bg-info/10 text-info"
               )}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-2.5">
-                  <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+                  <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
                   <div className="space-y-1">
-                    <p className="text-xs font-bold leading-tight">
+                    <p className="text-xs font-semibold leading-tight">
                       {voiceError.title}
                     </p>
-                    <p className="text-[11px] opacity-90 leading-relaxed text-foreground">
+                    <p className="text-xs leading-relaxed text-foreground">
                       {voiceError.message}
                     </p>
                     {voiceError.actionHint && (
-                      <p className="text-[11px] opacity-80 leading-relaxed text-foreground font-medium">
-                        💡 {voiceError.actionHint}
+                      <p className="text-xs leading-relaxed text-foreground">
+                        <span className="font-medium">Tip:</span> {voiceError.actionHint}
                       </p>
                     )}
                   </div>
@@ -1687,23 +1677,23 @@ export default function AiLab() {
                 <button 
                   type="button" 
                   onClick={() => setVoiceError(null)}
-                  className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded-lg cursor-pointer shrink-0 text-foreground opacity-60 hover:opacity-100"
+                  className="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   aria-label="Dismiss message"
+                  title="Dismiss message"
                 >
-                  <X size={15} />
+                  <X size={15} aria-hidden="true" />
                 </button>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-black/10 dark:border-white/10">
+              <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2">
                 {voiceError.canRetryMic && (
                   <Button
                     type="button"
                     size="sm"
                     onClick={startRecording}
                     disabled={isRecording || isTranscribing}
-                    className="bg-[#10B981] hover:bg-[#059669] text-black font-bold h-7 px-3 rounded-xl text-xs cursor-pointer shadow-sm"
                   >
-                    <RefreshCw size={12} className="mr-1" /> Retry Microphone
+                    <RefreshCw size={12} aria-hidden="true" /> Retry microphone
                   </Button>
                 )}
 
@@ -1714,9 +1704,8 @@ export default function AiLab() {
                     variant="outline"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isRecording || isTranscribing}
-                    className="border-current hover:bg-black/5 dark:hover:bg-white/5 h-7 px-3 rounded-xl text-xs cursor-pointer"
                   >
-                    <Upload size={12} className="mr-1" /> Upload Voice Note
+                    <Upload size={12} aria-hidden="true" /> Upload voice note
                   </Button>
                 )}
 
@@ -1724,10 +1713,10 @@ export default function AiLab() {
                   href={window.location.href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-[11px] font-bold underline px-2 py-1 ml-auto opacity-80 hover:opacity-100"
+                  className="ml-auto inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-muted-foreground underline hover:text-foreground"
                 >
-                  <span>Open in Full Tab</span>
-                  <ExternalLink size={12} />
+                  <span>Open in full tab</span>
+                  <ExternalLink size={12} aria-hidden="true" />
                 </a>
               </div>
             </motion.div>
@@ -1751,8 +1740,10 @@ export default function AiLab() {
             className="flex items-center gap-2"
           >
             {/* Microphone Toggle Button */}
-            <button
+            <Button
               type="button"
+              size="icon"
+              variant="outline"
               disabled={isSending || isTranscribing}
               onClick={() => {
                 if (isRecording) {
@@ -1761,50 +1752,49 @@ export default function AiLab() {
                   startRecording();
                 }
               }}
+              aria-label={isRecording ? "Stop recording and transcribe" : "Record a voice question"}
               title={
                 voiceState === 'requesting_mic' ? "Requesting microphone..." :
-                isRecording ? "Stop Recording & Transcribe" : 
+                isRecording ? "Stop recording & transcribe" : 
                 `Click to speak in ${activeLanguage.name} or Nigerian languages`
               }
               className={cn(
-                "p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-center shrink-0 relative group",
+                "shrink-0",
                 isRecording 
-                  ? "bg-red-500 text-white border-red-600 animate-pulse shadow-[0_0_20px_rgba(239,68,68,0.6)]" 
+                  ? "border-destructive/40 bg-destructive/10 text-destructive" 
                   : voiceState === 'requesting_mic'
-                  ? "bg-amber-500/20 text-amber-500 border-amber-500/40"
-                  : "bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 hover:border-[#10B981] hover:text-[#10B981] text-foreground",
-                (isSending || isTranscribing) && "opacity-50 cursor-not-allowed"
+                  ? "border-warning/40 bg-warning/10 text-warning"
+                  : ""
               )}
             >
               {voiceState === 'requesting_mic' ? (
-                <Loader2 size={18} className="animate-spin text-amber-500" />
+                <Loader2 size={18} className="animate-spin" aria-hidden="true" />
               ) : isRecording ? (
-                <Square size={18} />
+                <Square size={18} aria-hidden="true" />
               ) : (
-                <Mic size={18} />
+                <Mic size={18} aria-hidden="true" />
               )}
-              <span className="sr-only">Microphone</span>
-            </button>
+            </Button>
 
             {/* Upload Audio File / Voice Note Button */}
-            <button
+            <Button
               type="button"
+              size="icon"
+              variant="outline"
               disabled={isSending || isRecording || isTranscribing}
               onClick={() => fileInputRef.current?.click()}
+              aria-label="Upload an audio voice note"
               title={`Upload audio recording or WhatsApp voice note in ${activeLanguage.name}`}
-              className={cn(
-                "p-3 rounded-2xl border bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 hover:border-[#10B981] hover:text-[#10B981] text-foreground transition-all cursor-pointer flex items-center justify-center shrink-0",
-                (isSending || isRecording || isTranscribing) && "opacity-50 cursor-not-allowed"
-              )}
+              className="shrink-0"
             >
-              <Upload size={18} />
-              <span className="sr-only">Upload Voice Note</span>
-            </button>
+              <Upload size={18} aria-hidden="true" />
+            </Button>
 
             <input
               type="text"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
+              aria-label="Your question for the AI agronomist"
               placeholder={
                 activeLanguage.id === 'ha' ? `Yi magana da mic ko rubuta tambaya a Harshen Hausa...` :
                 activeLanguage.id === 'yo' ? `Sọ̀rọ̀ sínú mic tàbí kọ ìbéèrè ní Èdè Yorùbá...` :
@@ -1812,61 +1802,60 @@ export default function AiLab() {
                 activeLanguage.id === 'pcm' ? `Talk into mic or type your question in Naija Pidgin...` :
                 `Speak or type any question in ${activeLanguage.name}...`
               }
-              className="flex-1 bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-2xl px-4 py-3 text-xs md:text-sm focus:outline-none focus:ring-2 focus:ring-[#10B981] transition-all"
+              className="h-11 min-w-0 flex-1 rounded-lg border border-input bg-background px-3.5 text-sm text-foreground transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
             />
 
             <Button
               type="submit"
+              size="lg"
               disabled={!chatInput.trim() || isSending || isRecording}
-              className="bg-[#10B981] hover:bg-[#059669] text-black font-bold h-11 px-5 rounded-2xl cursor-pointer shadow-[0_2px_10px_rgba(16,185,129,0.3)] shrink-0"
+              className="shrink-0"
             >
-              <Send size={16} className="mr-1" /> Send
+              <Send size={16} aria-hidden="true" /> Send
             </Button>
           </form>
         </CardContent>
       </Card>
 
       {/* Historical Diagnostic Analysis Records */}
-      <div className="mt-12">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3 opacity-80">
-            <Clock size={16} className="text-[#10B981]" />
-            <h2 className="text-[11px] uppercase tracking-[0.2em] font-bold">
-              {activeLanguage.id === 'ha' ? 'Tarihin Binciken Cututtukan Shuka' :
-               activeLanguage.id === 'yo' ? 'Àkójọ Àyẹ̀wò Àtijọ́' :
-               activeLanguage.id === 'ig' ? 'Akụkọ Nnyocha nke Oge Gara Aga' :
-               'Botanical Analysis History'}
-            </h2>
-          </div>
-          <span className="text-xs font-mono opacity-50">
-            {historyEntries.length} Records
+      <div className="pt-6">
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
+            <Clock size={16} className="text-muted-foreground" aria-hidden="true" />
+            {activeLanguage.id === 'ha' ? 'Tarihin binciken cututtukan shuka' :
+             activeLanguage.id === 'yo' ? 'Àkójọ àyẹ̀wò àtijọ́' :
+             activeLanguage.id === 'ig' ? 'Akụkọ nnyocha nke oge gara aga' :
+             'Botanical analysis history'}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {historyEntries.length} record{historyEntries.length === 1 ? '' : 's'}
           </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {historyEntries.map(([id, entry]: any) => (
-             <Card key={id} className="border border-[#E8F0E8] dark:border-white/10 bg-[#FFFFFF]/80 dark:bg-[#0A0A0A]/80 backdrop-blur-xl rounded-2xl shadow-sm transform transition-all hover:-translate-y-1 hover:shadow-md group">
-               <CardContent className="p-5 flex gap-4 items-center">
+             <Card key={id}>
+               <CardContent className="flex items-center gap-4 p-4">
                  {entry.image && (
-                   <div className="w-16 h-16 rounded-xl overflow-hidden shrink-0 border border-black/10 dark:border-white/10 relative">
-                     <img src={entry.image} className="w-full h-full object-cover mix-blend-luminosity group-hover:mix-blend-normal transition-all duration-500" alt="History" />
+                   <div className="relative size-16 shrink-0 overflow-hidden rounded-lg border border-border">
+                     <img src={entry.image} className="h-full w-full object-cover" alt="" />
                    </div>
                  )}
-                 <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="text-[10px] uppercase opacity-50 font-bold tracking-widest">{format(new Date(entry.timestamp), 'MMM dd · HH:mm')}</div>
+                 <div className="min-w-0 flex-1">
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="font-mono tabular text-[11px] text-muted-foreground">{format(new Date(entry.timestamp), 'MMM dd · HH:mm')}</span>
                       {entry.language && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#10B981]/15 text-[#10B981] font-mono font-bold">
+                        <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
                           {entry.language}
                         </span>
                       )}
                     </div>
-                    <div className="font-bold truncate text-[13px] mb-1.5">{entry.speciesLocal || entry.species}</div>
+                    <div className="mb-1.5 truncate text-[13px] font-semibold text-foreground">{entry.speciesLocal || entry.species}</div>
                      <div className={cn(
-                        "text-[10px] font-bold w-max px-2 py-0.5 rounded-md uppercase tracking-wider",
-                        entry.healthStatus === 'Healthy' ? "bg-[#10B981]/10 text-[#10B981]" :
-                        entry.healthStatus === 'Stressed' ? "bg-amber-500/10 text-amber-500" :
-                        "bg-red-500/10 text-red-500"
+                        "inline-flex w-max rounded-md px-2 py-0.5 text-[11px] font-medium",
+                        entry.healthStatus === 'Healthy' ? "bg-success/10 text-success" :
+                        entry.healthStatus === 'Stressed' ? "bg-warning/10 text-warning" :
+                        "bg-destructive/10 text-destructive"
                       )}>
                         {entry.healthStatusLocal || entry.healthStatus}
                       </div>
@@ -1875,8 +1864,14 @@ export default function AiLab() {
              </Card>
           ))}
           {historyEntries.length === 0 && (
-            <div className="col-span-3 text-center py-16 opacity-40 font-mono text-[10px] border border-dashed border-[#1A1A1A] rounded-3xl uppercase tracking-[0.2em] font-bold">
-              No historical data available. Capture an image above to start.
+            <div className="col-span-full rounded-xl border border-dashed border-border px-6 py-14 text-center">
+              <div className="mx-auto flex size-11 items-center justify-center rounded-lg bg-muted">
+                <Clock size={20} className="text-muted-foreground" aria-hidden="true" />
+              </div>
+              <p className="mt-3 text-sm font-medium text-foreground">No history yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Capture or upload a plant image above to start building your diagnosis history.
+              </p>
             </div>
           )}
         </div>
