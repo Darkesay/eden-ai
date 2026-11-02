@@ -2,118 +2,99 @@ import { useEffect } from 'react';
 import { store } from '../lib/store';
 import { cameraConnectionManager } from '../lib/cameraConnectionManager';
 import { diagnoseLatestCameraFrame } from '../lib/gemini';
+import { resolveAgentTelemetryContext } from './agentTelemetryContext';
 
-let visionAgentRunning = false;
+let visionRunning = false;
 
-/**
- * Autonomous Vision Agent.
- * Strictly analyzes ONLY genuine, fresh (REAL_HARDWARE), unanalyzed ESP32-CAM photographs.
- * Never passes simulated drawings or cached/stale photographs to Gemini Vision.
- */
 export async function runVisionAgentCycle(options?: { force?: boolean }): Promise<void> {
-  const isEnabled = store.getValue('agent_VisionAgent_enabled') ?? true;
-  if ((!isEnabled && !options?.force) || visionAgentRunning) return;
+  const isEnabled = store.getValue('agent_VisionAgent_enabled') !== false;
+  if (!isEnabled && !options?.force) return;
+  if (visionRunning) return;
+  visionRunning = true;
 
-  visionAgentRunning = true;
   try {
-    const latestFrame = await cameraConnectionManager.refreshNow(false);
-    const now = new Date().toISOString();
+    const [ctx, globalFrame] = await Promise.all([
+      resolveAgentTelemetryContext(),
+      cameraConnectionManager.refreshNow(false)
+    ]);
 
-    if (!latestFrame) {
-      const msg =
-        'Standing by — waiting for an ESP32-CAM JPEG snapshot upload (or snap/upload a leaf photo in Plant Vision).';
-      store.setValue('agent_VisionAgent_lastRun', now);
-      store.setValue('agent_VisionAgent_status', 'STANDBY');
-      store.setValue('agent_VisionAgent_summary', msg);
-      store.setRow('activityLog', Date.now().toString() + 'va', {
-        timestamp: now,
-        type: 'agent',
-        message: `Vision Agent: ${msg}`
-      });
+    const hasEnrolledGh = Boolean(ctx.greenhouseId);
+    const hasFreshFrame = hasEnrolledGh
+      ? Boolean(ctx.latestCamera?.exists && ctx.latestCamera?.isFresh)
+      : Boolean(globalFrame && globalFrame.isFresh);
+    const hasAnyFrame = hasEnrolledGh
+      ? Boolean(ctx.latestCamera?.exists)
+      : Boolean(globalFrame);
+
+    if (!hasFreshFrame) {
+      store.setValue('agent_VisionAgent_status', 'STANDBY_NO_FRESH_FRAME');
+      store.setValue(
+        'agent_VisionAgent_summary',
+        hasAnyFrame
+          ? 'Standby — latest greenhouse camera photo is older than 90s. Refusing to treat outdated snapshot as live.'
+          : 'Standby — awaiting a verified ESP32-CAM crop snapshot or manual leaf inspection in Plant Vision.'
+      );
+      store.setValue('agent_VisionAgent_lastRun', new Date().toISOString());
       return;
     }
 
-    if (!latestFrame.isFresh || latestFrame.dataSource !== 'REAL_HARDWARE') {
-      const msg = `Latest ESP32-CAM snapshot is ${latestFrame.freshness.toLowerCase()} (${latestFrame.ageSeconds}s old > 90s limit). Waiting for a fresh capture so old photos are never misdiagnosed as live.`;
-      store.setValue('agent_VisionAgent_lastRun', now);
-      store.setValue('agent_VisionAgent_status', 'STANDBY');
-      store.setValue('agent_VisionAgent_summary', msg);
-      store.setRow('activityLog', Date.now().toString() + 'va_stale', {
-        timestamp: now,
-        type: 'agent',
-        message: `Vision Agent: ${msg}`
-      });
-      return;
-    }
+    const lang = String(store.getValue('aiLanguage') || 'en');
+    const result = await diagnoseLatestCameraFrame(lang);
 
-    if (latestFrame.analyzed && !options?.force) {
-      store.setValue('agent_VisionAgent_lastRun', now);
-      store.setValue('agent_VisionAgent_status', 'ADVISORY_READY');
-      if (!store.getValue('agent_VisionAgent_summary')) {
-        store.setValue(
-          'agent_VisionAgent_summary',
-          `Latest fresh ESP32-CAM frame (${latestFrame.id}) has already been inspected.`
-        );
-      }
-      return;
-    }
-
-    const langId = String(store.getValue('aiLanguage') || 'en');
-    const analysisResult = await diagnoseLatestCameraFrame(langId);
-    const completedAt = new Date().toISOString();
-    const summary = `${analysisResult.species} — ${analysisResult.healthStatus}: ${analysisResult.recommendation}`;
-
-    store.setValue('agent_VisionAgent_lastRun', completedAt);
-    store.setValue('agent_VisionAgent_status', 'ADVISORY_READY');
-    store.setValue('agent_VisionAgent_summary', summary);
-    store.setValue('plantHealthStatus', analysisResult.healthStatus);
-    store.setValue(
-      'lastVisionAnalysis',
-      JSON.stringify({
-        species: analysisResult.species,
-        healthStatus: analysisResult.healthStatus,
-        foliageCondition: analysisResult.symptoms,
-        cause: analysisResult.cause,
-        recommendedAction: analysisResult.recommendation,
-        timestamp: completedAt,
-        dataSource: 'REAL_HARDWARE',
-        isUploaded: true,
-        imageId: latestFrame.id,
-        frameTimestamp: latestFrame.timestamp
-      })
-    );
-
-    store.setValue('cameraUploadActive', true);
-    store.setValue('cameraLastAnalyzedFrame', latestFrame.id);
-
-    store.setRow('activityLog', Date.now().toString() + 'va', {
-      timestamp: completedAt,
-      type: 'agent',
-      message: `Vision Agent [FRESH ESP32-CAM]: ${summary}`
+    const id = Date.now().toString();
+    store.setRow('ai_history', id, {
+      timestamp: new Date().toISOString(),
+      species: result.species,
+      healthStatus: result.healthStatus,
+      recommendation: result.recommendation,
+      language: lang,
+      source: 'Vision Agent (ESP32-CAM)'
     });
-  } catch (err: any) {
-    console.warn('VisionAgent cycle warning:', err.message);
-    store.setValue('agent_VisionAgent_status', 'STANDBY');
+
+    const isHealthy = String(result.healthStatus || '').toLowerCase().includes('healthy');
+    store.setValue('agent_VisionAgent_status', isHealthy ? 'ADVISORY_READY' : 'ALERT');
     store.setValue(
       'agent_VisionAgent_summary',
-      `Camera assessment deferred (${err?.message || 'waiting for fresh snapshot'}).`
+      `${result.species} (${result.healthStatus}): ${result.recommendation}`
     );
+    store.setValue('agent_VisionAgent_lastRun', new Date().toISOString());
+
+    store.setRow('activityLog', `${id}_log`, {
+      timestamp: new Date().toISOString(),
+      type: isHealthy ? 'agent' : 'alert',
+      message: `Vision Agent inspected fresh ESP32-CAM frame: ${result.species} — ${result.healthStatus}.`
+    });
+  } catch (e: any) {
+    console.warn('VisionAgent cycle skipped:', e?.message || e);
+    store.setValue('agent_VisionAgent_status', 'STANDBY_NO_FRESH_FRAME');
   } finally {
-    visionAgentRunning = false;
+    visionRunning = false;
   }
 }
 
-export function useVisionAgent() {
+/**
+ * VisionAgent — Periodic Plant Health Inspector
+ *
+ * SAFETY & HONESTY POLICY:
+ * - Only inspects genuine, fresh (<=90s) ESP32-CAM photographs stored on the server
+ *   (including per-greenhouse edcam_* camera stores).
+ * - Never analyzes simulated canvas drawings or stale cached frames.
+ */
+export function VisionAgent() {
   useEffect(() => {
+    const initialTimer = setTimeout(() => {
+      void runVisionAgentCycle();
+    }, 6000);
     const interval = setInterval(() => {
       void runVisionAgentCycle();
-    }, 60000);
-    const timeout = setTimeout(() => {
-      void runVisionAgentCycle();
-    }, 9000);
+    }, 120000);
     return () => {
+      clearTimeout(initialTimer);
       clearInterval(interval);
-      clearTimeout(timeout);
     };
   }, []);
+
+  return null;
 }
+
+export const useVisionAgent = VisionAgent;

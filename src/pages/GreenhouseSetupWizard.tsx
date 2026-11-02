@@ -25,6 +25,7 @@ import { apiFetch, useAuth } from '../lib/auth';
 import { parseApiJsonResponse } from '../lib/api';
 import { DEFAULT_CROPS } from '../lib/hardwareService';
 import { store } from '../lib/store';
+import { runHarvestAgentCycle } from '../agents/HarvestAgent';
 import { QrScannerModal } from '../components/QrScannerModal';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -252,7 +253,14 @@ export default function GreenhouseSetupWizard() {
         return;
       }
       store.setValue('cropType', resolvedCropName);
+      store.setValue('tempMinThreshold', Number(tempMin));
+      store.setValue('tempMaxThreshold', Number(tempMax));
+      store.setValue('humMinThreshold', Number(humMin));
+      store.setValue('humMaxThreshold', Number(humMax));
+      store.setValue('soilMinThreshold', Number(soilMin));
+      store.setValue('soilMaxThreshold', Number(soilMax));
       await refreshSession();
+      void runHarvestAgentCycle({ force: true });
       setStep(3);
     } finally {
       setBusy(false);
@@ -325,12 +333,12 @@ export default function GreenhouseSetupWizard() {
 
   // Step 4: Save Environmental Targets
   const handleSaveStep4 = () => {
-    store.setValue('tempMinThreshold', String(tempMin));
-    store.setValue('tempMaxThreshold', String(tempMax));
-    store.setValue('humMinThreshold', String(humMin));
-    store.setValue('humMaxThreshold', String(humMax));
-    store.setValue('soilMinThreshold', String(soilMin));
-    store.setValue('soilMaxThreshold', String(soilMax));
+    store.setValue('tempMinThreshold', Number(tempMin));
+    store.setValue('tempMaxThreshold', Number(tempMax));
+    store.setValue('humMinThreshold', Number(humMin));
+    store.setValue('humMaxThreshold', Number(humMax));
+    store.setValue('soilMinThreshold', Number(soilMin));
+    store.setValue('soilMaxThreshold', Number(soilMax));
     setStep(5);
   };
 

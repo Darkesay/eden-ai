@@ -226,6 +226,30 @@ async function runTests() {
     );
     assert.strictEqual(allowedPreflight.headers['access-control-allow-credentials'], 'true');
 
+    const previewPreflight = await httpRequest(testPort, {
+      method: 'OPTIONS',
+      path: '/api/ai/chat',
+      headers: {
+        Origin: 'https://eden-ai-git-main-darkesays-projects.vercel.app',
+        'Access-Control-Request-Method': 'POST'
+      }
+    });
+    assert.strictEqual(previewPreflight.status, 204);
+    assert.strictEqual(
+      previewPreflight.headers['access-control-allow-origin'],
+      'https://eden-ai-git-main-darkesays-projects.vercel.app'
+    );
+
+    const spoofedVercelPreflight = await httpRequest(testPort, {
+      method: 'OPTIONS',
+      path: '/api/auth/register',
+      headers: {
+        Origin: 'https://evil-eden-ai.vercel.app',
+        'Access-Control-Request-Method': 'POST'
+      }
+    });
+    assert.strictEqual(spoofedVercelPreflight.status, 403);
+
     const blockedPreflight = await httpRequest(testPort, {
       method: 'OPTIONS',
       path: '/api/auth/register',
@@ -237,7 +261,7 @@ async function runTests() {
     assert.strictEqual(blockedPreflight.status, 403);
     assert.strictEqual(blockedPreflight.json?.error, 'CORS_ORIGIN_FORBIDDEN');
     assert.strictEqual(blockedPreflight.headers['access-control-allow-origin'], undefined);
-    console.log('  ✅ [3/10] Credentialed CORS allowlist (Vercel allowed, unknown origin 403 blocked) verified');
+    console.log('  ✅ [3/10] Credentialed CORS allowlist (Vercel prod + preview allowed, spoofed/unknown 403 blocked) verified');
 
     // 4. Successful account registration via cookie-only browser mode + HTTPS proxy header check
     const secretPassword = 'UltraSecretFarmerPassword!2026';

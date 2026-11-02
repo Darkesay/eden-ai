@@ -73,7 +73,7 @@ const AGENTS: AgentCardSpec[] = [
     safetyNote: 'Continuous 8s watchdog',
     icon: AlertTriangle,
     runNow: async () => {
-      runAlertAgentCycle({ force: true });
+      await runAlertAgentCycle({ force: true });
     }
   }
 ];
@@ -198,8 +198,8 @@ export function AgronomyAgentsPanel() {
   const handleRunAll = async () => {
     setRunningAll(true);
     try {
-      runAlertAgentCycle({ force: true });
       await Promise.allSettled([
+        runAlertAgentCycle({ force: true }),
         runClimateAgentCycle({ force: true }),
         runIrrigationAgentCycle({ force: true }),
         runVisionAgentCycle({ force: true }),

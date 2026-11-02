@@ -113,6 +113,11 @@ function isOriginAllowedForCors(originHeader: string, req: express.Request): boo
     return true;
   }
 
+  // Allow scoped Vercel preview/branch deployments for this project (never arbitrary .vercel.app origins)
+  if (/^https:\/\/eden-ai-[a-z0-9-]+(-[a-z0-9-]+)?\.vercel\.app$/i.test(normalizedOrigin)) {
+    return true;
+  }
+
   // Allow localhost / loopback origins during local development and automated test runs
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalizedOrigin)) {
     return true;

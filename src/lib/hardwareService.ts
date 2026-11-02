@@ -18,6 +18,7 @@
 
 import { store } from './store';
 import { apiFetch, parseApiJsonResponse, resolveApiUrl } from './api.ts';
+import { SUPPORTED_HARVEST_CROPS } from './crops';
 import {
   HardwareConfig,
   Esp32StatusResponse,
@@ -42,104 +43,22 @@ function redactHardwareLogText(input: string): string {
     .replace(/((?:X-Camera-Key|X-Hardware-Key|X-API-Key|Authorization)\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]');
 }
 
-// Default standard crops supported by EDENS AI ESP32 firmware
-export const DEFAULT_CROPS: CropProfile[] = [
-  {
-    id: 'tomato',
-    name: 'Tomato (Tumatir / Tòmátì)',
-    scientificName: 'Solanum lycopersicum',
-    nativeNames: {
-      hausa: 'Tumatir',
-      yoruba: 'Tòmátì',
-      igbo: 'Tomato',
-      pidgin: 'Tomato'
-    },
-    tempMin: 20,
-    tempMax: 28,
-    humMin: 55,
-    humMax: 75,
-    soilMin: 45,
-    soilMax: 65,
-    daysToHarvest: 75,
-    description: 'Requires warm climate, consistent soil moisture, and good ventilation to prevent fungal blight.'
-  },
-  {
-    id: 'pepper',
-    name: 'Habanero / Rodo Pepper',
-    scientificName: 'Capsicum chinense',
-    nativeNames: {
-      hausa: 'Barkono',
-      yoruba: 'Ata Rodo',
-      igbo: 'Ose Oyibo',
-      pidgin: 'Hot Pepper'
-    },
-    tempMin: 22,
-    tempMax: 32,
-    humMin: 50,
-    humMax: 70,
-    soilMin: 40,
-    soilMax: 60,
-    daysToHarvest: 90,
-    description: 'Loves heat, moderate watering, and bright light. Very susceptible to waterlogging.'
-  },
-  {
-    id: 'lettuce',
-    name: 'Lettuce / Salad Greens',
-    scientificName: 'Lactuca sativa',
-    nativeNames: {
-      hausa: 'Salak / Latas',
-      yoruba: 'Ẹ̀fọ́ Yáńrin',
-      igbo: 'Akwụkwọ Nri Salad',
-      pidgin: 'Salad Leaf'
-    },
-    tempMin: 16,
-    tempMax: 24,
-    humMin: 50,
-    humMax: 70,
-    soilMin: 50,
-    soilMax: 70,
-    daysToHarvest: 45,
-    description: 'Cool season crop. High heat causes bolting and bitter taste. Keep shaded in tropical mid-day.'
-  },
-  {
-    id: 'ugwu',
-    name: 'Fluted Pumpkin (Ugwu)',
-    scientificName: 'Telfairia occidentalis',
-    nativeNames: {
-      hausa: 'Kabewa',
-      yoruba: 'Agbègbè',
-      igbo: 'Ụgbọgụrụ / Ugwu',
-      pidgin: 'Ugwu Vegetable'
-    },
-    tempMin: 22,
-    tempMax: 30,
-    humMin: 60,
-    humMax: 85,
-    soilMin: 55,
-    soilMax: 75,
-    daysToHarvest: 35,
-    description: 'Thrives in humid tropical conditions. Rapid vegetative growth with regular drip irrigation.'
-  },
-  {
-    id: 'cucumber',
-    name: 'Cucumber',
-    scientificName: 'Cucumis sativus',
-    nativeNames: {
-      hausa: 'Gurinji',
-      yoruba: 'Kukumba',
-      igbo: 'Kukumba',
-      pidgin: 'Cucumber'
-    },
-    tempMin: 22,
-    tempMax: 29,
-    humMin: 60,
-    humMax: 80,
-    soilMin: 50,
-    soilMax: 70,
-    daysToHarvest: 55,
-    description: 'High water requirement. Benefits from trellising and automated morning watering.'
-  }
-];
+// Unified 18-crop catalog supported across EDENS AI firmware, Harvest Agent, Settings, and Setup Wizard
+export const DEFAULT_CROPS: CropProfile[] = SUPPORTED_HARVEST_CROPS.map((crop) => ({
+  id: crop.id,
+  name: crop.localLabel && !crop.label.includes(crop.localLabel)
+    ? `${crop.label} (${crop.localLabel})`
+    : crop.label,
+  scientificName: crop.scientificName,
+  tempMin: crop.tempMin,
+  tempMax: crop.tempMax,
+  humMin: crop.humMin,
+  humMax: crop.humMax,
+  soilMin: crop.soilMin,
+  soilMax: crop.soilMax,
+  daysToHarvest: crop.standardDays,
+  description: crop.description
+}));
 
 class HardwareService {
   private config: HardwareConfig;

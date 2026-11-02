@@ -272,6 +272,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
+  const syncActiveGreenhouseList = useCallback((list: GreenhouseSummary[]) => {
+    setGreenhouses(list);
+    setActiveGhState((prev) => {
+      const nextId =
+        list.length === 0
+          ? null
+          : prev && list.some((g) => g.id === prev)
+            ? prev
+            : list[0].id;
+      try {
+        if (nextId) sessionStorage.setItem(ACTIVE_GH_STORAGE_KEY, nextId);
+        else sessionStorage.removeItem(ACTIVE_GH_STORAGE_KEY);
+      } catch {}
+      return nextId;
+    });
+  }, []);
+
   const provisionGuestSession = useCallback(async (): Promise<boolean> => {
     const tryMode = async (mode: 'cookie' | 'memory'): Promise<boolean> => {
       try {
@@ -299,10 +316,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const list: GreenhouseSummary[] = Array.isArray(guestParsed.data.greenhouses)
           ? guestParsed.data.greenhouses
           : [];
-        setGreenhouses(list);
-        if (list.length > 0) {
-          setActiveGhState((prev) => (prev && list.some((g) => g.id === prev) ? prev : list[0].id));
-        }
+        syncActiveGreenhouseList(list);
         return true;
       } catch {
         return false;
@@ -325,7 +339,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return true;
     }
     return false;
-  }, []);
+  }, [syncActiveGreenhouseList]);
 
   const refreshSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -347,10 +361,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const list: GreenhouseSummary[] = Array.isArray(parsed.data.greenhouses)
             ? parsed.data.greenhouses
             : [];
-          setGreenhouses(list);
-          if (list.length > 0) {
-            setActiveGhState((prev) => (prev && list.some((g) => g.id === prev) ? prev : list[0].id));
-          }
+          syncActiveGreenhouseList(list);
           return true;
         }
       }
@@ -359,13 +370,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const guestOk = await provisionGuestSession();
         if (guestOk) return true;
         setUser(GUEST_PREVIEW_USER);
-        setGreenhouses([]);
+        syncActiveGreenhouseList([]);
         return true;
       }
 
       clearInMemorySessionToken();
       setUser(null);
-      setGreenhouses([]);
+      syncActiveGreenhouseList([]);
       return false;
     } catch {
       if (!AUTH_GATE_ENABLED) {

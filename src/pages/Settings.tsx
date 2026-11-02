@@ -36,6 +36,7 @@ import { formatExplicitDeviceState } from '../lib/greenhouseState';
 import { DEFAULT_CROPS, hardwareService } from '../lib/hardwareService';
 import { store, useStoreTable, useStoreValue } from '../lib/store';
 import { type ThemeMode, useTheme } from '../lib/theme';
+import { runHarvestAgentCycle } from '../agents/HarvestAgent';
 import { QrScannerModal } from '../components/QrScannerModal';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -94,6 +95,7 @@ export default function SettingsPage() {
 
   const climateAlertsOn = Boolean(useStoreValue('agent_ClimateAgent_enabled', true));
   const irrigationAlertsOn = Boolean(useStoreValue('agent_IrrigationAgent_enabled', true));
+  const visionAlertsOn = Boolean(useStoreValue('agent_VisionAgent_enabled', true));
   const safetyAlertsOn = Boolean(useStoreValue('agent_AlertAgent_enabled', true));
   const harvestForecastOn = Boolean(useStoreValue('agent_HarvestAgent_enabled', true));
 
@@ -133,6 +135,20 @@ export default function SettingsPage() {
   const [humMax, setHumMax] = useState(storeHumMax);
   const [soilMin, setSoilMin] = useState(storeSoilMin);
   const [soilMax, setSoilMax] = useState(storeSoilMax);
+
+  useEffect(() => {
+    const m = DEFAULT_CROPS.find(
+      (c) =>
+        c.id.toLowerCase() === storeCrop.toLowerCase() ||
+        c.name.toLowerCase().includes(storeCrop.toLowerCase())
+    );
+    setSelectedCropId(m ? m.id : 'custom');
+    setCustomCrop(storeCrop);
+  }, [storeCrop]);
+
+  useEffect(() => {
+    setPlantingDate(storePlantingDate);
+  }, [storePlantingDate]);
 
   // Hardware tab state (enrolled greenhouse devices)
   const [ghDevices, setGhDevices] = useState<any[]>([]);
@@ -231,12 +247,12 @@ export default function SettingsPage() {
         setHumMax(preset.humMax);
         setSoilMin(preset.soilMin);
         setSoilMax(preset.soilMax);
-        store.setValue('tempMinThreshold', String(preset.tempMin));
-        store.setValue('tempMaxThreshold', String(preset.tempMax));
-        store.setValue('humMinThreshold', String(preset.humMin));
-        store.setValue('humMaxThreshold', String(preset.humMax));
-        store.setValue('soilMinThreshold', String(preset.soilMin));
-        store.setValue('soilMaxThreshold', String(preset.soilMax));
+        store.setValue('tempMinThreshold', Number(preset.tempMin));
+        store.setValue('tempMaxThreshold', Number(preset.tempMax));
+        store.setValue('humMinThreshold', Number(preset.humMin));
+        store.setValue('humMaxThreshold', Number(preset.humMax));
+        store.setValue('soilMinThreshold', Number(preset.soilMin));
+        store.setValue('soilMaxThreshold', Number(preset.soilMax));
       }
 
       if (activeGreenhouse?.id) {
@@ -246,6 +262,7 @@ export default function SettingsPage() {
         });
         await refreshSession();
       }
+      void runHarvestAgentCycle({ force: true });
       showSaved(`Crop profile updated to ${cropLabel}.`);
     } finally {
       setBusy(false);
@@ -255,12 +272,12 @@ export default function SettingsPage() {
   // Save Environmental Targets
   const handleSaveTargets = async (e: React.FormEvent) => {
     e.preventDefault();
-    store.setValue('tempMinThreshold', String(tempMin));
-    store.setValue('tempMaxThreshold', String(tempMax));
-    store.setValue('humMinThreshold', String(humMin));
-    store.setValue('humMaxThreshold', String(humMax));
-    store.setValue('soilMinThreshold', String(soilMin));
-    store.setValue('soilMaxThreshold', String(soilMax));
+    store.setValue('tempMinThreshold', Number(tempMin));
+    store.setValue('tempMaxThreshold', Number(tempMax));
+    store.setValue('humMinThreshold', Number(humMin));
+    store.setValue('humMaxThreshold', Number(humMax));
+    store.setValue('soilMinThreshold', Number(soilMin));
+    store.setValue('soilMaxThreshold', Number(soilMax));
     try {
       if (hwConfig.mode === 'simulation') {
         await hardwareService.setCustom({ tempMin, tempMax, humMin, humMax, soilMin, soilMax });
@@ -392,7 +409,7 @@ export default function SettingsPage() {
       setTestUploadMsg(
         `Test JPEG accepted (${Math.max(1, Math.round(res.sizeBytes / 1024))} KB, ID ${res.imageId}).`
       );
-      await camera.refreshNow(false);
+      await Promise.all([camera.refreshNow(false), loadEnrolledDevices(), refreshSession()]);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Camera test upload failed.');
     } finally {
@@ -927,6 +944,12 @@ export default function SettingsPage() {
                   label: 'Soil Watering Reminders',
                   desc: 'Suggests watering cycles when root moisture drops low.',
                   enabled: irrigationAlertsOn
+                },
+                {
+                  key: 'agent_VisionAgent_enabled',
+                  label: 'Plant Camera Leaf Checks',
+                  desc: 'Inspects fresh ESP32-CAM snapshots for early leaf spots or stress.',
+                  enabled: visionAlertsOn
                 },
                 {
                   key: 'agent_AlertAgent_enabled',

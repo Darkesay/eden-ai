@@ -119,8 +119,8 @@ export function HardwareSetupGuide({ variant = "button", children }: { variant?:
                           <span className="text-blue-400">const char*</span> pass = <span className="text-green-400">"PASSWORD"</span>;
                         </div>
                         <div className="pt-2 border-t border-[#333]">
-                           <span className="text-gray-500">// Your Server URL (if using external API view)</span><br/>
-                           <span className="text-blue-400">String</span> server = <span className="text-green-400">"http://x.x.x.x:3000"</span>;
+                           <span className="text-gray-500">// Cloud HTTPS Camera Intake Endpoint</span><br/>
+                           <span className="text-blue-400">String</span> server = <span className="text-green-400">"https://edens-ai.onrender.com/api/camera/upload"</span>;
                         </div>
                     </div>
                 </div>
@@ -142,7 +142,7 @@ export function HardwareSetupGuide({ variant = "button", children }: { variant?:
                         </div>
                         <div className="flex-1">
                            <h4 className="font-bold text-sm">ESP32-CAM</h4>
-                           <p className="text-xs text-gray-500 font-mono mt-1">Live Video Stream 📸</p>
+                           <p className="text-xs text-gray-500 font-mono mt-1">Verified JPEG Snapshots 📸</p>
                         </div>
                      </div>
 
@@ -153,8 +153,8 @@ export function HardwareSetupGuide({ variant = "button", children }: { variant?:
                            <Wifi className="text-blue-400" />
                         </div>
                         <div className="flex-1">
-                           <h4 className="font-bold text-sm">Wi-Fi Router</h4>
-                           <p className="text-xs text-gray-500 font-mono mt-1">Local Network Transfer</p>
+                           <h4 className="font-bold text-sm">2.4 GHz Wi-Fi Router</h4>
+                           <p className="text-xs text-gray-500 font-mono mt-1">TLS 1.2+ Encrypted HTTPS Upload</p>
                         </div>
                      </div>
 
@@ -165,7 +165,7 @@ export function HardwareSetupGuide({ variant = "button", children }: { variant?:
                            <Server className="text-[#10B981]" />
                         </div>
                         <div className="flex-1">
-                           <h4 className="font-bold text-sm text-[#10B981]">AI Server / Dashboard</h4>
+                           <h4 className="font-bold text-sm text-[#10B981]">EDENS AI Server / Dashboard</h4>
                            <p className="text-xs text-gray-500 font-mono mt-1">Capture → Analyze → Store</p>
                         </div>
                      </div>
@@ -192,7 +192,7 @@ export function HardwareSetupGuide({ variant = "button", children }: { variant?:
                     </div>
                     <div className="flex items-center gap-2 bg-[#111] p-3 rounded-xl border border-[#222] flex-1 min-w-[150px]">
                        <span className="text-[#14B8A6] font-bold text-lg">3</span>
-                       <span className="opacity-80">Update WiFi & Server Code</span>
+                       <span className="opacity-80">Add Wi-Fi &amp; X-Camera-Key Header</span>
                     </div>
                     <div className="flex items-center gap-2 bg-[#111] p-3 rounded-xl border border-[#222] flex-1 min-w-[150px]">
                        <span className="text-[#14B8A6] font-bold text-lg">4</span>
@@ -200,7 +200,7 @@ export function HardwareSetupGuide({ variant = "button", children }: { variant?:
                     </div>
                     <div className="flex items-center gap-2 bg-[#111] p-3 rounded-xl border border-[#222] flex-1 min-w-[150px]">
                        <span className="text-[#14B8A6] font-bold text-lg">5</span>
-                       <span className="opacity-80">Open BOTANIX Dashboard</span>
+                       <span className="opacity-80">Open EDENS AI Dashboard</span>
                     </div>
                  </div>
               </div>

@@ -3,12 +3,14 @@ import { Calendar, CheckCircle2, Loader2, RefreshCw, Sparkles, Sprout, TrendingU
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { store, useStoreValue } from '../lib/store';
-import { getCropStandardDays, SUPPORTED_HARVEST_CROPS } from '../lib/crops';
+import { apiFetch, useAuth } from '../lib/auth';
+import { findSupportedCropProfile, getCropStandardDays, SUPPORTED_HARVEST_CROPS } from '../lib/crops';
 import { runHarvestAgentCycle } from '../agents/HarvestAgent';
 import type { HarvestPredictionResult } from '../lib/gemini';
 import { cn } from '../lib/utils';
 
 export function HarvestWidget() {
+  const { activeGreenhouse, refreshSession } = useAuth();
   const predictionJson = useStoreValue('harvestPrediction', '');
   const cropType = String(useStoreValue('cropType', 'Tomato') || 'Tomato');
   const plantingDate = String(
@@ -43,11 +45,27 @@ export function HarvestWidget() {
 
   const handleCropOrDateUpdate = async (nextCrop: string, nextDate: string) => {
     store.setValue('cropType', nextCrop);
+    const matchedProfile = findSupportedCropProfile(nextCrop);
+    if (matchedProfile) {
+      store.setValue('tempMinThreshold', matchedProfile.tempMin);
+      store.setValue('tempMaxThreshold', matchedProfile.tempMax);
+      store.setValue('humMinThreshold', matchedProfile.humMin);
+      store.setValue('humMaxThreshold', matchedProfile.humMax);
+      store.setValue('soilMinThreshold', matchedProfile.soilMin);
+      store.setValue('soilMaxThreshold', matchedProfile.soilMax);
+    }
     if (nextDate) {
       store.setValue('plantingDate', nextDate);
     }
     setCalculating(true);
     try {
+      if (activeGreenhouse?.id && nextCrop !== activeGreenhouse.cropType) {
+        await apiFetch(`/api/greenhouses/${activeGreenhouse.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ cropType: nextCrop })
+        }).catch(() => null);
+        await refreshSession().catch(() => false);
+      }
       await runHarvestAgentCycle({ force: true });
     } finally {
       setCalculating(false);

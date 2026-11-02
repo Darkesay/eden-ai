@@ -2,177 +2,109 @@ import { useEffect } from 'react';
 import { store } from '../lib/store';
 import { hardwareService } from '../lib/hardwareService';
 import { evaluateAgentDecision } from '../lib/gemini';
+import { resolveAgentTelemetryContext } from './agentTelemetryContext';
 
-let irrigationAgentRunning = false;
+let irrigationRunning = false;
 
 export async function runIrrigationAgentCycle(options?: { force?: boolean }): Promise<void> {
-  const isEnabled = store.getValue('agent_IrrigationAgent_enabled') ?? true;
-  if ((!isEnabled && !options?.force) || irrigationAgentRunning) return;
-  if (store.getValue('autonomousPaused') === true && !options?.force) {
-    store.setValue('agent_IrrigationAgent_status', 'PAUSED');
-    store.setValue('agent_IrrigationAgent_summary', 'Automation hold is active.');
-    return;
-  }
+  const isEnabled = store.getValue('agent_IrrigationAgent_enabled') !== false;
+  if (!isEnabled && !options?.force) return;
+  if (irrigationRunning) return;
+  irrigationRunning = true;
 
-  irrigationAgentRunning = true;
   try {
     const config = hardwareService.getConfig();
-    const dataSource = hardwareService.getDataSource();
-    const freshnessSec = hardwareService.getSensorFreshnessSeconds();
-    const nowIso = new Date().toISOString();
+    const canAutoDispatch = config.mode === 'simulation' && Boolean(store.getValue('auto_approve_agent_IrrigationAgent')) && false;
+    void canAutoDispatch;
+    const ctx = await resolveAgentTelemetryContext();
+    const isUsable =
+      ctx.dataSource === 'REAL_HARDWARE' ||
+      ctx.dataSource === 'CACHED' ||
+      ctx.dataSource === 'SIMULATED';
 
-    // Safety Rule 1: Never evaluate on stale (>45s) or disconnected telemetry.
-    if (dataSource === 'DISCONNECTED' || dataSource === 'STALE' || freshnessSec > 45) {
-      const msg =
-        dataSource === 'DISCONNECTED'
-          ? 'Standing by — waiting for fresh Main ESP32 soil moisture and water tank readings (or enable Practice Mode).'
-          : `Telemetry is ${dataSource.toLowerCase()} (${freshnessSec}s old). Irrigation advisory suspended for crop safety.`;
-      store.setValue('agent_IrrigationAgent_lastRun', nowIso);
-      store.setValue('agent_IrrigationAgent_status', 'STANDBY');
-      store.setValue('agent_IrrigationAgent_summary', msg);
-      store.setRow('activityLog', Date.now().toString() + 'ia', {
-        timestamp: nowIso,
-        type: 'agent',
-        message: `Irrigation Agent: ${msg}`
-      });
+    if (!isUsable || ctx.soilMoisture === null) {
+      store.setValue('agent_IrrigationAgent_status', 'STANDBY_OFFLINE');
+      store.setValue(
+        'agent_IrrigationAgent_summary',
+        ctx.dataSource === 'STALE'
+          ? 'Standby — soil moisture reading is delayed (>45s). Waiting for fresh controller update.'
+          : 'Standby — soil moisture telemetry is offline. Connect your controller or enable Practice Mode.'
+      );
+      store.setValue('agent_IrrigationAgent_lastRun', new Date().toISOString());
       return;
     }
 
-    const soilAvailable =
-      config.mode === 'simulation' || store.getValue('hardware_soilMoistureAvailable') !== false;
-    const rawSoil = store.getValue('soilMoisture');
-    if (!soilAvailable || rawSoil === undefined || rawSoil === null || !Number.isFinite(Number(rawSoil))) {
-      const msg = 'Soil moisture sensor reading is unavailable — refusing to fabricate watering advice.';
-      store.setValue('agent_IrrigationAgent_lastRun', nowIso);
-      store.setValue('agent_IrrigationAgent_status', 'STANDBY');
-      store.setValue('agent_IrrigationAgent_summary', msg);
-      store.setRow('activityLog', Date.now().toString() + 'ia', {
-        timestamp: nowIso,
-        type: 'agent',
-        message: `Irrigation Agent: ${msg}`
-      });
-      return;
-    }
+    const soilMin = Number(store.getValue('soilMinThreshold')) || 45;
+    const soilMax = Number(store.getValue('soilMaxThreshold')) || 65;
 
-    const soilMoisture = Number(rawSoil);
-    const rain = store.getValue('rain') === true;
-    const tempAvailable =
-      config.mode === 'simulation' || store.getValue('hardware_temperatureAvailable') !== false;
-    const rawTemp = store.getValue('temperature');
-    const temp =
-      tempAvailable && rawTemp !== undefined && rawTemp !== null && Number.isFinite(Number(rawTemp))
-        ? Number(rawTemp)
-        : null;
-
-    const waterAvailable =
-      config.mode === 'simulation' || store.getValue('hardware_waterLevelAvailable') !== false;
-    const rawWater = store.getValue('waterLevel');
-    const waterLevel =
-      waterAvailable && rawWater !== undefined && rawWater !== null && Number.isFinite(Number(rawWater))
-        ? Number(rawWater)
-        : null;
-
-    const activeCrop = (store.getValue('cropType') as string) || 'Tomato';
-    const waterLowLocked =
-      store.getValue('hardware_waterLowLocked') === true || (waterLevel !== null && waterLevel < 10);
-
-    // Safety Rule 2: Physical Reservoir Interlock (including exact 0% reservoir reading)
-    if (waterLowLocked) {
-      const msg = `Water tank critically low (${waterLevel !== null ? `${waterLevel}%` : '<10%'}). Drip pump locked OFF to prevent dry-run damage.`;
-      store.setValue('agent_IrrigationAgent_lastRun', nowIso);
+    if (ctx.waterLevel !== null && ctx.waterLevel < 10) {
+      const msg = `Water tank critically low (${Math.round(ctx.waterLevel)}%). Refill reservoir before running irrigation pump.`;
       store.setValue('agent_IrrigationAgent_status', 'ALERT');
       store.setValue('agent_IrrigationAgent_summary', msg);
-      store.setRow('activityLog', Date.now().toString() + 'ia', {
-        timestamp: nowIso,
-        type: 'alert',
-        message: `Irrigation Agent: ${msg}`
-      });
-      return;
-    }
-
-    // Safety Rule 3: Do not irrigate if rain is actively detected
-    if (rain) {
-      const msg = 'Rain detected by weather sensor. Irrigation suspended to prevent waterlogging and root rot.';
-      store.setValue('agent_IrrigationAgent_lastRun', nowIso);
-      store.setValue('agent_IrrigationAgent_status', 'ADVISORY_READY');
-      store.setValue('agent_IrrigationAgent_summary', msg);
-      store.setRow('activityLog', Date.now().toString() + 'ia', {
-        timestamp: nowIso,
-        type: 'agent',
-        message: `Irrigation Agent: ${msg}`
-      });
-      return;
-    }
-
-    const result = await evaluateAgentDecision<{ pump: string; duration: number; reason: string }>(
-      'irrigation',
-      {
-        soilMoisture,
-        rain,
-        temperature: temp,
-        waterLevel,
-        activeCrop,
-        dataSource
-      }
-    );
-
-    if (result) {
-      let targetPump = result.pump;
-      const safeDuration = Math.min(120, Math.max(0, result.duration || 0));
-
-      if (waterLowLocked && targetPump === 'ON') {
-        targetPump = 'OFF';
-        result.reason += ' (Blocked by physical water reservoir safety interlock)';
-      }
-
-      if (rain && targetPump === 'ON') {
-        targetPump = 'OFF';
-        result.reason += ' (Blocked: rain detected)';
-      }
-
-      // Phase 8 Safety: Physical hardware operates strictly in Read-Only / Advisory Only mode.
-      const canAutoDispatch = config.mode === 'simulation';
-      if (canAutoDispatch) {
-        if (targetPump === 'ON') {
-          await hardwareService.setOverride('pump', 'on', safeDuration);
-        } else {
-          await hardwareService.setOverride('pump', 'off');
-        }
-      }
-
-      const summary = `Pump: ${targetPump}${targetPump === 'ON' ? ` (${safeDuration}s)` : ''} — ${result.reason}`;
       store.setValue('agent_IrrigationAgent_lastRun', new Date().toISOString());
-      store.setValue('agent_IrrigationAgent_status', 'ADVISORY_READY');
-      store.setValue('agent_IrrigationAgent_summary', summary);
-      store.setRow('activityLog', Date.now().toString() + 'ia', {
+      return;
+    }
+
+    const decision = await evaluateAgentDecision('irrigation', {
+      soilMoisture: ctx.soilMoisture,
+      temperature: ctx.temperature ?? 25,
+      humidity: ctx.humidity ?? 60,
+      rain: ctx.rain ?? false,
+      waterLevel: ctx.waterLevel ?? 75,
+      cropType: ctx.cropType,
+      soilMin,
+      soilMax,
+      dataSource: ctx.dataSource
+    });
+
+    const sourceTag = ctx.dataSource === 'SIMULATED' ? '[Practice Mode] ' : '';
+    const shouldIrrigate = Boolean(decision?.irrigate);
+    const safeDuration = Math.min(Number(decision?.durationSeconds) || 30, 120);
+    const summaryText = shouldIrrigate
+      ? `${sourceTag}Recommended ${safeDuration}s drip cycle: ${decision?.reason || 'Root-zone moisture is below target.'}`
+      : `${sourceTag}${decision?.reason || `Soil moisture (${Math.round(ctx.soilMoisture)}%) is healthy within ${soilMin}–${soilMax}%.`}`;
+
+    store.setValue('agent_IrrigationAgent_status', shouldIrrigate ? 'ALERT' : 'ADVISORY_READY');
+    store.setValue('agent_IrrigationAgent_summary', summaryText);
+    store.setValue('agent_IrrigationAgent_lastRun', new Date().toISOString());
+
+    if (shouldIrrigate) {
+      const id = Date.now().toString();
+      store.setRow('activityLog', id, {
         timestamp: new Date().toISOString(),
         type: 'agent',
-        message: `Irrigation Agent (${dataSource}${canAutoDispatch ? '' : ' · Advisory Only'}): ${summary}`
+        message: `${sourceTag}Irrigation Agent Advisory: ${decision?.reason || 'Soil dry'} (Recommended manual watering: ${safeDuration}s; pump was NOT triggered automatically.)`
       });
     }
-  } catch (err: any) {
-    console.warn('IrrigationAgent evaluation skipped:', err.message);
-    store.setValue('agent_IrrigationAgent_status', 'STANDBY');
-    store.setValue(
-      'agent_IrrigationAgent_summary',
-      `Waiting for next watering evaluation (${err?.message || 'check connection'}).`
-    );
+  } catch (e: any) {
+    console.warn('IrrigationAgent advisory error:', e?.message || e);
+    store.setValue('agent_IrrigationAgent_status', 'ERROR');
   } finally {
-    irrigationAgentRunning = false;
+    irrigationRunning = false;
   }
 }
 
-export function useIrrigationAgent() {
+/**
+ * IrrigationAgent — Advisory-Only Watering Monitor
+ *
+ * SAFETY POLICY: Never starts water pumps automatically. Writes advisory watering
+ * recommendations based on verified or simulated soil moisture and reservoir level.
+ */
+export function IrrigationAgent() {
   useEffect(() => {
+    const initialTimer = setTimeout(() => {
+      void runIrrigationAgentCycle();
+    }, 3500);
     const interval = setInterval(() => {
       void runIrrigationAgentCycle();
-    }, 180000);
-    const timeout = setTimeout(() => {
-      void runIrrigationAgentCycle();
-    }, 5500);
+    }, 45000);
     return () => {
+      clearTimeout(initialTimer);
       clearInterval(interval);
-      clearTimeout(timeout);
     };
   }, []);
+
+  return null;
 }
+
+export const useIrrigationAgent = IrrigationAgent;

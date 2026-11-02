@@ -2,133 +2,107 @@ import { useEffect } from 'react';
 import { store } from '../lib/store';
 import { hardwareService } from '../lib/hardwareService';
 import { evaluateAgentDecision } from '../lib/gemini';
+import { resolveAgentTelemetryContext } from './agentTelemetryContext';
 
-let climateAgentRunning = false;
+let climateRunning = false;
 
 export async function runClimateAgentCycle(options?: { force?: boolean }): Promise<void> {
-  const isEnabled = store.getValue('agent_ClimateAgent_enabled') ?? true;
-  if ((!isEnabled && !options?.force) || climateAgentRunning) return;
-  if (store.getValue('autonomousPaused') === true && !options?.force) {
-    store.setValue('agent_ClimateAgent_status', 'PAUSED');
-    store.setValue('agent_ClimateAgent_summary', 'Automation hold is active.');
-    return;
-  }
+  const isEnabled = store.getValue('agent_ClimateAgent_enabled') !== false;
+  if (!isEnabled && !options?.force) return;
+  if (climateRunning) return;
+  climateRunning = true;
 
-  climateAgentRunning = true;
   try {
     const config = hardwareService.getConfig();
-    const dataSource = hardwareService.getDataSource();
-    const freshnessSec = hardwareService.getSensorFreshnessSeconds();
-    const nowIso = new Date().toISOString();
+    const canAutoDispatch = config.mode === 'simulation' && Boolean(store.getValue('auto_approve_agent_ClimateAgent')) && false;
+    void canAutoDispatch;
+    const ctx = await resolveAgentTelemetryContext();
+    const isUsable =
+      ctx.dataSource === 'REAL_HARDWARE' ||
+      ctx.dataSource === 'CACHED' ||
+      ctx.dataSource === 'SIMULATED';
 
-    // Safety Rule: Never evaluate or dispatch actuator commands on disconnected or stale telemetry (>45s).
-    if (dataSource === 'DISCONNECTED' || dataSource === 'STALE' || freshnessSec > 45) {
-      const msg =
-        dataSource === 'DISCONNECTED'
-          ? 'Standing by — waiting for fresh Main ESP32 temperature and humidity check-in (or enable Practice Mode in Settings).'
-          : `Telemetry is ${dataSource.toLowerCase()} (${freshnessSec}s old). Climate advisory paused until a fresh reading arrives.`;
-      store.setValue('agent_ClimateAgent_lastRun', nowIso);
-      store.setValue('agent_ClimateAgent_status', 'STANDBY');
-      store.setValue('agent_ClimateAgent_summary', msg);
-      store.setRow('activityLog', Date.now().toString() + 'ca', {
-        timestamp: nowIso,
-        type: 'agent',
-        message: `Climate Agent: ${msg}`
-      });
-      return;
-    }
-
-    const tempAvailable =
-      config.mode === 'simulation' || store.getValue('hardware_temperatureAvailable') !== false;
-    const humAvailable =
-      config.mode === 'simulation' || store.getValue('hardware_humidityAvailable') !== false;
-    const rawTemp = store.getValue('temperature');
-    const rawHum = store.getValue('humidity');
-
-    if (!tempAvailable || rawTemp === undefined || rawTemp === null || !Number.isFinite(Number(rawTemp))) {
-      const msg = 'Temperature sensor reading is unavailable — refusing to guess climate settings.';
-      store.setValue('agent_ClimateAgent_lastRun', nowIso);
-      store.setValue('agent_ClimateAgent_status', 'STANDBY');
-      store.setValue('agent_ClimateAgent_summary', msg);
-      store.setRow('activityLog', Date.now().toString() + 'ca', {
-        timestamp: nowIso,
-        type: 'agent',
-        message: `Climate Agent: ${msg}`
-      });
-      return;
-    }
-
-    const temp = Number(rawTemp);
-    const humidity =
-      humAvailable && rawHum !== undefined && rawHum !== null && Number.isFinite(Number(rawHum))
-        ? Number(rawHum)
-        : null;
-    const activeCrop = (store.getValue('cropType') as string) || 'Tomato';
-    const thermalLocked = store.getValue('hardware_thermalLocked') === true || temp > 32;
-
-    const result = await evaluateAgentDecision<{ fan: string; heater: string; reason: string }>(
-      'climate',
-      {
-        temperature: temp,
-        humidity,
-        activeCrop,
-        dataSource,
-        thermalLocked
-      }
-    );
-
-    if (result) {
-      let targetHeater = result.heater;
-      if (thermalLocked && targetHeater === 'ON') {
-        targetHeater = 'OFF';
-        result.reason += ' (Heater forced OFF by >32°C hardware thermal interlock)';
-      }
-
-      // Phase 8 Safety: Physical hardware operates strictly in Read-Only / Advisory Only mode.
-      // Autonomous actuation only runs inside explicitly labeled Simulation Mode.
-      const canAutoDispatch = config.mode === 'simulation';
-      if (canAutoDispatch) {
-        if (result.fan) {
-          await hardwareService.setOverride('fan', result.fan === 'ON' ? 'on' : 'off');
-        }
-        if (targetHeater) {
-          await hardwareService.setOverride('heater', targetHeater === 'ON' ? 'on' : 'off');
-        }
-      }
-
-      const summary = `Fan: ${result.fan} · Heater: ${targetHeater} — ${result.reason}`;
+    if (!isUsable || ctx.temperature === null || ctx.humidity === null) {
+      store.setValue('agent_ClimateAgent_status', 'STANDBY_OFFLINE');
+      store.setValue(
+        'agent_ClimateAgent_summary',
+        ctx.dataSource === 'STALE'
+          ? 'Standby — sensor reading is delayed (>45s). Waiting for fresh controller update.'
+          : 'Standby — sensor telemetry is offline. Connect your greenhouse controller or enable Practice Mode.'
+      );
       store.setValue('agent_ClimateAgent_lastRun', new Date().toISOString());
-      store.setValue('agent_ClimateAgent_status', 'ADVISORY_READY');
-      store.setValue('agent_ClimateAgent_summary', summary);
-      store.setRow('activityLog', Date.now().toString() + 'ca', {
+      return;
+    }
+
+    const tempMin = Number(store.getValue('tempMinThreshold')) || 18;
+    const tempMax = Number(store.getValue('tempMaxThreshold')) || 28;
+    const humMin = Number(store.getValue('humMinThreshold')) || 50;
+    const humMax = Number(store.getValue('humMaxThreshold')) || 75;
+
+    const decision = await evaluateAgentDecision('climate', {
+      temperature: ctx.temperature,
+      humidity: ctx.humidity,
+      light: ctx.light ?? 500,
+      rain: ctx.rain ?? false,
+      cropType: ctx.cropType,
+      tempMin,
+      tempMax,
+      humMin,
+      humMax,
+      dataSource: ctx.dataSource
+    });
+
+    let safeActionText = String(decision?.reason || 'Canopy temperature and humidity are within safe range.');
+    let needsAttention = Boolean(decision?.actionRequired);
+
+    // Hardware safety interlock: never suggest heating when temperature > 32°C
+    if (decision?.heater && ctx.temperature > 32) {
+      safeActionText = `Thermal lock active (${ctx.temperature.toFixed(1)}°C > 32°C): heater stays OFF; open vents or run circulation fans.`;
+      needsAttention = true;
+    }
+
+    const sourceTag = ctx.dataSource === 'SIMULATED' ? '[Practice Mode] ' : '';
+    store.setValue('agent_ClimateAgent_status', needsAttention ? 'ALERT' : 'ADVISORY_READY');
+    store.setValue('agent_ClimateAgent_summary', `${sourceTag}${safeActionText}`);
+    store.setValue('agent_ClimateAgent_lastRun', new Date().toISOString());
+
+    if (needsAttention) {
+      const id = Date.now().toString();
+      store.setRow('activityLog', id, {
         timestamp: new Date().toISOString(),
         type: 'agent',
-        message: `Climate Agent (${dataSource}${canAutoDispatch ? '' : ' · Advisory Only'}): ${summary}`
+        message: `${sourceTag}Climate Agent Advisory: ${safeActionText} (No automatic equipment actuation performed.)`
       });
     }
-  } catch (err: any) {
-    console.warn('ClimateAgent evaluation skipped:', err.message);
-    store.setValue('agent_ClimateAgent_status', 'STANDBY');
-    store.setValue(
-      'agent_ClimateAgent_summary',
-      `Waiting for next climate evaluation (${err?.message || 'check connection'}).`
-    );
+  } catch (e: any) {
+    console.warn('ClimateAgent advisory error:', e?.message || e);
+    store.setValue('agent_ClimateAgent_status', 'ERROR');
   } finally {
-    climateAgentRunning = false;
+    climateRunning = false;
   }
 }
 
-export function useClimateAgent() {
+/**
+ * ClimateAgent — Advisory-Only Agronomic Monitor
+ *
+ * SAFETY POLICY: Never triggers physical relays, fans, heaters, or roof vents autonomously.
+ * Evaluates verified or simulated telemetry and writes plain-language recommendations.
+ */
+export function ClimateAgent() {
   useEffect(() => {
+    const initialTimer = setTimeout(() => {
+      void runClimateAgentCycle();
+    }, 2500);
     const interval = setInterval(() => {
       void runClimateAgentCycle();
-    }, 60000);
-    const timeout = setTimeout(() => {
-      void runClimateAgentCycle();
-    }, 3500);
+    }, 30000);
     return () => {
+      clearTimeout(initialTimer);
       clearInterval(interval);
-      clearTimeout(timeout);
     };
   }, []);
+
+  return null;
 }
+
+export const useClimateAgent = ClimateAgent;
