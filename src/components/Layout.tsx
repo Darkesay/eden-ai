@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Outlet, NavLink, Link, useNavigate, useLocation } from 'react-router-dom';
 import {
+  ArrowLeft,
   Camera,
   ChevronRight,
   Home,
@@ -95,6 +96,18 @@ export default function Layout() {
   const { resolvedTheme, toggleTheme } = useTheme();
   const [forceTour, setForceTour] = useState(false);
 
+  // Back navigation: the header back button returns to the page visited before
+  // the current one. It mirrors the browser's history entry index, so it arms
+  // only when an earlier page exists — and disarms again at the first page.
+  const [canGoBack, setCanGoBack] = useState(
+    () => Number((window.history.state as { idx?: number } | null)?.idx ?? 0) > 0
+  );
+
+  useEffect(() => {
+    const idx = Number((window.history.state as { idx?: number } | null)?.idx ?? 0);
+    setCanGoBack(idx > 0);
+  }, [location.pathname, location.search]);
+
   useEffect(() => {
     const handleReplay = () => setForceTour(true);
     window.addEventListener('replay-tour', handleReplay);
@@ -108,6 +121,11 @@ export default function Layout() {
   const handleLogout = async () => {
     await logout();
     navigate('/login');
+  };
+
+  const handleBack = () => {
+    if (!canGoBack) return;
+    navigate(-1);
   };
 
   const breadcrumb = getBreadcrumbLabel(location.pathname, activeGreenhouse?.name);
@@ -249,8 +267,19 @@ export default function Layout() {
       <div className="flex-1 min-w-0 flex flex-col pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-0">
         {/* Top Bar (Compact <= 56px on mobile, 64px on desktop) */}
         <header className="sticky top-0 z-30 h-14 md:h-16 bg-card/95 backdrop-blur-sm border-b border-border px-3.5 sm:px-6 md:px-8 flex items-center justify-between gap-2">
-          {/* Left: Mobile Brand OR Desktop Breadcrumb */}
+          {/* Left: Back Button, Mobile Brand OR Desktop Breadcrumb */}
           <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={handleBack}
+              disabled={!canGoBack}
+              title="Back to previous page"
+              aria-label="Back to previous page"
+              className="shrink-0 h-9 w-9 md:h-10 md:w-10 rounded-lg border border-border bg-background hover:bg-muted text-foreground inline-flex items-center justify-center transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default disabled:hover:bg-background"
+            >
+              <ArrowLeft size={17} />
+            </button>
+
             <Link to="/" className="md:hidden flex items-center gap-2 min-w-0 shrink-0">
               <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
                 <Sprout size={17} />
