@@ -34,6 +34,7 @@ import { base64PcmToWavUrl, playAudioUrl, speakWithBrowserTts, stopAllAudio } fr
 import { formatRelativeAge } from '../lib/greenhouseState';
 import { store, useStoreTable, useStoreValue } from '../lib/store';
 import { LeafCameraModal } from '../components/LeafCameraModal';
+import { MonitoringModeBanner } from '../components/MonitoringModeBanner';
 import { prepareImageForDiagnosis } from '../lib/imageUtils';
 import { Button } from '../components/ui/button';
 import { cn } from '../lib/utils';
@@ -66,7 +67,27 @@ export default function PlantVision() {
   const [speakingReport, setSpeakingReport] = useState(false);
   const [loadingSpeech, setLoadingSpeech] = useState(false);
 
+  // Saved Existing HTTP Camera quick-capture state
+  const [savedHttpPhotoUrl, setSavedHttpPhotoUrl] = useState<string>('');
+  const [httpDirectSupported, setHttpDirectSupported] = useState<boolean>(false);
+  const [capturingHttpFrame, setCapturingHttpFrame] = useState<boolean>(false);
+
   const aiHistoryTable = useStoreTable('ai_history') || {};
+
+  const fetchSavedHttpCameraState = useCallback(async () => {
+    try {
+      const qs = activeGreenhouse?.id
+        ? `?greenhouseId=${encodeURIComponent(activeGreenhouse.id)}`
+        : '';
+      const res = await apiFetch(`/api/hardware-http/state${qs}`);
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok || !parsed.data?.success) return;
+      setSavedHttpPhotoUrl(parsed.data.savedCamera?.photoUrl || '');
+      setHttpDirectSupported(Boolean(parsed.data.environment?.localDirectHttpSupported));
+    } catch {
+      // Ignore transient state errors
+    }
+  }, [activeGreenhouse?.id]);
 
   const fetchGreenhouseCamera = useCallback(async () => {
     if (!activeGreenhouse?.id) {
@@ -90,6 +111,7 @@ export default function PlantVision() {
 
   useEffect(() => {
     void fetchGreenhouseCamera();
+    void fetchSavedHttpCameraState();
     const timer = window.setInterval(() => {
       void fetchGreenhouseCamera();
     }, 10000);
@@ -97,11 +119,46 @@ export default function PlantVision() {
       window.clearInterval(timer);
       stopAllAudio();
     };
-  }, [fetchGreenhouseCamera]);
+  }, [fetchGreenhouseCamera, fetchSavedHttpCameraState]);
 
   const handleRefreshSnapshot = async () => {
     setAnalysisError(null);
-    await Promise.all([camera.refreshNow(false), fetchGreenhouseCamera()]);
+    await Promise.all([
+      camera.refreshNow(false),
+      fetchGreenhouseCamera(),
+      fetchSavedHttpCameraState()
+    ]);
+  };
+
+  const handleCaptureHttpCamera = async () => {
+    if (!savedHttpPhotoUrl || !httpDirectSupported) return;
+    setCapturingHttpFrame(true);
+    setAnalysisError(null);
+    setManualPhotoDataUrl(null);
+    setManualPhotoName('');
+    try {
+      const res = await apiFetch('/api/hardware-http/camera/capture', {
+        method: 'POST',
+        body: JSON.stringify({
+          greenhouseId: activeGreenhouse?.id || undefined,
+          photoUrl: savedHttpPhotoUrl
+        })
+      });
+      const parsed = await parseApiJsonResponse<any>(res);
+      if (!parsed.ok || !parsed.data?.success) {
+        setAnalysisError(
+          !parsed.ok
+            ? parsed.message
+            : parsed.data?.message || 'Could not capture a live JPEG from the HTTP camera.'
+        );
+        return;
+      }
+      await Promise.all([camera.refreshNow(false), fetchGreenhouseCamera()]);
+    } catch (err: any) {
+      setAnalysisError(err?.message || 'HTTP camera capture failed.');
+    } finally {
+      setCapturingHttpFrame(false);
+    }
   };
 
   // Resolve active greenhouse camera frame vs global cameraConnectionManager frame
@@ -161,13 +218,17 @@ export default function PlantVision() {
 
       const langName =
         NIGERIAN_LANGUAGES.find((l) => l.id === selectedLangId)?.name || 'English';
+      const resolvedOriginLabel =
+        result.imageOriginLabel === 'UPLOADED_TEST_IMAGE' || Boolean(manualPhotoDataUrl)
+          ? 'UPLOADED TEST IMAGE'
+          : 'REAL CAMERA IMAGE';
       store.setRow('ai_history', `${Date.now()}`, {
-        timestamp: new Date().toISOString(),
+        timestamp: result.capturedAt || new Date().toISOString(),
         species: result.species,
         healthStatus: result.healthStatus,
         recommendation: result.recommendation,
         language: langName,
-        source: manualPhotoDataUrl ? 'Uploaded Photo' : 'Greenhouse Camera'
+        source: resolvedOriginLabel
       });
 
       if (hasEnrolledGh) {
@@ -328,12 +389,29 @@ export default function PlantVision() {
             </select>
           </div>
 
+          {savedHttpPhotoUrl && httpDirectSupported && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleCaptureHttpCamera}
+              disabled={capturingHttpFrame || analyzing}
+              className="h-10 px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              {capturingHttpFrame ? (
+                <Loader2 size={14} className="mr-1.5 animate-spin" />
+              ) : (
+                <Camera size={14} className="mr-1.5 text-primary" />
+              )}
+              Capture HTTP Camera
+            </Button>
+          )}
+
           <Button
             type="button"
             variant="outline"
             onClick={handleRefreshSnapshot}
             disabled={camera.isRefreshing || loadingGhCam}
-            className="h-10 px-3.5 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
+            className="h-10 px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
           >
             <RefreshCw
               size={14}
@@ -344,52 +422,65 @@ export default function PlantVision() {
         </div>
       </div>
 
+      <MonitoringModeBanner />
+
       {/* Main Two-Column Inspection Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-start">
         {/* Left: Snapshot Preview & Action Controls */}
         <section className="lg:col-span-7 rounded-2xl border border-border bg-card p-4 sm:p-6 shadow-xs space-y-4">
-          {/* Explicit Camera Connection, Freshness & Snapshot Mode Strip */}
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <div className="flex flex-wrap items-center gap-2">
+          {/* Explicit Camera Connection, Freshness & Image Provenance Strip */}
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs pb-2 border-b border-border">
+            <div className="flex flex-wrap items-center gap-2 font-mono tabular-nums">
               {manualPhotoDataUrl ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-primary/30 bg-accent text-accent-foreground font-semibold">
-                  <ImageUp size={13} />
-                  Phone / Device Leaf Photo Selected
-                </span>
+                <>
+                  <span className="font-semibold text-amber-800 dark:text-amber-300">
+                    UPLOADED TEST IMAGE
+                  </span>
+                  <span aria-hidden="true" className="text-muted-foreground">·</span>
+                  <span className="text-muted-foreground">Manual Device File</span>
+                </>
               ) : (
                 <>
                   <span
                     className={cn(
-                      'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-semibold',
+                      'inline-flex items-center gap-1.5 font-semibold',
                       cameraConnected
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/45 dark:border-emerald-800/60 dark:text-emerald-300'
-                        : 'bg-muted border-border text-muted-foreground'
+                        ? 'text-emerald-800 dark:text-emerald-300'
+                        : 'text-muted-foreground'
                     )}
                   >
                     {cameraConnected ? <Wifi size={13} /> : <WifiOff size={13} />}
-                    {cameraConnected ? 'Camera Connected' : 'Camera Offline'}
+                    {cameraConnected ? 'CONNECTED' : 'OFFLINE'}
                   </span>
-
                   {snapshotExists && (
-                    <span
-                      className={cn(
-                        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-semibold',
-                        snapshotIsFresh
-                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/45 dark:border-emerald-800/60 dark:text-emerald-300'
-                          : 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/45 dark:border-amber-800/60 dark:text-amber-300'
-                      )}
-                    >
-                      {snapshotIsFresh ? <FileCheck size={13} /> : <AlertTriangle size={13} />}
-                      {snapshotIsFresh ? 'Fresh Snapshot (≤90s)' : 'Outdated Snapshot (>90s)'}
-                    </span>
+                    <>
+                      <span aria-hidden="true" className="text-muted-foreground">·</span>
+                      <span className="font-semibold text-emerald-800 dark:text-emerald-300">
+                        REAL CAMERA IMAGE
+                      </span>
+                      <span aria-hidden="true" className="text-muted-foreground">·</span>
+                      <span
+                        className={cn(
+                          'font-medium',
+                          snapshotIsFresh
+                            ? 'text-emerald-800 dark:text-emerald-300'
+                            : 'text-amber-800 dark:text-amber-300'
+                        )}
+                      >
+                        {snapshotIsFresh ? 'Fresh Snapshot (≤90s)' : 'Outdated Snapshot (>90s)'}
+                      </span>
+                    </>
                   )}
                 </>
               )}
             </div>
 
-            <span className="text-[11px] font-medium text-muted-foreground">
-              Uploaded Photograph — Not Live Video
-            </span>
+            <Link
+              to="/settings?tab=hardware"
+              className="text-xs font-semibold text-primary hover:underline underline-offset-4 whitespace-nowrap shrink-0"
+            >
+              CONNECT EXISTING HARDWARE
+            </Link>
           </div>
 
           {/* Image Viewport */}
@@ -580,17 +671,41 @@ export default function PlantVision() {
 
           {analysisResult ? (
             <div className="space-y-4 text-sm">
+              {/* Explicit Image Provenance & Capture Timestamp Metadata */}
+              <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums text-muted-foreground pb-2 border-b border-border">
+                <span
+                  className={cn(
+                    'font-semibold',
+                    analysisResult.imageOriginLabel === 'UPLOADED_TEST_IMAGE' || Boolean(manualPhotoDataUrl)
+                      ? 'text-amber-800 dark:text-amber-300'
+                      : 'text-emerald-800 dark:text-emerald-300'
+                  )}
+                >
+                  {analysisResult.imageOriginLabel === 'UPLOADED_TEST_IMAGE' || Boolean(manualPhotoDataUrl)
+                    ? 'UPLOADED TEST IMAGE'
+                    : 'REAL CAMERA IMAGE'}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>
+                  {analysisResult.capturedAt
+                    ? `Captured ${new Date(analysisResult.capturedAt).toLocaleString()}`
+                    : !manualPhotoDataUrl && snapshotTimestamp
+                      ? `Captured ${new Date(snapshotTimestamp).toLocaleString()}`
+                      : 'Manual file inspection'}
+                </span>
+              </div>
+
               <div className="rounded-xl bg-muted/50 p-4 space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-muted-foreground">Plant Identified</span>
                   <span
                     className={cn(
-                      'text-xs font-semibold px-2.5 py-0.5 rounded border',
+                      'text-xs font-semibold',
                       analysisResult.healthStatus.toLowerCase().includes('healthy')
-                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60'
+                        ? 'text-emerald-800 dark:text-emerald-300'
                         : analysisResult.healthStatus.toLowerCase().includes('diseas')
-                          ? 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/45 dark:text-red-300 dark:border-red-800/60'
-                          : 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/45 dark:text-amber-300 dark:border-amber-800/60'
+                          ? 'text-red-700 dark:text-red-400'
+                          : 'text-amber-800 dark:text-amber-300'
                     )}
                   >
                     {analysisResult.healthStatus}
@@ -607,31 +722,55 @@ export default function PlantVision() {
 
               <div className="space-y-3 text-xs leading-relaxed">
                 <div>
-                  <h3 className="font-semibold text-foreground mb-1">What EDENS AI Observed</h3>
+                  <h3 className="font-semibold text-foreground mb-1">Diagnosis &amp; Observed Symptoms</h3>
                   <p className="text-muted-foreground">{analysisResult.symptoms}</p>
                 </div>
 
                 <div className="pt-2 border-t border-border">
-                  <h3 className="font-semibold text-foreground mb-1">Likely Root Cause</h3>
-                  <p className="text-muted-foreground">{analysisResult.cause}</p>
+                  <h3 className="font-semibold text-foreground mb-1">Possible Causes</h3>
+                  {Array.isArray(analysisResult.possibleCauses) &&
+                  analysisResult.possibleCauses.length > 0 ? (
+                    <ul className="list-disc pl-4 space-y-1 text-muted-foreground">
+                      {analysisResult.possibleCauses.map((causeItem, idx) => (
+                        <li key={idx}>{causeItem}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-muted-foreground">{analysisResult.cause}</p>
+                  )}
                 </div>
 
                 <div className="pt-2 border-t border-border">
                   <h3 className="font-semibold text-foreground mb-1 flex items-center gap-1.5">
                     <CheckCircle2 size={14} className="text-primary" />
-                    Step-by-Step Treatment &amp; Organic Remedies
+                    Recommended Actions
                   </h3>
-                  <p className="text-foreground font-medium whitespace-pre-line">
-                    {analysisResult.recommendation}
-                  </p>
+                  {Array.isArray(analysisResult.recommendedActions) &&
+                  analysisResult.recommendedActions.length > 0 ? (
+                    <ol className="list-decimal pl-4 space-y-1 text-foreground font-medium">
+                      {analysisResult.recommendedActions.map((actItem, idx) => (
+                        <li key={idx}>{actItem}</li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="text-foreground font-medium whitespace-pre-line">
+                      {analysisResult.recommendation}
+                    </p>
+                  )}
                 </div>
               </div>
 
-              <div className="rounded-xl bg-muted/40 border border-border p-3 text-[11px] text-muted-foreground flex items-start gap-2">
-                <Info size={14} className="shrink-0 mt-0.5 text-primary" />
-                <span>
+              <div className="rounded-xl bg-muted/40 border border-border p-3 text-[11px] text-muted-foreground space-y-1.5">
+                <div className="flex items-start gap-2">
+                  <Info size={14} className="shrink-0 mt-0.5 text-primary" />
+                  <span>
+                    {analysisResult.confidenceNote ||
+                      'Confidence percentage omitted: visual LLM plant inspection is not calibrated as a statistical probability.'}
+                  </span>
+                </div>
+                <p className="pl-5">
                   Camera photos show surface symptoms only. Check the underside of leaves, stems, and root moisture in person before applying sprays or fertilizers.
-                </span>
+                </p>
               </div>
             </div>
           ) : (

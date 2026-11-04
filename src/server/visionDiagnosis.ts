@@ -137,6 +137,7 @@ export function createVisionDiagnosisHandler(deps: {
 
     const {
       image,
+      imageBase64,
       useLatestCameraFrame = false,
       requireFresh = true,
       source,
@@ -162,22 +163,27 @@ export function createVisionDiagnosisHandler(deps: {
     let cameraFrameMeta: {
       id: string;
       timestamp: string;
+      capturedAt: string;
       ageSeconds: number;
       freshness: string;
       dataSource: string;
+      acquisitionMethod: string;
     } | null = null;
 
+    const rawProvidedImage = image ?? imageBase64;
     if (
       useLatestCameraFrame ||
-      (typeof image === 'string' &&
-        (image.startsWith('/api/camera/latest.jpg') || image.includes('/camera/latest.jpg')))
+      String(source || '').toUpperCase() === 'LATEST_CAMERA_FRAME' ||
+      (typeof rawProvidedImage === 'string' &&
+        (rawProvidedImage.startsWith('/api/camera/latest.jpg') ||
+          rawProvidedImage.includes('/camera/latest.jpg')))
     ) {
       const latest = activeStore.getLatest();
       if (!latest || !latest.frame.buffer || latest.frame.buffer.length === 0) {
         return res.status(404).json({
           error: 'NO_CAMERA_FRAME',
           message:
-            'No ESP32-CAM photograph is currently stored on the server. Ensure the greenhouse ESP32-CAM is powered on and uploading frames to POST /api/camera/upload.'
+            'No ESP32-CAM photograph is currently stored on the server. Ensure the greenhouse ESP32-CAM is powered on and uploading frames to POST /api/camera/upload or captured via CONNECT EXISTING HARDWARE.'
         });
       }
 
@@ -189,8 +195,9 @@ export function createVisionDiagnosisHandler(deps: {
           dataSource: latest.state.dataSource,
           ageSeconds: latest.state.ageSeconds,
           timestamp: latest.frame.timestamp,
+          capturedAt: latest.frame.capturedAt || latest.frame.timestamp,
           frameId: latest.frame.id,
-          message: `Latest ESP32-CAM photograph was captured ${latest.state.ageSeconds}s ago (${latest.state.freshness}) and is not a fresh live capture. Wait for a fresh camera frame before running live diagnosis.`
+          message: `Latest ESP32-CAM photograph was captured ${latest.state.ageSeconds}s ago (${latest.state.freshness}) and is not a fresh live capture. Capture or upload a fresh camera frame before running live diagnosis.`
         });
       }
 
@@ -201,19 +208,21 @@ export function createVisionDiagnosisHandler(deps: {
       cameraFrameMeta = {
         id: latest.frame.id,
         timestamp: latest.frame.timestamp,
+        capturedAt: latest.frame.capturedAt || latest.frame.timestamp,
         ageSeconds: latest.state.ageSeconds,
         freshness: latest.state.freshness,
-        dataSource: latest.state.dataSource
+        dataSource: latest.state.dataSource,
+        acquisitionMethod: latest.frame.acquisitionMethod
       };
     } else {
-      if (!image || typeof image !== 'string' || !image.trim()) {
+      if (!rawProvidedImage || typeof rawProvidedImage !== 'string' || !rawProvidedImage.trim()) {
         return res.status(400).json({
           error: 'EMPTY_IMAGE',
           message: 'No plant photograph provided for diagnosis.'
         });
       }
 
-      cleanBase64 = image.trim();
+      cleanBase64 = rawProvidedImage.trim();
       if (cleanBase64.startsWith('data:')) {
         const match = cleanBase64.match(/^data:([^;]+);base64,(.+)$/);
         if (match) {
@@ -297,16 +306,54 @@ In the JSON response:
       }
 
       const parsed = JSON.parse(trimmed);
+      const imageOriginLabel =
+        resolvedSource === 'MANUAL_UPLOAD' ? 'UPLOADED_TEST_IMAGE' : 'REAL_CAMERA_IMAGE';
+      const resolvedDataSource =
+        resolvedSource === 'MANUAL_UPLOAD' ? 'MANUAL_UPLOAD' : 'REAL_HARDWARE';
+
+      const normalizedCausesList = Array.isArray(parsed.possibleCauses)
+        ? parsed.possibleCauses.filter((x: unknown) => typeof x === 'string' && x.trim())
+        : typeof parsed.cause === 'string' && parsed.cause.trim()
+          ? parsed.cause
+              .split(/\n+/)
+              .map((s: string) => s.trim())
+              .filter(Boolean)
+          : [];
+      const normalizedActionsList = Array.isArray(parsed.recommendedActions)
+        ? parsed.recommendedActions.filter((x: unknown) => typeof x === 'string' && x.trim())
+        : typeof parsed.recommendation === 'string' && parsed.recommendation.trim()
+          ? parsed.recommendation
+              .split(/\n+/)
+              .map((s: string) => s.trim())
+              .filter(Boolean)
+          : [];
+
       parsed.language = langInfo.name;
       parsed.imageSource = resolvedSource;
+      parsed.imageOriginLabel = imageOriginLabel;
+      parsed.dataSource = resolvedDataSource;
+      parsed.possibleCauses =
+        normalizedCausesList.length > 0 ? normalizedCausesList : parsed.cause || '';
+      parsed.recommendedActions =
+        normalizedActionsList.length > 0 ? normalizedActionsList : parsed.recommendation || '';
+      // Never invent uncalibrated percentage confidence scores from generative LLM output
+      parsed.confidenceCalibrated = false;
+      parsed.confidenceScore = null;
+      parsed.confidenceNote =
+        'Uncalibrated generative vision assessment — numerical confidence percentage omitted.';
+
       if (resolvedGreenhouseId) {
         parsed.greenhouseId = resolvedGreenhouseId;
       }
       if (cameraFrameMeta) {
         parsed.frameId = cameraFrameMeta.id;
         parsed.frameTimestamp = cameraFrameMeta.timestamp;
+        parsed.capturedAt = cameraFrameMeta.capturedAt;
         parsed.frameAgeSeconds = cameraFrameMeta.ageSeconds;
+        parsed.acquisitionMethod = cameraFrameMeta.acquisitionMethod;
         activeStore.markAnalyzed(cameraFrameMeta.id, parsed);
+      } else {
+        parsed.capturedAt = null;
       }
 
       onDiagnosisComplete?.({
@@ -323,7 +370,14 @@ In the JSON response:
         greenhouseId: resolvedGreenhouseId,
         result: parsed,
         imageSource: resolvedSource,
+        imageOriginLabel,
+        dataSource: resolvedDataSource,
+        capturedAt: cameraFrameMeta?.capturedAt || null,
         cameraFrame: cameraFrameMeta,
+        possibleCauses: normalizedCausesList,
+        recommendedActions: normalizedActionsList,
+        confidenceCalibrated: false,
+        confidenceScore: null,
         imageBytesVerified: imgBuffer.length,
         mimeType: baseMime,
         modelUsed,

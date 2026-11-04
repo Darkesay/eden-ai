@@ -25,6 +25,7 @@ import path from 'node:path';
 import {
   apiFetch,
   clearInMemorySessionToken,
+  detectAiStudioCookieIntercept,
   normalizeApiBaseUrl,
   parseApiJsonResponse,
   resolveApiUrl
@@ -238,6 +239,34 @@ async function runTests() {
     assert.strictEqual(
       previewPreflight.headers['access-control-allow-origin'],
       'https://eden-ai-git-main-darkesays-projects.vercel.app'
+    );
+
+    const edensVercelPreflight = await httpRequest(testPort, {
+      method: 'OPTIONS',
+      path: '/api/ai/diagnose',
+      headers: {
+        Origin: 'https://edens-ai.vercel.app',
+        'Access-Control-Request-Method': 'POST'
+      }
+    });
+    assert.strictEqual(edensVercelPreflight.status, 204);
+    assert.strictEqual(
+      edensVercelPreflight.headers['access-control-allow-origin'],
+      'https://edens-ai.vercel.app'
+    );
+
+    const aiStudioPreviewPreflight = await httpRequest(testPort, {
+      method: 'OPTIONS',
+      path: '/api/ai/diagnose',
+      headers: {
+        Origin: 'https://ais-pre-h3gx3ulspn4xhjmbcg3gvo-683985826915.europe-west2.run.app',
+        'Access-Control-Request-Method': 'POST'
+      }
+    });
+    assert.strictEqual(aiStudioPreviewPreflight.status, 204);
+    assert.strictEqual(
+      aiStudioPreviewPreflight.headers['access-control-allow-origin'],
+      'https://ais-pre-h3gx3ulspn4xhjmbcg3gvo-683985826915.europe-west2.run.app'
     );
 
     const spoofedVercelPreflight = await httpRequest(testPort, {
@@ -521,7 +550,7 @@ async function runTests() {
       assert.ok(!html404Auth.message.includes('<!DOCTYPE'), 'Must never display raw HTML');
     }
 
-    // 9c. SPA index.html 200 fallback accidentally returned for /api/*
+    // 9c. SPA index.html 200 fallback accidentally returned for /api/* + AI Studio cookie-check HTML detection
     const spa200Fallback = await parseApiJsonResponse(
       new Response('<!doctype html><html><body><div id="root"></div></body></html>', {
         status: 200,
@@ -533,6 +562,22 @@ async function runTests() {
     if (!spa200Fallback.ok) {
       assert.strictEqual(spa200Fallback.kind, 'API_ROUTE_MISCONFIGURED');
     }
+
+    const cookieCheckDetected = await detectAiStudioCookieIntercept(
+      new Response('<!doctype html><html><head><script src="/_aistudio-iframe.js"></script></head></html>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' }
+      })
+    );
+    assert.strictEqual(cookieCheckDetected, true, 'Must detect AI Studio /__cookie_check.html proxy HTML');
+
+    const normalJsonNotCookieCheck = await detectAiStudioCookieIntercept(
+      new Response('{"status":"ok"}', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    );
+    assert.strictEqual(normalJsonNotCookieCheck, false);
 
     // 9d. Render / Cloudflare 502 Bad Gateway HTML
     const gateway502 = await executeAuthAction(

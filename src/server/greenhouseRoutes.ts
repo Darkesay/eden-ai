@@ -8,6 +8,7 @@ import {
   type GreenhouseRecord,
   PlatformDatabase
 } from './database.ts';
+import { registerPhase3IntelligenceAndControlRoutes } from './phase3Routes.ts';
 import {
   DEVICE_STATE_THRESHOLDS,
   type EnrollmentTokenPurpose,
@@ -159,8 +160,22 @@ export function buildGreenhouseSummary(
   cameraRegistry: GreenhouseCameraStoreRegistry
 ) {
   const devices = platformDb.listDevicesForGreenhouse(gh.id);
-  const camDev = devices.find((d) => d.deviceType === 'esp32_cam') || null;
-  const ctrlDev = devices.find((d) => d.deviceType === 'esp32_controller') || null;
+  const activeDevices = devices.filter((d) => !d.replacedByDeviceId);
+  const zones = platformDb.repositories.zonesAndHardware.listZonesForGreenhouse(gh.id);
+
+  const camDev =
+    activeDevices.find((d) => d.deviceType === 'esp32_cam' && d.explicitState === 'ONLINE') ||
+    activeDevices.find((d) => d.deviceType === 'esp32_cam' && d.provisioningStatus !== 'revoked') ||
+    activeDevices.find((d) => d.deviceType === 'esp32_cam') ||
+    devices.find((d) => d.deviceType === 'esp32_cam') ||
+    null;
+
+  const ctrlDev =
+    activeDevices.find((d) => d.deviceType === 'esp32_controller' && d.explicitState === 'ONLINE') ||
+    activeDevices.find((d) => d.deviceType === 'esp32_controller' && d.provisioningStatus !== 'revoked') ||
+    activeDevices.find((d) => d.deviceType === 'esp32_controller') ||
+    devices.find((d) => d.deviceType === 'esp32_controller') ||
+    null;
 
   const camStore = cameraRegistry.getStore(gh.id);
   const latestCam = camStore.getLatest();
@@ -226,9 +241,15 @@ export function buildGreenhouseSummary(
     overallStatus = 'OFFLINE';
   }
 
+  const onlineDeviceCount = activeDevices.filter((d) => d.explicitState === 'ONLINE').length;
+
   return {
     ...gh,
     overallStatus,
+    zoneCount: zones.length,
+    zones,
+    activeDeviceCount: activeDevices.length,
+    onlineDeviceCount,
     stateThresholds: DEVICE_STATE_THRESHOLDS,
     camera: {
       deviceId: camDev?.id || null,
@@ -324,6 +345,32 @@ export function registerSelfServiceGreenhouseRoutes(
       return null;
     }
     return user;
+  };
+
+  const ensureNotGuestForHardwareProvisioning = (
+    user: AuthenticatedUser,
+    res: express.Response,
+    greenhouseId: string | null,
+    req: express.Request,
+    attemptedAction: string
+  ): boolean => {
+    if (user.isGuest) {
+      platformDb.recordAuditEvent({
+        greenhouseId,
+        actorUserId: user.id,
+        eventType: 'GUEST_HARDWARE_PROVISIONING_BLOCKED',
+        summary: `Blocked guest account (${user.email}) from physical hardware operation: ${attemptedAction}.`,
+        metadata: { attemptedAction, path: req.path },
+        ipAddress: extractClientIp(req)
+      });
+      res.status(403).json({
+        error: 'GUEST_HARDWARE_CONTROL_FORBIDDEN',
+        message:
+          'Guest preview accounts are restricted to simulation and read-only inspection. Register a verified farmer account to provision or manage physical hardware.'
+      });
+      return false;
+    }
+    return true;
   };
 
   // ------------------------------------------------------------------
@@ -534,6 +581,7 @@ export function registerSelfServiceGreenhouseRoutes(
       email: `guest-${guestSuffix}@preview.edens-ai.local`,
       password: generatedSecret,
       displayName: 'Guest Farmer',
+      isGuest: true,
       userAgent: req.headers['user-agent'],
       ipAddress: ip
     });
@@ -663,6 +711,8 @@ export function registerSelfServiceGreenhouseRoutes(
 
     const summary = buildGreenhouseSummary(gh, platformDb, cameraRegistry);
     const devices = platformDb.listDevicesForGreenhouse(gh.id);
+    const zones = platformDb.repositories.zonesAndHardware.listZonesForGreenhouse(gh.id);
+    const deviceCapabilities = platformDb.repositories.zonesAndHardware.listDeviceCapabilities(gh.id);
     const latestCam = cameraRegistry.getStore(gh.id).getLatest();
     const latestTelemetry = platformDb.getLatestTelemetryForGreenhouse(gh.id);
     const tokens =
@@ -675,7 +725,9 @@ export function registerSelfServiceGreenhouseRoutes(
     return res.json({
       success: true,
       greenhouse: summary,
+      zones,
       devices,
+      deviceCapabilities,
       stateThresholds: DEVICE_STATE_THRESHOLDS,
       latestCamera: latestCam
         ? {
@@ -741,6 +793,152 @@ export function registerSelfServiceGreenhouseRoutes(
   });
 
   // ------------------------------------------------------------------
+  // MULTI-ZONE GREENHOUSE TOPOLOGY ROUTES
+  // ------------------------------------------------------------------
+
+  app.get('/api/greenhouses/:greenhouseId/zones', async (req, res) => {
+    await platformDb.init();
+    const user = ensureAuth(req, res);
+    if (!user) return;
+
+    const gh = platformDb.getGreenhouseForUser(req.params.greenhouseId, user.id);
+    if (!gh) {
+      return res.status(403).json({ error: 'FORBIDDEN_GREENHOUSE', message: 'Access denied.' });
+    }
+
+    const zones = platformDb.repositories.zonesAndHardware.listZonesForGreenhouse(gh.id);
+    const devices = platformDb.listDevicesForGreenhouse(gh.id);
+    const nowMs = Date.now();
+
+    const enrichedZones = zones.map((zone) => {
+      const zoneDevices = devices.filter((d) => d.zoneId === zone.id && !d.replacedByDeviceId);
+      const latestTelemetry = platformDb.getLatestTelemetryForGreenhouse(gh.id, nowMs, {
+        zoneId: zone.id
+      });
+      return {
+        ...zone,
+        devices: zoneDevices,
+        latestTelemetry
+      };
+    });
+
+    return res.json({
+      success: true,
+      greenhouseId: gh.id,
+      zones: enrichedZones
+    });
+  });
+
+  app.post('/api/greenhouses/:greenhouseId/zones', async (req, res) => {
+    await platformDb.init();
+    const user = ensureAuth(req, res);
+    if (!user) return;
+
+    const role = platformDb.getMemberRole(req.params.greenhouseId, user.id);
+    if (role !== 'owner' && role !== 'operator') {
+      return res.status(403).json({
+        error: 'FORBIDDEN',
+        message: 'Only greenhouse owners or operators can create greenhouse zones.'
+      });
+    }
+
+    const rawName = String(req.body?.name || '').trim();
+    if (!rawName) {
+      return res.status(400).json({
+        error: 'INVALID_ZONE_NAME',
+        message: 'Zone name is required.'
+      });
+    }
+
+    const gh = platformDb.getGreenhouseForUser(req.params.greenhouseId, user.id)!;
+    const zone = platformDb.repositories.zonesAndHardware.createZone({
+      greenhouseId: gh.id,
+      name: rawName,
+      zoneType: req.body?.zoneType || 'canopy_bay',
+      cropProfileId: req.body?.cropProfileId || null,
+      activeCropType: req.body?.activeCropType || req.body?.cropType || gh.cropType || 'Tomato',
+      activeVariety: req.body?.activeVariety || req.body?.cropVariety || null,
+      growthStage: req.body?.growthStage || 'vegetative',
+      plantingDate: req.body?.plantingDate || null,
+      cultivationMethod: req.body?.cultivationMethod || 'soil_bed',
+      areaSqm:
+        req.body?.areaSqm !== undefined
+          ? Number(req.body.areaSqm)
+          : req.body?.areaSqMeters !== undefined
+            ? Number(req.body.areaSqMeters)
+            : null,
+      isPrimary: Boolean(req.body?.isPrimary)
+    });
+
+    platformDb.recordAuditEvent({
+      greenhouseId: gh.id,
+      actorUserId: user.id,
+      eventType: 'ZONE_CREATED',
+      summary: `Created greenhouse zone "${zone.name}" (${zone.id}) for ${zone.activeCropType || gh.cropType}.`,
+      metadata: { zoneId: zone.id, zoneType: zone.zoneType, activeCropType: zone.activeCropType },
+      ipAddress: extractClientIp(req)
+    });
+
+    return res.status(201).json({
+      success: true,
+      zone
+    });
+  });
+
+  app.patch('/api/greenhouses/:greenhouseId/zones/:zoneId', async (req, res) => {
+    await platformDb.init();
+    const user = ensureAuth(req, res);
+    if (!user) return;
+
+    const role = platformDb.getMemberRole(req.params.greenhouseId, user.id);
+    if (role !== 'owner' && role !== 'operator') {
+      return res.status(403).json({
+        error: 'FORBIDDEN',
+        message: 'Only greenhouse owners or operators can update greenhouse zones.'
+      });
+    }
+
+    const updated = platformDb.repositories.zonesAndHardware.updateZone(
+      req.params.greenhouseId,
+      req.params.zoneId,
+      {
+        name: req.body?.name,
+        zoneType: req.body?.zoneType,
+        cropProfileId: req.body?.cropProfileId,
+        activeCropType: req.body?.activeCropType,
+        activeVariety: req.body?.activeVariety,
+        growthStage: req.body?.growthStage,
+        plantingDate: req.body?.plantingDate,
+        cultivationMethod: req.body?.cultivationMethod,
+        areaSqm: req.body?.areaSqm,
+        safetyOverrides: req.body?.safetyOverrides,
+        isPrimary: req.body?.isPrimary
+      }
+    );
+
+    if (!updated) {
+      return res.status(404).json({
+        error: 'ZONE_NOT_FOUND',
+        message: 'Zone not found in this greenhouse.'
+      });
+    }
+
+    platformDb.recordAuditEvent({
+      greenhouseId: req.params.greenhouseId,
+      actorUserId: user.id,
+      eventType: 'ZONE_UPDATED',
+      summary: `Updated greenhouse zone "${updated.name}" (${updated.id}).`,
+      metadata: { zoneId: updated.id, growthStage: updated.growthStage, activeCropType: updated.activeCropType },
+      ipAddress: extractClientIp(req)
+    });
+
+    return res.json({
+      success: true,
+      zone: updated
+    });
+  });
+
+  // ------------------------------------------------------------------
   // QR ENROLLMENT GENERATION, INSPECTION, REDEMPTION & REVOCATION
   // ------------------------------------------------------------------
 
@@ -749,6 +947,7 @@ export function registerSelfServiceGreenhouseRoutes(
     await platformDb.init();
     const user = ensureAuth(req, res);
     if (!user) return;
+    if (!ensureNotGuestForHardwareProvisioning(user, res, null, req, 'generate_kit_qr')) return;
 
     const kitSerial = String(req.body?.kitSerial || `EDENS-KIT-${Date.now().toString(36).toUpperCase()}`)
       .trim()
@@ -805,12 +1004,28 @@ export function registerSelfServiceGreenhouseRoutes(
       purposeRaw === 'device_bootstrap' || purposeRaw === 'kit_qr_claim'
         ? purposeRaw
         : 'member_share_qr';
+
+    if (
+      purpose === 'device_bootstrap' &&
+      !ensureNotGuestForHardwareProvisioning(
+        user,
+        res,
+        req.params.greenhouseId,
+        req,
+        'issue_device_bootstrap_token'
+      )
+    ) {
+      return;
+    }
+
     const roleGranted: GreenhouseMemberRole =
       req.body?.roleGranted === 'viewer' ? 'viewer' : 'operator';
 
     const issued = platformDb.issueEnrollmentToken({
       purpose,
       greenhouseId: req.params.greenhouseId,
+      targetDeviceId: req.body?.targetDeviceId || null,
+      targetZoneId: req.body?.targetZoneId || null,
       kitSerial: req.body?.kitSerial || null,
       roleGranted,
       createdByUserId: user.id,
@@ -829,6 +1044,8 @@ export function registerSelfServiceGreenhouseRoutes(
       success: true,
       tokenId: issued.tokenId,
       purpose: issued.purpose,
+      targetDeviceId: issued.targetDeviceId,
+      targetZoneId: issued.targetZoneId,
       enrollmentCode: issued.rawCode,
       qrPayloadUri: issued.qrPayloadUri,
       webSetupUrl: issued.webSetupUrl,
@@ -932,6 +1149,17 @@ export function registerSelfServiceGreenhouseRoutes(
     await platformDb.init();
     const user = ensureAuth(req, res);
     if (!user) return;
+    if (
+      !ensureNotGuestForHardwareProvisioning(
+        user,
+        res,
+        req.params.greenhouseId,
+        req,
+        'register_or_update_device'
+      )
+    ) {
+      return;
+    }
 
     const rawType = String(req.body?.deviceType || '').trim();
     if (rawType !== 'esp32_controller' && rawType !== 'esp32_cam') {
@@ -945,7 +1173,12 @@ export function registerSelfServiceGreenhouseRoutes(
       greenhouseId: req.params.greenhouseId,
       actorUserId: user.id,
       deviceType: rawType,
+      deviceId: req.body?.deviceId,
+      zoneId: req.body?.zoneId,
       label: req.body?.label,
+      serialNumber: req.body?.serialNumber,
+      capabilities: req.body?.capabilities,
+      createAdditionalSlot: Boolean(req.body?.createAdditionalSlot),
       ipAddress: extractClientIp(req)
     });
 
@@ -968,6 +1201,17 @@ export function registerSelfServiceGreenhouseRoutes(
     await platformDb.init();
     const user = ensureAuth(req, res);
     if (!user) return;
+    if (
+      !ensureNotGuestForHardwareProvisioning(
+        user,
+        res,
+        req.params.greenhouseId,
+        req,
+        'issue_device_credentials'
+      )
+    ) {
+      return;
+    }
 
     const gh = platformDb.getGreenhouseForUser(req.params.greenhouseId, user.id);
     if (!gh) {
@@ -1010,10 +1254,334 @@ export function registerSelfServiceGreenhouseRoutes(
     });
   });
 
+  // Plug-and-Play SoftAP + NVS Bootstrap Token Issuance bound to a specific device slot
+  app.post('/api/greenhouses/:greenhouseId/devices/:deviceId/bootstrap-token', async (req, res) => {
+    await platformDb.init();
+    const user = ensureAuth(req, res);
+    if (!user) return;
+    if (
+      !ensureNotGuestForHardwareProvisioning(
+        user,
+        res,
+        req.params.greenhouseId,
+        req,
+        'issue_targeted_bootstrap_token'
+      )
+    ) {
+      return;
+    }
+
+    const role = platformDb.getMemberRole(req.params.greenhouseId, user.id);
+    if (role !== 'owner' && role !== 'operator') {
+      return res.status(403).json({
+        error: 'FORBIDDEN',
+        message: 'Only greenhouse owners or operators can issue Plug-and-Play bootstrap tokens.'
+      });
+    }
+
+    const devices = platformDb.listDevicesForGreenhouse(req.params.greenhouseId);
+    const targetDev = devices.find((d) => d.id === req.params.deviceId);
+    if (!targetDev) {
+      return res.status(404).json({
+        error: 'DEVICE_NOT_FOUND',
+        message: 'Target device slot not found in this greenhouse.'
+      });
+    }
+    if (targetDev.replacedByDeviceId) {
+      return res.status(409).json({
+        error: 'DEVICE_ALREADY_REPLACED',
+        message: `This device was replaced by ${targetDev.replacedByDeviceId}. Provision the replacement unit instead.`
+      });
+    }
+
+    const origin = getPublicOrigin(req);
+    const issued = platformDb.issueEnrollmentToken({
+      purpose: 'device_bootstrap',
+      greenhouseId: req.params.greenhouseId,
+      targetDeviceId: targetDev.id,
+      targetZoneId: targetDev.zoneId || null,
+      kitSerial: targetDev.serialNumber || null,
+      createdByUserId: user.id,
+      ttlMinutes: Number(req.body?.ttlMinutes || 30),
+      publicOrigin: origin,
+      ipAddress: extractClientIp(req)
+    });
+
+    const qrDataUrl = await QRCode.toDataURL(issued.qrPayloadUri, {
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 320
+    });
+
+    return res.status(201).json({
+      success: true,
+      tokenId: issued.tokenId,
+      deviceId: targetDev.id,
+      deviceType: targetDev.deviceType,
+      zoneId: targetDev.zoneId || null,
+      bootstrapCode: issued.rawCode,
+      enrollmentCode: issued.rawCode,
+      qrPayloadUri: issued.qrPayloadUri,
+      enrollmentUri: issued.qrPayloadUri,
+      qrDataUrl,
+      expiresAt: issued.expiresAt,
+      cloudOrigin: origin,
+      bootstrapEndpoint: `${origin}/api/devices/bootstrap`,
+      softApGuide: {
+        ssidPattern: 'EDENS-SETUP-XXXX',
+        portalUrl: 'http://192.168.4.1',
+        steps: [
+          'Power on your ESP32 board (or hold BOOT button for 5s to reset Wi-Fi).',
+          'Join the "EDENS-SETUP-XXXX" 2.4 GHz Wi-Fi hotspot on your phone or laptop.',
+          'Open http://192.168.4.1, select your farm 2.4 GHz Wi-Fi, and paste the one-time Bootstrap Code.',
+          'Your Wi-Fi password stays exclusively in ESP32 NVS memory; the board exchanges the one-time code over TLS for its unique X-Hardware-Key / X-Camera-Key.'
+        ]
+      }
+    });
+  });
+
+  // Atomic Faulty Hardware Replacement (revokes failed unit, preserves 100% history, provisions replacement slot)
+  app.post('/api/greenhouses/:greenhouseId/devices/:deviceId/replace', async (req, res) => {
+    await platformDb.init();
+    const user = ensureAuth(req, res);
+    if (!user) return;
+    if (
+      !ensureNotGuestForHardwareProvisioning(
+        user,
+        res,
+        req.params.greenhouseId,
+        req,
+        'replace_faulty_device'
+      )
+    ) {
+      return;
+    }
+
+    const origin = getPublicOrigin(req);
+    const replaced = platformDb.replaceDevice({
+      greenhouseId: req.params.greenhouseId,
+      oldDeviceId: req.params.deviceId,
+      actorUserId: user.id,
+      newLabel: req.body?.newLabel || req.body?.label,
+      newSerialNumber: req.body?.newSerialNumber || req.body?.serialNumber,
+      reason: req.body?.reason,
+      issueBootstrapToken: req.body?.issueBootstrapToken !== false,
+      ttlMinutes: Number(req.body?.ttlMinutes || 45),
+      publicOrigin: origin,
+      ipAddress: extractClientIp(req)
+    });
+
+    if ('errorCode' in replaced) {
+      return res.status(replaced.statusCode).json({
+        error: replaced.errorCode,
+        message: replaced.message
+      });
+    }
+
+    let qrDataUrl: string | null = null;
+    if (replaced.bootstrap) {
+      qrDataUrl = await QRCode.toDataURL(replaced.bootstrap.qrPayloadUri, {
+        errorCorrectionLevel: 'M',
+        margin: 2,
+        width: 320
+      });
+    }
+
+    const bootstrapBundle = replaced.bootstrap
+      ? {
+          ...replaced.bootstrap,
+          bootstrapCode: replaced.bootstrap.rawCode,
+          enrollmentCode: replaced.bootstrap.rawCode,
+          qrDataUrl,
+          cloudOrigin: origin,
+          bootstrapEndpoint: `${origin}/api/devices/bootstrap`
+        }
+      : null;
+
+    return res.status(201).json({
+      success: true,
+      replacedDevice: replaced.replacedDevice,
+      retiredDevice: replaced.replacedDevice,
+      replacementDevice: replaced.replacementDevice,
+      preservedTelemetryCount: replaced.preservedTelemetryCount,
+      bootstrap: bootstrapBundle,
+      bootstrapToken: bootstrapBundle
+    });
+  });
+
+  // Per-Device Diagnostics, Declared Capabilities & Firmware/OTA History
+  app.get('/api/greenhouses/:greenhouseId/devices/:deviceId/diagnostics', async (req, res) => {
+    await platformDb.init();
+    const user = ensureAuth(req, res);
+    if (!user) return;
+
+    const gh = platformDb.getGreenhouseForUser(req.params.greenhouseId, user.id);
+    if (!gh) {
+      return res.status(403).json({ error: 'FORBIDDEN_GREENHOUSE', message: 'Access denied.' });
+    }
+
+    const devices = platformDb.listDevicesForGreenhouse(gh.id);
+    const device = devices.find((d) => d.id === req.params.deviceId);
+    if (!device) {
+      return res.status(404).json({ error: 'DEVICE_NOT_FOUND', message: 'Device not found.' });
+    }
+
+    const capabilities = platformDb.repositories.zonesAndHardware.listDeviceCapabilities(
+      gh.id,
+      device.id
+    );
+    const firmwareHistory = platformDb.repositories.zonesAndHardware.listFirmwareHistory(
+      gh.id,
+      device.id,
+      20
+    );
+    const zone = device.zoneId
+      ? platformDb.repositories.zonesAndHardware.getZoneById(gh.id, device.zoneId)
+      : null;
+    const latestTelemetry =
+      device.deviceType === 'esp32_controller'
+        ? platformDb.getLatestTelemetryForGreenhouse(gh.id, Date.now(), { deviceId: device.id })
+        : null;
+    const auditEvents = platformDb
+      .listAuditEventsForGreenhouse(gh.id, 60)
+      .filter((ev) => ev.actorDeviceId === device.id)
+      .slice(0, 15);
+
+    return res.json({
+      success: true,
+      device,
+      zone,
+      ota: {
+        currentFirmwareVersion: device.firmwareVersion || null,
+        otaStatus: firmwareHistory[0]?.updateStatus || 'idle'
+      },
+      capabilities,
+      firmwareHistory,
+      latestTelemetry,
+      auditEvents
+    });
+  });
+
+  app.post('/api/greenhouses/:greenhouseId/devices/:deviceId/capabilities', async (req, res) => {
+    await platformDb.init();
+    const user = ensureAuth(req, res);
+    if (!user) return;
+    if (
+      !ensureNotGuestForHardwareProvisioning(
+        user,
+        res,
+        req.params.greenhouseId,
+        req,
+        'update_device_capabilities'
+      )
+    ) {
+      return;
+    }
+
+    const role = platformDb.getMemberRole(req.params.greenhouseId, user.id);
+    if (role !== 'owner' && role !== 'operator') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient permissions.' });
+    }
+
+    const devices = platformDb.listDevicesForGreenhouse(req.params.greenhouseId);
+    const device = devices.find((d) => d.id === req.params.deviceId);
+    if (!device) {
+      return res.status(404).json({ error: 'DEVICE_NOT_FOUND', message: 'Device not found.' });
+    }
+
+    const capabilities = platformDb.repositories.zonesAndHardware.syncReportedCapabilities(
+      req.params.greenhouseId,
+      device.id,
+      req.body?.capabilities ?? req.body
+    );
+
+    return res.json({
+      success: true,
+      deviceId: device.id,
+      capabilities
+    });
+  });
+
+  app.patch('/api/greenhouses/:greenhouseId/devices/:deviceId/firmware-target', async (req, res) => {
+    await platformDb.init();
+    const user = ensureAuth(req, res);
+    if (!user) return;
+    if (
+      !ensureNotGuestForHardwareProvisioning(
+        user,
+        res,
+        req.params.greenhouseId,
+        req,
+        'set_device_firmware_target'
+      )
+    ) {
+      return;
+    }
+
+    const role = platformDb.getMemberRole(req.params.greenhouseId, user.id);
+    if (role !== 'owner' && role !== 'operator') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient permissions.' });
+    }
+
+    const targetFirmwareVersion = req.body?.targetFirmwareVersion
+      ? String(req.body.targetFirmwareVersion).trim().slice(0, 48)
+      : null;
+
+    const ok = platformDb.repositories.zonesAndHardware.setDeviceOtaTarget({
+      greenhouseId: req.params.greenhouseId,
+      deviceId: req.params.deviceId,
+      targetFirmwareVersion,
+      otaStatus: req.body?.otaStatus,
+      releaseChannel: req.body?.releaseChannel,
+      sha256Digest: req.body?.sha256Digest || null
+    });
+
+    if (!ok) {
+      return res.status(404).json({ error: 'DEVICE_NOT_FOUND', message: 'Device not found.' });
+    }
+
+    platformDb.recordAuditEvent({
+      greenhouseId: req.params.greenhouseId,
+      actorUserId: user.id,
+      actorDeviceId: req.params.deviceId,
+      eventType: 'DEVICE_OTA_TARGET_UPDATED',
+      summary: targetFirmwareVersion
+        ? `Staged target firmware ${targetFirmwareVersion} for device ${req.params.deviceId}.`
+        : `Cleared staged OTA target for device ${req.params.deviceId}.`,
+      metadata: {
+        targetFirmwareVersion,
+        releaseChannel: req.body?.releaseChannel || 'stable'
+      },
+      ipAddress: extractClientIp(req)
+    });
+
+    const updated = platformDb
+      .listDevicesForGreenhouse(req.params.greenhouseId)
+      .find((d) => d.id === req.params.deviceId);
+
+    return res.json({
+      success: true,
+      otaStatus: req.body?.otaStatus || (targetFirmwareVersion ? 'staged' : 'idle'),
+      targetFirmwareVersion,
+      device: updated
+    });
+  });
+
   app.post('/api/greenhouses/:greenhouseId/devices/:deviceId/revoke', async (req, res) => {
     await platformDb.init();
     const user = ensureAuth(req, res);
     if (!user) return;
+    if (
+      !ensureNotGuestForHardwareProvisioning(
+        user,
+        res,
+        req.params.greenhouseId,
+        req,
+        'revoke_device'
+      )
+    ) {
+      return;
+    }
 
     const revoked = platformDb.revokeDevice({
       greenhouseId: req.params.greenhouseId,
@@ -1040,11 +1608,21 @@ export function registerSelfServiceGreenhouseRoutes(
       return res.status(429).json({ error: 'RATE_LIMITED', message: 'Too many bootstrap attempts.' });
     }
 
-    const devType = req.body?.deviceType === 'esp32_cam' ? 'esp32_cam' : 'esp32_controller';
+    const rawType = String(req.body?.deviceType || 'esp32_controller').trim();
+    const devType: GreenhouseDeviceType =
+      rawType === 'esp32_cam' ? 'esp32_cam' : 'esp32_controller';
+
     const result = platformDb.bootstrapDeviceWithToken({
-      rawBootstrapCode: req.body?.bootstrapToken,
+      rawBootstrapCode: req.body?.bootstrapToken || req.body?.code || req.body?.qrPayload,
       deviceType: devType,
-      firmwareVersion: req.body?.firmwareVersion,
+      targetDeviceId: req.body?.targetDeviceId || null,
+      zoneId: req.body?.zoneId || null,
+      label: req.body?.label || null,
+      firmwareVersion: req.body?.firmwareVersion || null,
+      serialNumber: req.body?.serialNumber || null,
+      macAddress: req.body?.macAddress || null,
+      hardwareIdentityUid: req.body?.hardwareIdentityUid || null,
+      capabilities: req.body?.capabilities,
       ipAddress: ip
     });
 
@@ -1055,13 +1633,22 @@ export function registerSelfServiceGreenhouseRoutes(
       });
     }
 
+    const origin = getPublicOrigin(req);
+    const endpointPath = devType === 'esp32_cam' ? '/api/camera/upload' : '/api/telemetry/upload';
+
     return res.status(200).json({
       success: true,
       greenhouseId: result.greenhouseId,
+      zoneId: result.zoneId,
       deviceId: result.deviceId,
+      label: result.label,
+      createdSlot: result.createdSlot,
       deviceKey: result.deviceKey,
-      uploadEndpoint: devType === 'esp32_cam' ? '/api/camera/upload' : '/api/telemetry/upload',
-      authHeader: devType === 'esp32_cam' ? 'X-Camera-Key' : 'X-Hardware-Key'
+      cloudOrigin: origin,
+      uploadEndpoint: endpointPath,
+      uploadUrl: `${origin}${endpointPath}`,
+      authHeader: devType === 'esp32_cam' ? 'X-Camera-Key' : 'X-Hardware-Key',
+      telemetryIntervalMs: devType === 'esp32_cam' ? 15000 : 10000
     });
   });
 
@@ -1156,7 +1743,12 @@ export function registerSelfServiceGreenhouseRoutes(
       });
     }
 
-    return res.json(platformDb.getLatestTelemetryForGreenhouse(gh.id));
+    const zoneId = typeof req.query.zoneId === 'string' && req.query.zoneId.trim() ? req.query.zoneId.trim() : undefined;
+    const deviceId = typeof req.query.deviceId === 'string' && req.query.deviceId.trim() ? req.query.deviceId.trim() : undefined;
+
+    return res.json(
+      platformDb.getLatestTelemetryForGreenhouse(gh.id, Date.now(), { zoneId, deviceId })
+    );
   });
 
   // Strictly read-only, non-actuating connection test (NEVER toggles pumps, fans, heaters, or roof vents!)
@@ -1170,9 +1762,16 @@ export function registerSelfServiceGreenhouseRoutes(
       return res.status(403).json({ error: 'FORBIDDEN_GREENHOUSE', message: 'Access denied.' });
     }
 
-    const devices = platformDb.listDevicesForGreenhouse(gh.id);
-    const camDev = devices.find((d) => d.deviceType === 'esp32_cam');
-    const ctrlDev = devices.find((d) => d.deviceType === 'esp32_controller');
+    const allDevices = platformDb.listDevicesForGreenhouse(gh.id);
+    const activeDevices = allDevices.filter((d) => !d.replacedByDeviceId);
+    const camDev =
+      activeDevices.find((d) => d.deviceType === 'esp32_cam' && d.explicitState === 'ONLINE') ||
+      activeDevices.find((d) => d.deviceType === 'esp32_cam') ||
+      allDevices.find((d) => d.deviceType === 'esp32_cam');
+    const ctrlDev =
+      activeDevices.find((d) => d.deviceType === 'esp32_controller' && d.explicitState === 'ONLINE') ||
+      activeDevices.find((d) => d.deviceType === 'esp32_controller') ||
+      allDevices.find((d) => d.deviceType === 'esp32_controller');
     const latestCam = cameraRegistry.getStore(gh.id).getLatest();
     const latestTel = platformDb.getLatestTelemetryForGreenhouse(gh.id);
 
@@ -1212,7 +1811,7 @@ export function registerSelfServiceGreenhouseRoutes(
                 ? `Last JPEG snapshot is ${latestCam.state.freshness} (${latestCam.state.ageSeconds}s old). Waiting for next upload.`
                 : camDev?.hasCredentialIssued
                   ? 'Camera credential issued (WAITING_FOR_FIRST_CONNECTION), but no authenticated JPEG upload has reached POST /api/camera/upload yet.'
-                  : 'CONFIGURATION_REQUIRED: Issue a unique ESP32-CAM credential in the Setup Wizard and flash camera_secrets.h.'
+                  : 'CONFIGURATION_REQUIRED: Pair ESP32-CAM via Plug-and-Play SoftAP Bootstrap or download camera_secrets.h.'
       },
       {
         id: 'esp32_controller_telemetry',
@@ -1242,9 +1841,30 @@ export function registerSelfServiceGreenhouseRoutes(
                 ? `Controller reading is ${latestTel.explicitState} (${latestTel.ageSeconds}s old).`
                 : ctrlDev?.hasCredentialIssued
                   ? 'Controller credential issued (WAITING_FOR_FIRST_CONNECTION), but no authenticated JSON payload has reached POST /api/telemetry/upload yet.'
-                  : 'CONFIGURATION_REQUIRED: Issue a unique Main ESP32 credential in the Setup Wizard and flash controller_secrets.h.'
+                  : 'CONFIGURATION_REQUIRED: Pair ESP32 Controller via Plug-and-Play SoftAP Bootstrap or download controller_secrets.h.'
       }
     ];
+
+    const deviceChecks = activeDevices.map((dev) => ({
+      deviceId: dev.id,
+      zoneId: dev.zoneId || null,
+      deviceType: dev.deviceType,
+      label: dev.label,
+      explicitState: dev.explicitState,
+      provisioningStatus: dev.provisioningStatus,
+      firmwareVersion: dev.firmwareVersion,
+      lastSeenAt: dev.lastSeenAt,
+      status:
+        dev.explicitState === 'ONLINE'
+          ? ('PASS' as const)
+          : dev.explicitState === 'AUTHENTICATION_ERROR' || dev.explicitState === 'CONNECTION_ERROR'
+            ? ('ERROR' as const)
+            : dev.explicitState === 'STALE'
+              ? ('STALE' as const)
+              : dev.hasCredentialIssued
+                ? ('WAITING' as const)
+                : ('PENDING_SETUP' as const)
+    }));
 
     const allOnline = checks.every((c) => c.status === 'PASS');
 
@@ -1256,7 +1876,8 @@ export function registerSelfServiceGreenhouseRoutes(
       allHardwareVerifiedOnline: allOnline,
       stateThresholds: DEVICE_STATE_THRESHOLDS,
       checkedAt: new Date().toISOString(),
-      checks
+      checks,
+      deviceChecks
     });
   });
 
@@ -1290,6 +1911,13 @@ export function registerSelfServiceGreenhouseRoutes(
       success: true,
       events: platformDb.listAuditEventsForGreenhouse(gh.id, 40)
     });
+  });
+
+  registerPhase3IntelligenceAndControlRoutes(app, {
+    platformDb,
+    ensureAuth,
+    ensureNotGuestForHardwareProvisioning,
+    extractClientIp
   });
 
   return {

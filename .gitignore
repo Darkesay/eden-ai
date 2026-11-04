@@ -10,9 +10,10 @@ uploads/
 data/
 *.sqlite
 *.sqlite-tmp
+*.sqlite-wal
+*.sqlite-shm
+*.restore-tmp
 **/camera_secrets.h
 **/secrets.h
 **/controller_secrets.h
 public/assets/aistudio/
-
-

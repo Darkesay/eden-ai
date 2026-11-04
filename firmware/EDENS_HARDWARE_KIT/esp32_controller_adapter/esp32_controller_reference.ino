@@ -60,22 +60,16 @@ void setup() {
   delay(500);
   Serial.println("\n[EDENS-CTRL] Booting Main ESP32 Greenhouse Controller...");
 
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-
-  if (strlen(EDENS_WIFI_SSID) > 0 && strstr(EDENS_WIFI_SSID, "REPLACE_WITH_") == nullptr && EDENS_WIFI_SSID[0] != '<') {
-    // SECURITY: Log SSID only; NEVER print EDENS_WIFI_PASSWORD or EDENS_CONTROLLER_DEVICE_KEY
-    Serial.printf("[EDENS-CTRL] Connecting to 2.4 GHz Wi-Fi SSID: %s\n", EDENS_WIFI_SSID);
-    WiFi.begin(EDENS_WIFI_SSID, EDENS_WIFI_PASSWORD);
-  } else {
-    Serial.println("[EDENS-CTRL] Configure controller_secrets.h before flashing.");
-  }
-
-  g_edensCloud.begin("EDENS-ESP32-CTRL-v2.5");
+  // Plug-and-Play NVS + SoftAP onboarding (falls back to controller_secrets.h if populated).
+  // Hold BOOT (GPIO 0) for 5 seconds at any time to clear NVS and re-open EDENS-SETUP-XXXX hotspot.
+  g_edensCloud.begin("EDENS-ESP32-CTRL-v2.6-pnp", EDENS_PROVISION_RESET_BUTTON_PIN);
 }
 
 void loop() {
   const uint32_t nowMs = millis();
+
+  // Service non-blocking SoftAP setup portal & 5-second BOOT button reset check
+  g_edensCloud.serviceProvisioning();
 
   // 1 Hz local sensor & authoritative hardware safety interlock loop (runs even if offline)
   if (nowMs - g_lastControlTickMs >= 1000UL) {

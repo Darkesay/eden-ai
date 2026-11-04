@@ -1,0 +1,118 @@
+# ==============================================================================
+# EDENS AI — ESPHome 2026.10.2 Reference Greenhouse Controller Firmware
+# Upstream Repository: https://github.com/esphome/esphome (Tag: 2026.10.2)
+# Upstream License: Python CLI/Schemas MIT • Firmware C++ Runtime GPL-3.0
+# ==============================================================================
+# IMPORTANT HARDWARE SAFETY & PINOUT NOTICE:
+# 1. Do NOT invent GPIO mappings, sensor IC models, ADC calibration constants,
+#    or relay active-HIGH/LOW polarity. Obtain exact board wiring from the
+#    EDENS hardware engineer and populate `secrets.yaml` before uncommenting
+#    physical sensor or relay blocks.
+# 2. Physical actuator execution from cloud AI remains DISABLED in Monitoring Mode.
+#    Local Tier-1 hardware safety interlocks execute directly on-device even if
+#    Wi-Fi or the cloud gateway is unreachable.
+# ==============================================================================
+
+substitutions:
+  node_name: "edens-gh-ctrl-ref"
+  friendly_name: "EDENS Greenhouse Controller"
+  greenhouse_id: !secret edens_greenhouse_id
+  zone_id: !secret edens_zone_id
+  device_id: !secret edens_device_id
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly_name}
+  project:
+    name: "edens_ai.greenhouse_controller"
+    version: "2026.10.2-ref1"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Secure WPA2-PSK Fallback Provisioning Portal (unique per-board secret required)
+  ap:
+    ssid: "EDENS-SETUP-${device_id}"
+    password: !secret unique_board_ap_password
+    ap_timeout: 5min
+
+captive_portal:
+
+logger:
+  level: INFO
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+safe_mode:
+  num_attempts: 5
+  reboot_timeout: 5min
+
+web_server:
+  port: 80
+  version: 3
+  auth:
+    username: "edens_installer"
+    password: !secret local_web_password
+
+mqtt:
+  broker: !secret edens_mqtt_host
+  port: 8883
+  username: "${device_id}"
+  password: !secret edens_device_key
+  discovery: true
+  discovery_prefix: "homeassistant"
+  topic_prefix: "edens/v1/greenhouses/${greenhouse_id}/devices/${device_id}"
+  birth_message:
+    topic: "edens/v1/greenhouses/${greenhouse_id}/devices/${device_id}/status"
+    payload: "online"
+  will_message:
+    topic: "edens/v1/greenhouses/${greenhouse_id}/devices/${device_id}/status"
+    payload: "offline"
+
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal RSSI"
+    id: wifi_rssi
+    update_interval: 30s
+
+  - platform: uptime
+    name: "Controller Uptime"
+    id: uptime_sec
+    update_interval: 30s
+
+  # ----------------------------------------------------------------------------
+  # HARDWARE ENGINEER CONFIGURATION BLOCK (UNCOMMENT ONLY AFTER BENCH PIN AUDIT)
+  # ----------------------------------------------------------------------------
+  # - platform: dht
+  #   pin: !secret verified_dht_gpio
+  #   model: DHT22
+  #   temperature:
+  #     name: "Temperature"
+  #     id: temperature
+  #   humidity:
+  #     name: "Humidity"
+  #     id: humidity
+  #   update_interval: 10s
+  #
+  # - platform: adc
+  #   pin: !secret verified_soil_adc_gpio
+  #   name: "Soil Moisture"
+  #   id: soil_moisture
+  #   attenuation: 12db
+  #   unit_of_measurement: "%"
+  #   update_interval: 15s
+  #   filters:
+  #     - calibrate_linear:
+  #         # Replace with bench-calibrated dry-air and saturated-water voltages:
+  #         - 2.85 -> 0.0
+  #         - 1.25 -> 100.0
+  #     - clamp:
+  #         min_value: 0.0
+  #         max_value: 100.0

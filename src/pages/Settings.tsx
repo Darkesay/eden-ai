@@ -38,6 +38,9 @@ import { store, useStoreTable, useStoreValue } from '../lib/store';
 import { type ThemeMode, useTheme } from '../lib/theme';
 import { runHarvestAgentCycle } from '../agents/HarvestAgent';
 import { QrScannerModal } from '../components/QrScannerModal';
+import { MonitoringModeBanner } from '../components/MonitoringModeBanner';
+import { ConnectExistingHardwarePanel } from '../components/ConnectExistingHardwarePanel';
+import { UniversalHardwareFleetPanel } from '../components/UniversalHardwareFleetPanel';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { cn } from '../lib/utils';
@@ -155,11 +158,6 @@ export default function SettingsPage() {
   const [issuedCredentials, setIssuedCredentials] = useState<Record<string, any>>({});
   const [copiedDeviceId, setCopiedDeviceId] = useState<string | null>(null);
   const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null);
-
-  // Local LAN host settings (optional advanced technician config)
-  const [localCtrlHost, setLocalCtrlHost] = useState(hwConfig.controllerHost || '');
-  const [localCtrlPort, setLocalCtrlPort] = useState(hwConfig.controllerPort || 80);
-  const [localCamHost, setLocalCamHost] = useState(camera.config.host || '');
 
   // Diagnostics tab state
   const [connCheckResult, setConnCheckResult] = useState<any | null>(null);
@@ -339,18 +337,6 @@ export default function SettingsPage() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  };
-
-  const handleSaveLocalHosts = (e: React.FormEvent) => {
-    e.preventDefault();
-    hardwareService.updateConfig({
-      controllerHost: localCtrlHost.trim(),
-      controllerPort: Number(localCtrlPort) || 80
-    });
-    camera.updateConfig({
-      host: localCamHost.trim()
-    });
-    showSaved('Local network host settings saved.');
   };
 
   const handleQrDetected = async (rawCodeOrUri: string) => {
@@ -991,6 +977,18 @@ export default function SettingsPage() {
       {/* TAB 4: Hardware Connections */}
       {activeTab === 'hardware' && (
         <div className="space-y-6">
+          <MonitoringModeBanner />
+
+          <ConnectExistingHardwarePanel
+            greenhouseId={activeGreenhouse?.id}
+            onCameraFrameVerified={() => {
+              void camera.refreshNow(false);
+              void loadEnrolledDevices();
+            }}
+          />
+
+          <UniversalHardwareFleetPanel greenhouseId={activeGreenhouse?.id} />
+
           <section className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
@@ -1178,57 +1176,6 @@ export default function SettingsPage() {
               </div>
             )}
           </section>
-
-          {/* Optional Local LAN Hostname Configuration */}
-          <form
-            onSubmit={handleSaveLocalHosts}
-            className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-4 max-w-3xl"
-          >
-            <div>
-              <h2 className="text-base font-semibold text-foreground">
-                Optional Local Wi-Fi Network Addresses
-              </h2>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Only needed if running EDENS AI on a local farm computer on the same Wi-Fi router as your ESP32 boards. Cloud internet uploads do not need local IP addresses.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-foreground">Controller Hostname</label>
-                <Input
-                  value={localCtrlHost}
-                  onChange={(e) => setLocalCtrlHost(e.target.value)}
-                  placeholder="e.g., edens-esp32.local"
-                  className="h-10 font-mono text-xs bg-background"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-foreground">Controller Port</label>
-                <Input
-                  type="number"
-                  value={localCtrlPort}
-                  onChange={(e) => setLocalCtrlPort(Number(e.target.value))}
-                  className="h-10 font-mono tabular-nums text-xs bg-background"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-foreground">Camera Hostname</label>
-                <Input
-                  value={localCamHost}
-                  onChange={(e) => setLocalCamHost(e.target.value)}
-                  placeholder="e.g., edens-cam.local"
-                  className="h-10 font-mono text-xs bg-background"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end">
-              <Button type="submit" variant="outline" className="h-10 px-4 text-xs font-semibold cursor-pointer">
-                Save Local Network Settings
-              </Button>
-            </div>
-          </form>
         </div>
       )}
 

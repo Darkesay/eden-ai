@@ -15,6 +15,9 @@ import {
 import { createVisionDiagnosisHandler } from './src/server/visionDiagnosis.ts';
 import { PlatformDatabase } from './src/server/database.ts';
 import { extractClientIp, registerSelfServiceGreenhouseRoutes } from './src/server/greenhouseRoutes.ts';
+import { registerExistingHardwareHttpRoutes } from './src/server/existingHardwareHttp.ts';
+import { registerUniversalIotInfrastructure } from './src/server/iotInfrastructureGateway.ts';
+import { registerStage3IntelligenceRoutes } from './src/server/stage3Routes.ts';
 import {
   DEVICE_STATE_THRESHOLDS,
   type ExplicitDeviceConnectionState,
@@ -61,6 +64,7 @@ const MAX_AUDIO_MB = Number.isFinite(parsedAudioMb) && parsedAudioMb >= 1 ? pars
 function buildAllowedCorsOrigins(): Set<string> {
   const origins = new Set<string>([
     'https://eden-ai.vercel.app',
+    'https://edens-ai.vercel.app',
     'https://edens-ai.onrender.com'
   ]);
   const rawList = [
@@ -114,7 +118,12 @@ function isOriginAllowedForCors(originHeader: string, req: express.Request): boo
   }
 
   // Allow scoped Vercel preview/branch deployments for this project (never arbitrary .vercel.app origins)
-  if (/^https:\/\/eden-ai-[a-z0-9-]+(-[a-z0-9-]+)?\.vercel\.app$/i.test(normalizedOrigin)) {
+  if (/^https:\/\/edens?-ai(-[a-z0-9-]+)*\.vercel\.app$/i.test(normalizedOrigin)) {
+    return true;
+  }
+
+  // Allow AI Studio dev/shared preview origins when static preview falls back to cloud backend
+  if (/^https:\/\/ais-(dev|pre)-[a-z0-9-]+\.[a-z0-9-]+\.run\.app$/i.test(normalizedOrigin)) {
     return true;
   }
 
@@ -137,7 +146,7 @@ app.use('/api', (req, res, next) => {
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
       res.setHeader(
         'Access-Control-Allow-Headers',
-        'Content-Type, Authorization, Accept, X-Requested-With, X-Edens-Auth-Mode, X-Camera-Key, X-Hardware-Key, X-API-Key, X-Greenhouse-Id, X-Device-Id'
+        'Content-Type, Authorization, Accept, X-Requested-With, X-Edens-Auth-Mode, X-Camera-Key, X-Hardware-Key, X-API-Key, X-Greenhouse-Id, X-Device-Id, X-Firmware-Version'
       );
       res.setHeader('Access-Control-Max-Age', '86400');
     } else if (req.method === 'OPTIONS') {
@@ -172,11 +181,21 @@ let lastAsyncInitError: string | null = null;
 
 // Fast non-blocking readiness endpoint for Render port scan & health checks
 app.get('/api/health', (_req, res) => {
+  const dbReady = platformDb.isInitialized();
+  const dbDiag = dbReady ? platformDb.getDatabaseDiagnostics() : null;
   res.status(200).json({
     status: 'ok',
     service: 'edens-ai',
     mode: isProd ? 'production' : 'development',
-    dbInitialized: platformDb.isInitialized(),
+    dbInitialized: dbReady,
+    database: dbDiag
+      ? {
+          engine: dbDiag.engineKind,
+          journalMode: dbDiag.journalMode,
+          schemaVersion: dbDiag.schemaVersion,
+          foreignKeys: dbDiag.foreignKeys
+        }
+      : null,
     asyncInitError: lastAsyncInitError,
     authEndpointsReady: true,
     cameraUploadEndpoint: '/api/camera/upload',
@@ -337,9 +356,11 @@ registerCameraRoutes(app, cameraImageStore, {
         greenhouseId: authRes.device.greenhouseId,
         deviceId: authRes.device.id,
         onFrameStored: ({ timestamp, clientIp }) => {
+          const fwHeader = (req.headers['x-firmware-version'] as string | undefined)?.trim();
           platformDb.recordDeviceCheckIn({
             deviceId: authRes.device.id,
             greenhouseId: authRes.device.greenhouseId,
+            firmwareVersion: fwHeader ? fwHeader.slice(0, 48) : undefined,
             ipAddress: clientIp,
             checkInKind: 'camera_upload',
             dataTimestamp: timestamp
@@ -651,10 +672,19 @@ app.post('/api/telemetry/upload', (req, res) => {
       ipAddress: ip
     });
 
+    if (req.body?.capabilities && typeof req.body.capabilities === 'object') {
+      platformDb.repositories.zonesAndHardware.syncReportedCapabilities(
+        devAuth.device.greenhouseId,
+        devAuth.device.id,
+        req.body.capabilities
+      );
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Physical ESP32 controller telemetry validated and stored.',
       greenhouseId: devAuth.device.greenhouseId,
+      zoneId: devAuth.device.zoneId || null,
       deviceId: devAuth.device.id,
       readingId: stored.readingId,
       timestamp: stored.recordedAt,
@@ -779,6 +809,35 @@ app.get('/api/telemetry/latest', (_req, res) => {
   });
 });
 
+// 4B. Register Existing Hardware HTTP Connection Routes (Camera + Controller Read-Only Probes & Monitoring Mode)
+registerExistingHardwareHttpRoutes(app, {
+  platformDb,
+  globalCameraStore: cameraImageStore,
+  cameraRegistry: cameraStoreRegistry,
+  requireAuthenticatedUser,
+  getLatestGlobalTelemetry: () => {
+    if (!latestPushedTelemetry) {
+      return {
+        exists: false,
+        dataSource: 'DISCONNECTED',
+        explicitState: 'OFFLINE',
+        timestamp: null,
+        ageSeconds: null,
+        readings: null
+      };
+    }
+    const st = classifyControllerTelemetryState(latestPushedTelemetry.receivedAtMs);
+    return {
+      exists: st.dataSource !== 'DISCONNECTED',
+      dataSource: st.dataSource,
+      explicitState: st.explicitState,
+      timestamp: latestPushedTelemetry.timestamp,
+      ageSeconds: st.ageSeconds,
+      readings: latestPushedTelemetry.payload
+    };
+  }
+});
+
 // Unified Local Hardware Gateway Proxy: /api/hardware
 // Hardened against SSRF, query-string secret leaks, unauthenticated control commands, and unconfirmed actuation.
 app.all('/api/hardware', async (req, res) => {
@@ -812,6 +871,24 @@ app.all('/api/hardware', async (req, res) => {
       });
     }
     const ghId = String(req.query.greenhouseId || req.body?.greenhouseId || '').trim();
+    if (user?.isGuest && !hwAuth) {
+      if (platformDb.isInitialized()) {
+        platformDb.recordAuditEvent({
+          actorUserId: user.id,
+          greenhouseId: ghId || null,
+          eventType: 'GUEST_HARDWARE_COMMAND_BLOCKED',
+          summary: `Blocked physical hardware command attempt from guest session (${req.method} ${endpoint}).`,
+          metadata: { method: req.method, endpoint },
+          ipAddress: extractClientIp(req)
+        });
+      }
+      return res.status(403).json({
+        error: 'GUEST_HARDWARE_CONTROL_FORBIDDEN',
+        message:
+          'Guest accounts are restricted to simulation and read-only testing and are never permitted to control physical greenhouse equipment.',
+        confirmedByController: false
+      });
+    }
     if (user && ghId) {
       const role = platformDb.getMemberRole(ghId, user.id);
       if (role !== 'owner' && role !== 'operator') {
@@ -1042,20 +1119,23 @@ function getGeminiClient(): GoogleGenAI | null {
 }
 
 const GEMINI_TEXT_VISION_MODELS = [
-  'gemini-3.1-flash-lite',
   'gemini-3.8-flash',
+  'gemini-2.5-flash',
+  'gemini-3.1-flash-lite',
   'gemini-flash-latest'
 ] as const;
 
 const GEMINI_AGENT_MODELS = [
-  'gemini-3.1-flash-lite',
   'gemini-3.8-flash',
+  'gemini-2.5-flash',
+  'gemini-3.1-flash-lite',
   'gemini-flash-latest'
 ] as const;
 
 const GEMINI_TTS_MODELS = [
   'gemini-3.8-flash-tts',
-  'gemini-3.8-flash-lite-tts'
+  'gemini-3.8-flash-lite-tts',
+  'gemini-2.5-flash-preview-tts'
 ] as const;
 
 // Bounded in-memory LRU cache for synthesized TTS clips so repeated playback uses 0 Gemini quota
@@ -1088,33 +1168,29 @@ function setCachedSpeech(cacheKey: string, entry: CachedSpeechEntry): void {
   speechAudioCache.set(cacheKey, entry);
 }
 
-// Tracks temporary per-model 429 quota cooldowns so subsequent requests immediately route to healthy models
+// Tracks temporary per-model 429 quota & 503/404 transient health cooldowns so subsequent requests immediately route to healthy models
 const modelQuotaCooldownUntil = new Map<string, number>();
+const modelTransientCooldownUntil = new Map<string, number>();
 
 function recordModelCooldownIfQuotaExhausted(modelName: string, err: any): boolean {
   const msg = String(err?.message || err || '');
-  const lower = msg.toLowerCase();
   const status = Number(err?.status || err?.statusCode || 0);
-  if (status !== 429 && !msg.includes('429') && !msg.includes('RESOURCE_EXHAUSTED')) {
-    return false;
-  }
+  const isQuota =
+    status === 429 ||
+    msg.includes('429') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.toLowerCase().includes('quota');
+  if (!isQuota) return false;
 
-  let cooldownMs = 45_000;
-  if (
-    lower.includes('generaterequestsperday') ||
-    lower.includes('requests per day') ||
-    lower.includes('free_tier_requests')
-  ) {
-    // Daily free-tier quota reached for this specific model -> cool down for 30 minutes
-    cooldownMs = 30 * 60 * 1000;
-  } else {
-    const delayMatch = msg.match(/"retryDelay"\s*:\s*"(\d+)s"/i);
-    if (delayMatch) {
-      const secs = parseInt(delayMatch[1], 10);
-      if (Number.isFinite(secs) && secs > 0) {
-        cooldownMs = Math.min(30 * 60 * 1000, Math.max(15_000, secs * 1000));
-      }
+  let cooldownMs = 90_000;
+  const retryMatch = msg.match(/retry in\s+([0-9.]+)s/i) || msg.match(/"retryDelay"\s*:\s*"([0-9.]+)s"/i);
+  if (retryMatch) {
+    const parsedSec = Number.parseFloat(retryMatch[1]);
+    if (Number.isFinite(parsedSec) && parsedSec > 0) {
+      cooldownMs = Math.min(5 * 60_000, Math.max(5_000, Math.ceil(parsedSec * 1000)));
     }
+  } else if (msg.includes('exceeded your current quota')) {
+    cooldownMs = 5 * 60_000;
   }
   modelQuotaCooldownUntil.set(modelName, Date.now() + cooldownMs);
   return true;
@@ -1124,76 +1200,111 @@ function isTransientRetryableModelError(err: any): boolean {
   const msg = String(err?.message || err || '');
   const lower = msg.toLowerCase();
   const status = Number(err?.status || err?.statusCode || 0);
+  if (status === 408 || status === 500 || status === 502 || status === 503 || status === 504) {
+    return true;
+  }
   return (
-    status === 500 ||
-    status === 502 ||
-    status === 503 ||
-    status === 504 ||
     msg.includes('503') ||
-    msg.includes('500') ||
-    msg.includes('502') ||
-    msg.includes('504') ||
     msg.includes('UNAVAILABLE') ||
+    msg.includes('DEADLINE_EXCEEDED') ||
     msg.includes('INTERNAL') ||
     lower.includes('high demand') ||
     lower.includes('overloaded') ||
-    lower.includes('aborted') ||
+    lower.includes('temporarily unavailable') ||
     lower.includes('timed out') ||
     lower.includes('timeout') ||
+    lower.includes('aborted') ||
     lower.includes('fetch failed') ||
-    err?.name === 'AbortError' ||
-    err?.name === 'TimeoutError'
+    lower.includes('econnreset')
   );
 }
 
 function isFallbackEligibleError(err: any): boolean {
-  if (isTransientRetryableModelError(err)) return true;
   const msg = String(err?.message || err || '');
   const status = Number(err?.status || err?.statusCode || 0);
+  if (
+    msg.includes('API_KEY_INVALID') ||
+    msg.includes('API key not valid') ||
+    status === 401 ||
+    (status === 403 && !msg.toLowerCase().includes('quota'))
+  ) {
+    return false;
+  }
+  if (isTransientRetryableModelError(err)) return true;
+  if (status === 404 || status === 429) return true;
   return (
-    status === 429 ||
-    status === 404 ||
-    msg.includes('429') ||
-    msg.includes('RESOURCE_EXHAUSTED') ||
-    msg.includes('404') ||
     msg.includes('NOT_FOUND') ||
-    msg.toLowerCase().includes('not found')
+    msg.includes('404') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.toLowerCase().includes('not found') ||
+    msg.toLowerCase().includes('unsupported')
   );
 }
 
 function formatGeminiErrorForUser(err: any): string {
-  const raw = redactSecretsFromText(String(err?.message || err || 'Unknown AI service error'));
-  const status = Number(err?.status || err?.statusCode || 0);
+  const raw = redactSecretsFromText(String(err?.message || err || 'Unknown AI service error')).trim();
+  const lower = raw.toLowerCase();
 
-  if (status === 403 || raw.includes('PERMISSION_DENIED') || raw.includes('API_KEY_INVALID')) {
-    return 'Gemini API key was rejected or lacks permission. Check your attached API key in Settings > Secrets (or Render Environment Variables).';
+  if (raw.includes('API_KEY_INVALID') || lower.includes('api key not valid')) {
+    return 'The configured GEMINI_API_KEY was rejected by Google Gemini. Verify the key in Environment Variables.';
   }
-  if (status === 429 || raw.includes('RESOURCE_EXHAUSTED') || raw.includes('"code":429')) {
-    return 'Gemini API free-tier request quota was temporarily reached across available models. Wait a minute and try again, or select a billing-enabled API key in Settings > Secrets for higher quota.';
+  if (raw.includes('RESOURCE_EXHAUSTED') || raw.includes('429') || lower.includes('quota')) {
+    return 'Gemini API rate limit reached right now. Please wait 15–30 seconds and try again.';
   }
   if (
-    status === 503 ||
+    raw.includes('503') ||
     raw.includes('UNAVAILABLE') ||
-    raw.toLowerCase().includes('high demand')
+    lower.includes('high demand') ||
+    lower.includes('overloaded')
   ) {
     return 'Gemini AI is experiencing temporary high demand right now. Please wait a few seconds and tap Analyze again.';
   }
-  if (err?.name === 'AbortError' || err?.name === 'TimeoutError' || raw.toLowerCase().includes('timed out')) {
-    return 'Gemini AI took too long to respond. Please try again.';
+  if (
+    raw.includes('DEADLINE_EXCEEDED') ||
+    lower.includes('timed out') ||
+    lower.includes('timeout') ||
+    lower.includes('aborted')
+  ) {
+    return 'Gemini AI took too long to respond. Please try again in a few seconds.';
   }
-  // Strip verbose Google RPC JSON wrappers if present
+
+  // Strip embedded JSON error wrappers if present so UI stays readable
   if (raw.startsWith('{') && raw.includes('"message"')) {
     try {
       const parsed = JSON.parse(raw);
-      const innerMsg = parsed?.error?.message;
+      const innerMsg = parsed?.error?.message || parsed?.message;
       if (typeof innerMsg === 'string' && innerMsg.trim()) {
-        return redactSecretsFromText(innerMsg.trim().split('\n')[0].slice(0, 260));
+        return redactSecretsFromText(innerMsg.trim()).slice(0, 260);
       }
     } catch {
-      // Fall through
+      // Keep sanitized fallback below
     }
   }
+
   return raw.slice(0, 260);
+}
+
+function stripJsonCodeFences(rawText: string): string {
+  const trimmed = rawText.trim();
+  if (trimmed.startsWith('```')) {
+    return trimmed
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+  }
+  return trimmed;
+}
+
+function recordModelHealthIfDegraded(modelName: string, err: any): void {
+  const msg = String(err?.message || err || '');
+  const status = Number(err?.status || err?.statusCode || 0);
+  if (status === 404 || msg.includes('404') || msg.includes('NOT_FOUND') || msg.toLowerCase().includes('not found')) {
+    modelTransientCooldownUntil.set(modelName, Date.now() + 10 * 60 * 1000);
+    return;
+  }
+  if (isTransientRetryableModelError(err)) {
+    modelTransientCooldownUntil.set(modelName, Date.now() + 90_000);
+  }
 }
 
 async function generateWithModelFallback(
@@ -1204,11 +1315,21 @@ async function generateWithModelFallback(
   let lastErr: any = null;
   const now = Date.now();
 
-  // Prioritize models not currently in a 429 quota cooldown window, while keeping cooled-down models as a last-resort tail
-  const activeModels = models.filter((m) => (modelQuotaCooldownUntil.get(m) || 0) <= now);
-  const candidateOrder = activeModels.length > 0 ? activeModels : [...models];
+  // Prioritize models not currently in a 429 quota or 503/404 transient cooldown window, keeping cooled-down models as a tail fallback
+  const healthyModels = models.filter(
+    (m) => (modelQuotaCooldownUntil.get(m) || 0) <= now && (modelTransientCooldownUntil.get(m) || 0) <= now
+  );
+  const nonQuotaModels = models.filter((m) => (modelQuotaCooldownUntil.get(m) || 0) <= now);
+  const tailModels = models.filter((m) => !healthyModels.includes(m) && nonQuotaModels.includes(m));
+  const candidateOrder =
+    healthyModels.length > 0
+      ? [...healthyModels, ...tailModels]
+      : nonQuotaModels.length > 0
+        ? [...nonQuotaModels]
+        : [...models];
 
-  // Up to 2 passes across non-quota-exhausted models so transient 503 high-demand spikes succeed reliably
+  // Up to 2 passes across all candidate models: immediate hop between distinct models on pass 0, jittered backoff between passes
+  const backoffByPass = [80, 1400];
   for (let pass = 0; pass < 2; pass++) {
     for (let i = 0; i < candidateOrder.length; i++) {
       const modelName = candidateOrder[i];
@@ -1217,9 +1338,10 @@ async function generateWithModelFallback(
       }
 
       const baseConfig = (requestParams.config || {}) as Record<string, any>;
+      const perAttemptTimeoutMs = modelName === 'gemini-2.5-flash' ? 16000 : 10500;
       const modelConfig: Record<string, any> = {
         ...baseConfig,
-        abortSignal: AbortSignal.timeout(18000)
+        abortSignal: AbortSignal.timeout(perAttemptTimeoutMs)
       };
 
       // Minimize reasoning latency on Gemini 3.8 Flash while respecting model capability rules
@@ -1234,15 +1356,19 @@ async function generateWithModelFallback(
           config: modelConfig
         });
         modelQuotaCooldownUntil.delete(modelName);
+        modelTransientCooldownUntil.delete(modelName);
         return { response, modelUsed: modelName };
       } catch (err: any) {
         lastErr = err;
         const wasQuota = recordModelCooldownIfQuotaExhausted(modelName, err);
+        if (!wasQuota) {
+          recordModelHealthIfDegraded(modelName, err);
+        }
         if (!wasQuota && !isFallbackEligibleError(err)) {
           throw err;
         }
-        // Brief jittered pause before next attempt
-        const delayMs = wasQuota ? 80 : 450 + pass * 450;
+        const jitter = Math.floor(Math.random() * 120);
+        const delayMs = wasQuota ? 40 : (backoffByPass[pass] || 1200) + jitter;
         await new Promise((r) => setTimeout(r, delayMs));
       }
     }
@@ -1275,12 +1401,12 @@ app.get('/api/ai/status', (req, res) => {
     configured: isConfigured,
     provider: 'Google Gemini AI',
     models: {
-      chat: 'gemini-3.1-flash-lite',
-      vision: 'gemini-3.1-flash-lite',
+      chat: 'gemini-3.8-flash',
+      vision: 'gemini-3.8-flash',
       transcription: 'gemini-3.5-transcribe',
       speech: 'gemini-3.8-flash-tts',
-      fallbackChain: ['gemini-3.8-flash', 'gemini-flash-latest'],
-      ttsFallbackChain: ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts', 'BROWSER_TTS']
+      fallbackChain: ['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'],
+      ttsFallbackChain: ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts', 'gemini-2.5-flash-preview-tts', 'BROWSER_TTS']
     },
     maxAudioUploadMb: MAX_AUDIO_MB,
     supportedAudioFormats: ['audio/webm', 'audio/wav', 'audio/mp3', 'audio/m4a', 'audio/mp4', 'audio/ogg', 'audio/aac'],
@@ -1809,18 +1935,17 @@ app.post(
       if (!ai) {
         throw new Error('GEMINI_API_KEY is not configured on the server.');
       }
+      const imagePart = {
+        inlineData: {
+          mimeType,
+          data: base64Data
+        }
+      };
+
       try {
         const { response, modelUsed } = await generateWithModelFallback(ai, {
           contents: {
-            parts: [
-              {
-                inlineData: {
-                  mimeType,
-                  data: base64Data
-                }
-              },
-              { text: promptText }
-            ]
+            parts: [imagePart, { text: promptText }]
           },
           config: {
             responseMimeType: 'application/json',
@@ -1828,11 +1953,35 @@ app.post(
           }
         });
         return {
-          rawJsonText: response.text || '',
+          rawJsonText: stripJsonCodeFences(response.text || ''),
           modelUsed
         };
-      } catch (visionErr: any) {
-        throw new Error(formatGeminiErrorForUser(visionErr));
+      } catch (primaryVisionErr: any) {
+        if (!isFallbackEligibleError(primaryVisionErr)) {
+          throw new Error(formatGeminiErrorForUser(primaryVisionErr));
+        }
+        // Real multimodal Gemini fallback without constrained schema grammar when upstream 503/500 spikes hit schema mode
+        try {
+          const jsonPrompt = `${promptText}\n\nReturn ONLY a valid JSON object with exact string keys: "species", "speciesLocal", "healthStatus", "healthStatusLocal", "symptoms", "cause", "recommendation", "audioSummary". Do not wrap in markdown.`;
+          const { response: fallbackRes, modelUsed: fallbackModel } = await generateWithModelFallback(
+            ai,
+            {
+              contents: {
+                parts: [imagePart, { text: jsonPrompt }]
+              },
+              config: {
+                responseMimeType: 'application/json'
+              }
+            },
+            ['gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest']
+          );
+          return {
+            rawJsonText: stripJsonCodeFences(fallbackRes.text || ''),
+            modelUsed: fallbackModel
+          };
+        } catch (finalVisionErr: any) {
+          throw new Error(formatGeminiErrorForUser(finalVisionErr));
+        }
       }
     }
   })
@@ -2469,6 +2618,19 @@ app.post('/api/ai/speech', async (req, res) => {
 });
 
 // --------------------------------------------------------------------
+// STAGE 2 UNIVERSAL IOT INFRASTRUCTURE & STAGE 3 INDEPENDENT INTELLIGENCE
+// --------------------------------------------------------------------
+
+export const iotRuntime = registerUniversalIotInfrastructure(app, {
+  platformDb,
+  cameraRegistry: cameraStoreRegistry
+});
+
+registerStage3IntelligenceRoutes(app, {
+  platformDb
+});
+
+// --------------------------------------------------------------------
 // EXPLICIT API JSON 404 & ERROR HANDLERS (NEVER RETURN HTML FOR /api/*)
 // --------------------------------------------------------------------
 
@@ -2546,7 +2708,10 @@ export async function startServer(listenPort: number = PORT) {
 
   await platformDb.init();
   lastAsyncInitError = null;
-  console.log('[EDENS AI Startup] SQLite PlatformDatabase initialized and verified.');
+  const dbDiag = platformDb.getDatabaseDiagnostics();
+  console.log(
+    `[EDENS AI Startup] SQLite PlatformDatabase initialized (engine=${dbDiag.engineKind}, journal=${dbDiag.journalMode}, schema=${dbDiag.schemaVersion}).`
+  );
 
   const httpServer = await new Promise<ReturnType<typeof app.listen>>((resolve, reject) => {
     const srv = app.listen(listenPort, '0.0.0.0', () => {
@@ -2560,12 +2725,32 @@ export async function startServer(listenPort: number = PORT) {
     });
   });
 
+  await iotRuntime.attachToHttpServer(httpServer);
+
   return httpServer;
 }
 
 if (process.env.EDENS_SKIP_LISTEN !== '1') {
-  startServer().catch((err) => {
-    console.error('[EDENS AI Startup Fatal] Server failed to start:', err?.stack || err);
-    process.exit(1);
-  });
+  startServer()
+    .then((httpServer) => {
+      const gracefulShutdown = (signal: string) => {
+        console.log(`[EDENS AI Shutdown] Received ${signal}. Flushing SQLite WAL and closing server...`);
+        void iotRuntime.shutdown().finally(() => {
+          httpServer.close(() => {
+            platformDb.close();
+            process.exit(0);
+          });
+        });
+        setTimeout(() => {
+          platformDb.close();
+          process.exit(0);
+        }, 4000).unref();
+      };
+      process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+      process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+    })
+    .catch((err) => {
+      console.error('[EDENS AI Startup Fatal] Server failed to start:', err?.stack || err);
+      process.exit(1);
+    });
 }

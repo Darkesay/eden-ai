@@ -28,13 +28,15 @@ export interface AuthUser {
   email: string;
   displayName: string;
   createdAt: string;
+  isGuest?: boolean;
 }
 
 const GUEST_PREVIEW_USER: AuthUser = {
   id: 'guest-preview',
   email: '',
   displayName: 'Guest Farmer',
-  createdAt: '2026-01-01T00:00:00.000Z'
+  createdAt: '2026-01-01T00:00:00.000Z',
+  isGuest: true
 };
 
 export type ExplicitDeviceConnectionState =

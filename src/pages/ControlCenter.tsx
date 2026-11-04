@@ -35,6 +35,7 @@ import { DataSourceBadge } from '../components/DataSourceBadge';
 import { HarvestWidget } from '../components/HarvestWidget';
 import { AgronomyAgentsPanel } from '../components/AgronomyAgentsPanel';
 import { QrScannerModal } from '../components/QrScannerModal';
+import { MonitoringModeBanner } from '../components/MonitoringModeBanner';
 import { Button } from '../components/ui/button';
 import { cn } from '../lib/utils';
 
@@ -273,14 +274,13 @@ export default function ControlCenter() {
   };
 
   const handleApprovePendingAction = (id: string, act: any) => {
-    if (act?.topic && act?.payload) {
-      publish(String(act.topic), String(act.payload));
-    }
+    // Monitoring Mode Lock: record farmer advisory decision without dispatching physical MQTT actuation
+    void publish;
     store.delRow('pendingActions', id);
     store.setRow('activityLog', `${Date.now()}_approved`, {
       timestamp: new Date().toISOString(),
       type: 'info',
-      message: `Approved recommendation: ${act?.action || 'Action applied'}`
+      message: `Approved recommendation (advisory recorded — physical control disabled in Monitoring Mode): ${act?.action || 'Advisory recorded'}`
     });
   };
 
@@ -303,6 +303,8 @@ export default function ControlCenter() {
 
   return (
     <div className="space-y-6">
+      <MonitoringModeBanner />
+
       {/* Honest Source Banner whenever not on live verified hardware */}
       {ghState.provenance !== 'REAL_HARDWARE' && <DataSourceBadge variant="banner" />}
 
@@ -389,6 +391,13 @@ export default function ControlCenter() {
             </Button>
 
             <Link
+              to="/settings?tab=hardware"
+              className="inline-flex items-center justify-center gap-1.5 h-10 px-3.5 rounded-lg border border-border bg-background hover:bg-muted text-foreground text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+            >
+              <span>Connect Hardware</span>
+            </Link>
+
+            <Link
               to={ghState.nextActionTo}
               className="inline-flex items-center justify-center gap-1.5 h-10 px-4 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold transition-colors whitespace-nowrap flex-1 sm:flex-initial shrink-0"
             >
@@ -441,14 +450,24 @@ export default function ControlCenter() {
 
       {/* 2. Key Environmental Readings vs Targets */}
       <section aria-label="Environmental Readings" className="space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-base font-semibold text-foreground">Greenhouse Conditions</h2>
-          <Link
-            to="/settings?tab=targets"
-            className="text-xs font-medium text-primary hover:underline underline-offset-4"
-          >
-            Adjust crop targets
-          </Link>
+          <div className="flex items-center gap-4 text-xs font-medium">
+            {ghState.activeGreenhouse?.id && (
+              <Link
+                to={`/greenhouses/${ghState.activeGreenhouse.id}`}
+                className="text-primary hover:underline underline-offset-4"
+              >
+                Crop Intelligence &amp; Authorized Control
+              </Link>
+            )}
+            <Link
+              to="/settings?tab=targets"
+              className="text-muted-foreground hover:text-foreground hover:underline underline-offset-4"
+            >
+              Adjust crop targets
+            </Link>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

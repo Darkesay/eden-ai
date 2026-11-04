@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { getDefaultDataRetentionConfig } from './safetyDefaults.ts';
 
 export type CameraAcquisitionMethod = 'ESP32_CAM_UPLOAD' | 'LAN_GATEWAY_PULL';
 
@@ -41,12 +42,30 @@ export interface JpegValidationResult {
   message?: string;
 }
 
+export interface CuratedDatasetFrameRecord {
+  sampleId: string;
+  frameId: string;
+  sha256: string;
+  sizeBytes: number;
+  capturedAt: string;
+  promotedAt: string;
+  label: string;
+  cropId: string | null;
+  growthStage: string | null;
+  farmerConfirmed: boolean;
+  notes: string | null;
+  imagePath: string;
+  metadataPath: string;
+}
+
 export interface CameraImageStoreOptions {
   storageBaseDir?: string;
   maxUploadBytes?: number;
   freshMaxSeconds?: number;
   cachedMaxSeconds?: number;
   maxHistoryFiles?: number;
+  maxRoutineAgeDays?: number;
+  maxCuratedFiles?: number;
 }
 
 export const DEFAULT_FRESH_MAX_SECONDS = 90;
@@ -212,15 +231,20 @@ export function classifyCameraFrameFreshness(
 export class CameraImageStore {
   private readonly uploadDir: string;
   private readonly historyDir: string;
+  private readonly curatedDir: string;
   private readonly maxUploadBytes: number;
   private readonly freshMaxSeconds: number;
   private readonly cachedMaxSeconds: number;
   private readonly maxHistoryFiles: number;
+  private readonly maxRoutineAgeDays: number;
+  private readonly maxRoutineAgeMs: number;
+  private readonly maxCuratedFiles: number;
 
   private latestFrame: StoredCameraFrame | null = null;
   private totalFramesStored = 0;
 
   constructor(options: CameraImageStoreOptions = {}) {
+    const retention = getDefaultDataRetentionConfig();
     const baseDir =
       options.storageBaseDir ||
       process.env.CAMERA_STORAGE_PATH ||
@@ -229,10 +253,19 @@ export class CameraImageStore {
 
     this.uploadDir = path.join(baseDir, 'camera');
     this.historyDir = path.join(this.uploadDir, 'history');
-    this.maxUploadBytes = options.maxUploadBytes ?? parseInt(process.env.CAMERA_MAX_UPLOAD_MB || '10', 10) * 1024 * 1024;
-    this.freshMaxSeconds = options.freshMaxSeconds ?? parseInt(process.env.CAMERA_FRESH_MAX_SECONDS || String(DEFAULT_FRESH_MAX_SECONDS), 10);
-    this.cachedMaxSeconds = options.cachedMaxSeconds ?? parseInt(process.env.CAMERA_CACHED_MAX_SECONDS || String(DEFAULT_CACHED_MAX_SECONDS), 10);
-    this.maxHistoryFiles = options.maxHistoryFiles ?? 20;
+    this.curatedDir = path.join(this.uploadDir, 'curated');
+    this.maxUploadBytes =
+      options.maxUploadBytes ?? parseInt(process.env.CAMERA_MAX_UPLOAD_MB || '10', 10) * 1024 * 1024;
+    this.freshMaxSeconds =
+      options.freshMaxSeconds ??
+      parseInt(process.env.CAMERA_FRESH_MAX_SECONDS || String(DEFAULT_FRESH_MAX_SECONDS), 10);
+    this.cachedMaxSeconds =
+      options.cachedMaxSeconds ??
+      parseInt(process.env.CAMERA_CACHED_MAX_SECONDS || String(DEFAULT_CACHED_MAX_SECONDS), 10);
+    this.maxHistoryFiles = Math.max(1, options.maxHistoryFiles ?? retention.routineCameraMaxFiles);
+    this.maxRoutineAgeDays = Math.max(1, options.maxRoutineAgeDays ?? retention.routineCameraMaxDays);
+    this.maxRoutineAgeMs = this.maxRoutineAgeDays * 24 * 60 * 60 * 1000;
+    this.maxCuratedFiles = Math.max(5, options.maxCuratedFiles ?? retention.curatedDatasetMaxFiles);
 
     this.restoreFromDiskIfPresent();
   }
@@ -251,6 +284,10 @@ export class CameraImageStore {
 
   public getUploadDir(): string {
     return this.uploadDir;
+  }
+
+  public getCuratedDir(): string {
+    return this.curatedDir;
   }
 
   private restoreFromDiskIfPresent(): void {
@@ -327,7 +364,7 @@ export class CameraImageStore {
       }
     }
 
-    const imageId = `cam_${Date.now()}_${sha256.slice(0, 8)}`;
+    const imageId = `cam_${Date.now()}_${sha256.slice(0, 8)}_${this.totalFramesStored + 1}`;
     const url = `/api/camera/latest.jpg?frame=${encodeURIComponent(imageId)}`;
 
     const previousSha = this.latestFrame?.sha256;
@@ -366,8 +403,16 @@ export class CameraImageStore {
   private persistToDisk(frame: StoredCameraFrame): void {
     try {
       fs.mkdirSync(this.historyDir, { recursive: true });
+      const framePath = path.join(this.historyDir, `${frame.id}.jpg`);
       fs.writeFileSync(path.join(this.uploadDir, 'latest.jpg'), frame.buffer);
-      fs.writeFileSync(path.join(this.historyDir, `${frame.id}.jpg`), frame.buffer);
+      fs.writeFileSync(framePath, frame.buffer);
+      const parsedFrameTime = new Date(frame.capturedAt || frame.timestamp).getTime();
+      if (Number.isFinite(parsedFrameTime) && parsedFrameTime > 0) {
+        try {
+          const tsDate = new Date(parsedFrameTime);
+          fs.utimesSync(framePath, tsDate, tsDate);
+        } catch (_) {}
+      }
       fs.writeFileSync(
         path.join(this.uploadDir, 'metadata.json'),
         JSON.stringify(
@@ -389,25 +434,174 @@ export class CameraImageStore {
         )
       );
 
-      const historyFiles = fs
-        .readdirSync(this.historyDir)
-        .filter((f) => f.endsWith('.jpg'))
-        .map((f) => ({
-          name: f,
-          mtime: fs.statSync(path.join(this.historyDir, f)).mtime.getTime()
-        }))
-        .sort((a, b) => b.mtime - a.mtime);
-
-      if (historyFiles.length > this.maxHistoryFiles) {
-        for (const oldFile of historyFiles.slice(this.maxHistoryFiles)) {
-          try {
-            fs.unlinkSync(path.join(this.historyDir, oldFile.name));
-          } catch (_) {}
-        }
-      }
+      this.pruneRoutineHistory();
     } catch (err: any) {
       console.error('Camera storage persistence warning (in-memory frame preserved):', err.message);
     }
+  }
+
+  /**
+   * Prunes routine uncurated camera frames by both max count and max age.
+   * Never deletes curated dataset samples in `curatedDir`.
+   */
+  public pruneRoutineHistory(nowMs: number = Date.now()): { deletedCount: number; remainingCount: number } {
+    if (!fs.existsSync(this.historyDir)) {
+      return { deletedCount: 0, remainingCount: 0 };
+    }
+    const cutoffMs = nowMs - this.maxRoutineAgeMs;
+    const historyFiles = fs
+      .readdirSync(this.historyDir)
+      .filter((f) => f.endsWith('.jpg'))
+      .map((f) => ({
+        name: f,
+        mtime: fs.statSync(path.join(this.historyDir, f)).mtime.getTime()
+      }))
+      .sort((a, b) => b.mtime - a.mtime);
+
+    let deletedCount = 0;
+    historyFiles.forEach((entry, idx) => {
+      const exceedsCount = idx >= this.maxHistoryFiles;
+      // Always retain index 0 (most recent frame) unless explicitly cleared
+      const exceedsAge = idx > 0 && entry.mtime < cutoffMs;
+      if (exceedsCount || exceedsAge) {
+        try {
+          fs.unlinkSync(path.join(this.historyDir, entry.name));
+          deletedCount += 1;
+        } catch (_) {}
+      }
+    });
+
+    return {
+      deletedCount,
+      remainingCount: Math.max(0, historyFiles.length - deletedCount)
+    };
+  }
+
+  /**
+   * Promotes a validated routine frame into the persistent curated agricultural dataset
+   * (`<uploadDir>/curated/`) so verified disease, stress, or crop-stage samples survive
+   * routine ring-buffer rotation without keeping every routine camera frame forever.
+   */
+  public promoteFrameToCuratedDataset(
+    frameId: string,
+    meta: {
+      label: string;
+      cropId?: string | null;
+      growthStage?: string | null;
+      farmerConfirmed?: boolean;
+      notes?: string | null;
+    }
+  ): CuratedDatasetFrameRecord | null {
+    const safeFrameId = frameId.replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!safeFrameId) return null;
+
+    let buffer: Buffer | null = null;
+    let capturedAt = new Date().toISOString();
+
+    if (this.latestFrame && this.latestFrame.id === safeFrameId) {
+      buffer = this.latestFrame.buffer;
+      capturedAt = this.latestFrame.capturedAt || this.latestFrame.timestamp;
+    } else {
+      const historyCandidate = path.join(this.historyDir, `${safeFrameId}.jpg`);
+      if (fs.existsSync(historyCandidate)) {
+        const raw = fs.readFileSync(historyCandidate);
+        const check = extractAndValidateJpeg(raw, this.maxUploadBytes);
+        if (check.valid) {
+          buffer = check.buffer;
+          capturedAt = fs.statSync(historyCandidate).mtime.toISOString();
+        }
+      }
+    }
+
+    if (!buffer) {
+      return null;
+    }
+
+    fs.mkdirSync(this.curatedDir, { recursive: true });
+    const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+    const sampleId = `cur_${Date.now()}_${sha256.slice(0, 10)}`;
+    const promotedAt = new Date().toISOString();
+    const imagePath = path.join(this.curatedDir, `${sampleId}.jpg`);
+    const metadataPath = path.join(this.curatedDir, `${sampleId}.json`);
+
+    const record: CuratedDatasetFrameRecord = {
+      sampleId,
+      frameId: safeFrameId,
+      sha256,
+      sizeBytes: buffer.length,
+      capturedAt,
+      promotedAt,
+      label: String(meta.label || 'unlabeled_sample').trim(),
+      cropId: meta.cropId ? String(meta.cropId).trim() : null,
+      growthStage: meta.growthStage ? String(meta.growthStage).trim() : null,
+      farmerConfirmed: Boolean(meta.farmerConfirmed),
+      notes: meta.notes ? String(meta.notes).trim() : null,
+      imagePath,
+      metadataPath
+    };
+
+    fs.writeFileSync(imagePath, buffer);
+    fs.writeFileSync(metadataPath, JSON.stringify(record, null, 2));
+
+    this.enforceCuratedCapacity();
+    return record;
+  }
+
+  private enforceCuratedCapacity(): void {
+    const samples = this.listCuratedDatasetFrames();
+    if (samples.length <= this.maxCuratedFiles) return;
+
+    // Sort eviction candidates: unconfirmed samples first, oldest promotedAt first
+    const evictionOrder = [...samples].sort((a, b) => {
+      if (a.farmerConfirmed !== b.farmerConfirmed) {
+        return a.farmerConfirmed ? 1 : -1;
+      }
+      return new Date(a.promotedAt).getTime() - new Date(b.promotedAt).getTime();
+    });
+
+    const excess = samples.length - this.maxCuratedFiles;
+    for (const item of evictionOrder.slice(0, excess)) {
+      try {
+        if (fs.existsSync(item.imagePath)) fs.unlinkSync(item.imagePath);
+        if (fs.existsSync(item.metadataPath)) fs.unlinkSync(item.metadataPath);
+      } catch (_) {}
+    }
+  }
+
+  public listCuratedDatasetFrames(): CuratedDatasetFrameRecord[] {
+    if (!fs.existsSync(this.curatedDir)) return [];
+    const records: CuratedDatasetFrameRecord[] = [];
+    for (const file of fs.readdirSync(this.curatedDir)) {
+      if (!file.endsWith('.json')) continue;
+      try {
+        const metaPath = path.join(this.curatedDir, file);
+        const parsed = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as CuratedDatasetFrameRecord;
+        if (parsed && parsed.sampleId && fs.existsSync(parsed.imagePath)) {
+          records.push(parsed);
+        }
+      } catch (_) {}
+    }
+    return records.sort((a, b) => new Date(b.promotedAt).getTime() - new Date(a.promotedAt).getTime());
+  }
+
+  public getRetentionSummary(): {
+    routineCount: number;
+    curatedCount: number;
+    maxHistoryFiles: number;
+    maxRoutineAgeDays: number;
+    maxCuratedFiles: number;
+  } {
+    const routineCount = fs.existsSync(this.historyDir)
+      ? fs.readdirSync(this.historyDir).filter((f) => f.endsWith('.jpg')).length
+      : 0;
+    const curatedCount = this.listCuratedDatasetFrames().length;
+    return {
+      routineCount,
+      curatedCount,
+      maxHistoryFiles: this.maxHistoryFiles,
+      maxRoutineAgeDays: this.maxRoutineAgeDays,
+      maxCuratedFiles: this.maxCuratedFiles
+    };
   }
 
   public getLatest(nowMs: number = Date.now()): {

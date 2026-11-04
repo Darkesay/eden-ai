@@ -14,13 +14,21 @@ export interface PlantAnalysisResult {
   healthStatusLocal?: string;
   symptoms: string;
   cause: string;
+  possibleCauses?: string;
   recommendation: string;
+  recommendedActions?: string;
   language?: string;
   audioSummary?: string;
   imageSource?: 'ESP32_CAM_FRESH' | 'ESP32_CAM_HISTORICAL' | 'MANUAL_UPLOAD';
+  imageOriginLabel?: 'REAL_CAMERA_IMAGE' | 'UPLOADED_TEST_IMAGE';
   frameId?: string;
   frameTimestamp?: string;
+  capturedAt?: string | null;
   frameAgeSeconds?: number;
+  acquisitionMethod?: string;
+  confidenceCalibrated?: boolean;
+  confidenceScore?: number | null;
+  confidenceNote?: string;
 }
 
 export interface HarvestPredictionResult {
@@ -252,6 +260,39 @@ export class CameraDiagnosisError extends Error {
   }
 }
 
+function isTransientVisionFailure(status: number, errorCode?: string, message?: string): boolean {
+  if (errorCode === 'AI_SERVICE_UNCONFIGURED') return false;
+  if (
+    status === 408 ||
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    status === 524
+  ) {
+    return true;
+  }
+  const lower = (message || '').toLowerCase();
+  return (
+    lower.includes('high demand') ||
+    lower.includes('temporarily unavailable') ||
+    lower.includes('waking up') ||
+    lower.includes('timed out') ||
+    lower.includes('overloaded') ||
+    lower.includes('rate limit')
+  );
+}
+
+function resolveDirectCloudRetryBaseUrl(attempt: number): string | undefined {
+  if (attempt <= 0 || typeof window === 'undefined') return undefined;
+  const host = (window.location?.hostname || '').toLowerCase();
+  if (host.endsWith('.vercel.app') || host.startsWith('ais-pre-')) {
+    return 'https://edens-ai.onrender.com';
+  }
+  return undefined;
+}
+
 /**
  * Diagnoses the latest genuine, fresh ESP32-CAM photograph stored on the server.
  * Refuses simulated, missing (404), or stale/cached (409) images so old snapshots
@@ -261,36 +302,54 @@ export async function diagnoseLatestCameraFrame(
   languageId: string = 'ha'
 ): Promise<PlantAnalysisResult> {
   const greenhouseId = getActiveGreenhouseIdForAi();
-  const res = await apiFetch('/api/ai/diagnose', {
-    method: 'POST',
-    body: JSON.stringify({
-      greenhouseId,
-      useLatestCameraFrame: true,
-      requireFresh: true,
-      languageId
-    })
-  });
+  const retryDelaysMs = [1600, 2800];
+  let lastError: CameraDiagnosisError | Error | null = null;
 
-  const parsed = await parseApiJsonResponse<{
-    result?: PlantAnalysisResult;
-    ageSeconds?: number;
-    timestamp?: string;
-    error?: string;
-    message?: string;
-  }>(res);
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+    const res = await apiFetch('/api/ai/diagnose', {
+      method: 'POST',
+      baseUrl: resolveDirectCloudRetryBaseUrl(attempt),
+      body: JSON.stringify({
+        greenhouseId,
+        useLatestCameraFrame: true,
+        requireFresh: true,
+        languageId
+      })
+    });
 
-  if (parsed.ok) {
-    if (parsed.data?.result) return parsed.data.result;
-    throw new Error('Diagnosis response missing result data.');
+    const parsed = await parseApiJsonResponse<{
+      result?: PlantAnalysisResult;
+      ageSeconds?: number;
+      timestamp?: string;
+      error?: string;
+      message?: string;
+    }>(res);
+
+    if (parsed.ok) {
+      if (parsed.data?.result) return parsed.data.result;
+      throw new Error('Diagnosis response missing result data.');
+    }
+
+    lastError = new CameraDiagnosisError(
+      parsed.message || `Camera plant diagnosis failed with HTTP ${res.status}`,
+      parsed.errorCode || 'DIAGNOSIS_FAILED',
+      res.status,
+      undefined,
+      undefined
+    );
+
+    if (
+      attempt < retryDelaysMs.length &&
+      isTransientVisionFailure(res.status, parsed.errorCode, parsed.message)
+    ) {
+      await new Promise((r) => setTimeout(r, retryDelaysMs[attempt]));
+      continue;
+    }
+
+    throw lastError;
   }
 
-  throw new CameraDiagnosisError(
-    parsed.message || `Camera plant diagnosis failed with HTTP ${res.status}`,
-    parsed.errorCode || 'DIAGNOSIS_FAILED',
-    res.status,
-    undefined,
-    undefined
-  );
+  throw lastError || new Error('Camera plant diagnosis failed.');
 }
 
 export async function analyzePlantImage(
@@ -299,36 +358,54 @@ export async function analyzePlantImage(
 ): Promise<PlantAnalysisResult> {
   const normalizedImage = await prepareImageForDiagnosis(base64Image);
   const greenhouseId = getActiveGreenhouseIdForAi();
+  const retryDelaysMs = [1600, 2800];
+  let lastErrorMessage = 'Plant diagnosis failed.';
 
-  const sendDiagnosisRequest = (ghId?: string) =>
-    apiFetch('/api/ai/diagnose', {
-      method: 'POST',
-      body: JSON.stringify({
-        greenhouseId: ghId,
-        image: normalizedImage,
-        source: 'MANUAL_UPLOAD',
-        languageId
-      })
-    });
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+    const baseUrl = resolveDirectCloudRetryBaseUrl(attempt);
+    const sendDiagnosisRequest = (ghId?: string) =>
+      apiFetch('/api/ai/diagnose', {
+        method: 'POST',
+        baseUrl,
+        body: JSON.stringify({
+          greenhouseId: ghId,
+          image: normalizedImage,
+          source: 'MANUAL_UPLOAD',
+          languageId
+        })
+      });
 
-  let res = await sendDiagnosisRequest(greenhouseId);
-  if (greenhouseId && (res.status === 401 || res.status === 403)) {
-    res = await sendDiagnosisRequest(undefined);
+    let res = await sendDiagnosisRequest(greenhouseId);
+    if (greenhouseId && (res.status === 401 || res.status === 403)) {
+      res = await sendDiagnosisRequest(undefined);
+    }
+
+    const parsed = await parseApiJsonResponse<{ result?: PlantAnalysisResult }>(res);
+    if (parsed.ok) {
+      if (parsed.data?.result) return parsed.data.result;
+      throw new Error('Diagnosis response missing result data.');
+    }
+
+    if (res.status === 503 && parsed.errorCode === 'AI_SERVICE_UNCONFIGURED') {
+      throw new Error(
+        parsed.message ||
+          'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard.'
+      );
+    }
+
+    lastErrorMessage = parsed.message || `Plant diagnosis failed with HTTP ${res.status}`;
+    if (
+      attempt < retryDelaysMs.length &&
+      isTransientVisionFailure(res.status, parsed.errorCode, parsed.message)
+    ) {
+      await new Promise((r) => setTimeout(r, retryDelaysMs[attempt]));
+      continue;
+    }
+
+    throw new Error(lastErrorMessage);
   }
 
-  const parsed = await parseApiJsonResponse<{ result?: PlantAnalysisResult }>(res);
-  if (parsed.ok) {
-    if (parsed.data?.result) return parsed.data.result;
-    throw new Error('Diagnosis response missing result data.');
-  }
-
-  if (res.status === 503 && parsed.errorCode === 'AI_SERVICE_UNCONFIGURED') {
-    throw new Error(
-      parsed.message ||
-        'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Render dashboard.'
-    );
-  }
-  throw new Error(parsed.message || `Plant diagnosis failed with HTTP ${res.status}`);
+  throw new Error(lastErrorMessage);
 }
 
 export async function transcribeSpeechAudio(

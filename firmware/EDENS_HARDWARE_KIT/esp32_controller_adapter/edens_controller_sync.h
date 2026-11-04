@@ -1,22 +1,29 @@
 #pragma once
-
 /**
- * EDENS AI — Main ESP32 Controller Cloud Telemetry & Local Safety Interlock Adapter
+ * ============================================================================
+ * EDENS AI — Non-Destructive ESP32 Controller Telemetry & Safety Sync Module
+ * File: firmware/EDENS_HARDWARE_KIT/esp32_controller_adapter/edens_controller_sync.h
+ * Version: 3.0.0-pnp-sec
+ * ============================================================================
  *
- * Security & Reliability Guarantees:
- * 1. Verified HTTPS TLS (`WiFiClientSecure::setCACert`) using Root CAs (Google Trust Services
- *    GTS Root R1, GlobalSign Root CA, and Let's Encrypt ISRG Root X1) + NTP UTC clock sync.
- *    NEVER calls `setInsecure()`.
- * 2. Header-only authentication (`X-Hardware-Key`, `X-Greenhouse-Id`, `X-Device-Id`).
- *    NEVER places secrets in URL query parameters or prints Wi-Fi passwords / API keys to Serial.
- * 3. Honest Sensor Reporting:
- *    - Pass `NAN` for any sensor not wired or failing checksum -> serialized as JSON `null` (`UNREPORTED`).
- *    - Pass `0.0f` for genuine zero readings (e.g. `0%` reservoir or `0.0°C`) -> serialized as `0.00`.
- * 4. Authoritative Local Safety Interlocks:
- *    `edensEnforceLocalSafetyInterlocks(...)` runs locally on the ESP32 before any relay output,
- *    protecting crops and motors even if Wi-Fi or cloud connectivity is completely offline.
- * 5. Resilient Connectivity:
- *    Automatic `WiFi.reconnect()` and bounded exponential retry backoff (5s -> 60s max).
+ * Capabilities:
+ *  - Plug-and-Play NVS + WPA2-PSK SoftAP Provisioning via `EdensPnpProvisioner`.
+ *  - Safe HTTP 401 Credential Recovery: distinguishes explicit cloud key
+ *    revocation/rotation (`401` + `UNAUTHORIZED_DEVICE`/`DEVICE_REVOKED`) from
+ *    temporary Wi-Fi/DNS/5xx errors; requires 10 consecutive verified `401`s
+ *    over >=120s (with 30m anti-abuse cooldown) before entering recovery mode;
+ *    never restores revoked keys.
+ *  - Hardware & Software Watchdog (`esp_task_wdt` + `EdensLocalRuntimeGuard`):
+ *    enforces local Tier-1 safety interlocks every loop tick (even offline or
+ *    during credential recovery):
+ *      1. Water tank < 10.0% OR unreported -> Pump forced OFF
+ *      2. Pump single pulse > 120s -> Pump forced OFF
+ *      3. Pump 24h cumulative runtime > 900s -> Pump forced OFF
+ *      4. Pump cooldown < 300s after previous run -> Pump forced OFF
+ *      5. Canopy temperature >= 32.0°C OR unreported -> Heater forced OFF
+ *      6. Rain detected -> Motorized roof vent forced CLOSED
+ *      7. Stale sensor sample (> 45s) OR Emergency Stop -> Hazardous actuators OFF
+ *  - Verified HTTPS TLS (`WiFiClientSecure::setCACert`) — `setInsecure()` forbidden.
  */
 
 #include <Arduino.h>
@@ -24,370 +31,577 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <math.h>
-#include <time.h>
+#include <esp_task_wdt.h>
+#if __has_include(<esp_idf_version.h>)
+#include <esp_idf_version.h>
+#endif
+
+#include "../edens_pnp_provisioning.h"
 
 #if __has_include("controller_secrets.h")
-  #include "controller_secrets.h"
-#else
-  #warning "[EDENS-CTRL] controller_secrets.h not found! Copy controller_secrets.example.h to controller_secrets.h before flashing."
+#include "controller_secrets.h"
 #endif
 
-#if !defined(EDENS_CONTROLLER_DEVICE_KEY) && defined(EDENS_HARDWARE_API_KEY)
-  #define EDENS_CONTROLLER_DEVICE_KEY EDENS_HARDWARE_API_KEY
-#endif
 #ifndef EDENS_WIFI_SSID
-  #define EDENS_WIFI_SSID ""
+#define EDENS_WIFI_SSID ""
 #endif
 #ifndef EDENS_WIFI_PASSWORD
-  #define EDENS_WIFI_PASSWORD ""
-#endif
-#ifndef EDENS_TELEMETRY_UPLOAD_URL
-  #define EDENS_TELEMETRY_UPLOAD_URL "https://edens-ai.onrender.com/api/telemetry/upload"
-#endif
-#ifndef EDENS_CONTROLLER_DEVICE_KEY
-  #define EDENS_CONTROLLER_DEVICE_KEY ""
+#define EDENS_WIFI_PASSWORD ""
 #endif
 #ifndef EDENS_GREENHOUSE_ID
-  #define EDENS_GREENHOUSE_ID ""
+#define EDENS_GREENHOUSE_ID ""
 #endif
 #ifndef EDENS_CONTROLLER_DEVICE_ID
-  #define EDENS_CONTROLLER_DEVICE_ID ""
+#define EDENS_CONTROLLER_DEVICE_ID ""
+#endif
+#ifndef EDENS_TELEMETRY_UPLOAD_URL
+#define EDENS_TELEMETRY_UPLOAD_URL ""
+#endif
+#ifndef EDENS_CONTROLLER_DEVICE_KEY
+#define EDENS_CONTROLLER_DEVICE_KEY ""
 #endif
 #ifndef EDENS_TELEMETRY_INTERVAL_MS
-  #define EDENS_TELEMETRY_INTERVAL_MS 10000UL
+#define EDENS_TELEMETRY_INTERVAL_MS 10000UL
 #endif
 
-// Root CA PEM Bundle covering Render / Cloudflare / Let's Encrypt TLS certificate chains:
-// 1) Google Trust Services LLC — GTS Root R1
-// 2) GlobalSign Root CA
-// 3) Internet Security Research Group — ISRG Root X1
-static const char EDENS_CTRL_ROOT_CA_BUNDLE[] PROGMEM =
-"-----BEGIN CERTIFICATE-----\n"
-"MIIFVzCCAz+gAwIBAgINAgPlk28xsBNJiGuiFzANBgkqhkiG9w0BAQwFADBHMQsw\n"
-"CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU\n"
-"MBIGA1UEAxMLR1RTIFJvb3QgUjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAw\n"
-"MDAwWjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZp\n"
-"Y2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjEwggIiMA0GCSqGSIb3DQEBAQUA\n"
-"A4ICDwAwggIKAoICAQC2EQKLHuOhd5s73L+UPreVp0A8of2C+X0yBoJx9vaMf/vo\n"
-"27xqLpeXo4xL+Sv2sfnOhB2x+cWX3u+58qPpvBKJXqeqUqv4IyfLpLGcY9vXmX7w\n"
-"Cl7raKb0xlpHDU0QM+NOsROjyBhsS+z8CZDfnWQpJSMHobTSPS5g4M/SCYe7zUjw\n"
-"TcLCeoiKu7rPWRnWr4+wB7CeMfGCwcDfLqZtbBkOtdh+JhpFAz2weaSUKK0Pfybl\n"
-"qAj+lug8aJRT7oM6iCsVlgmy4HqMLnXWnOunVmSPlk9orj2XwoSPwLxAwAtcvfaH\n"
-"szVsrBhQf4TgTM2S0yDpM7xSma8ytSmzJSq0SPly4cpk9+aCEI3oncKKiPo4Zor8\n"
-"Y/kB+Xj9e1x3+naH+uzfsQ55lVe0vSbv1gHR6xYKu44LtcXFilWr06zqkUspzBm\n"
-"kMiVOKvFlRNACzqrOSbTqn3yDsEB750Orp2yjj32JgfpMpf/VjsPOS+C12LOORc9\n"
-"2wO1AK/1TD7Cn1TsNsYqiA94xrcx36m97PtbfkSIS5r762DL8EGMUUXLeXdYWk70\n"
-"paDPvOmbsB4om3xPXV2V4J95eSRQAogB/mqghtqmxlbCluQ0WEdrHbEg8QOB+DVr\n"
-"NVjzRlwW5y0vtOUucxD/SVRNuJLDWcfr0wbrM7Rv1/oFB2ACYPTrIrnqYNxgFlQI\n"
-"DAQABo0IwQDAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4E\n"
-"FgQU5K8rJnEaK0gnhS9SZizv8IkTcT4wDQYJKoZIhvcNAQEMBQADggIBAJ+qQibb\n"
-"C5u+/x6Wki4+omVKapi6Ist9wTrYggoGxval3sBOh2Z5ofmmWJyq+bXmYOfg6LEe\n"
-"QkEzCzc9zolwFcq1JKjPa7XSQCGYzyI0zzvFIoTgxQ6KfF2I5DUkzps+GlQebtuy\n"
-"h6f88/qBVRRiClmpIgUxPoLW7ttXNLwzldMXG+gnoot7TiYaelpkttGsN/H9oPM4\n"
-"7HLwEXWdyzRSjeZ2axfG34arJ45JK3VmgRAhpuo+9K4l/3wV3s6MJT/KYnAK9y8J\n"
-"ZgfIPxz88NtFMN9iiMG1D53Dn0reWVlHxYciNuaCp+0KueIHoI17eko8cdLiA6Ef\n"
-"MgfdG+RCzgwARWGAtQsgWSl4vflVy2PFPEz0tv/bal8xa5meLMFrUKTX5hgUvYU/\n"
-"Z6tGn6D/Qqc6f1zLXbBwHSs09dR2CQzreExZBfMzQsNhFRAbd03OIozUhfJFfbdT\n"
-"6u9AWpQKXCBfTkBdYiJ23//OYb2MI3jSNwLgjt7RETeJ9r/tSQdirpLsQBqvFAnZ\n"
-"0E6yove+7u7Y/9waLd64NnHi/Hm3lCXRSHNboTXns5lndcEZOitHTtNCjv0xyBZm\n"
-"2tIMPNuzjsmhDYAPexZ3FL//2wmUspO8IFgV6dtxQ/PeEMMA3KgqlbbC1j+Qa3bb\n"
-"bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c\n"
-"-----END CERTIFICATE-----\n"
-"-----BEGIN CERTIFICATE-----\n"
-"MIIDdTCCAl2gAwIBAgILBAAAAAABFUtaw5QwDQYJKoZIhvcNAQEFBQAwVzELMAkG\n"
-"A1UEBhMCQkUxGTAXBgNVBAoTEEdsb2JhbFNpZ24gbnYtc2ExEDAOBgNVBAsTB1Jv\n"
-"b3QgQ0ExGzAZBgNVBAMTEkdsb2JhbFNpZ24gUm9vdCBDQTAeFw05ODA5MDExMjAw\n"
-"MDBaFw0yODAxMjgxMjAwMDBaMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBHbG9i\n"
-"YWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9iYWxT\n"
-"aWduIFJvb3QgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDaDuaZ\n"
-"jc6j40+Kfvvxi4Mla+pIH/EqsLmVEQS98GPR4mdmzxzdzxtIK+6NiY6arymAZavp\n"
-"xy0Sy6scTHAHoT0KMM0VjU/43dSMUBUc71DuxC73/OlS8pF94G3VNTCOXkNz8kHp\n"
-"1Wrjsok6Vjk4bwY8iGlbKk3Fp1S4bInMm/k8yuX9ifUSPJJ4ltbcdG6TRGHRjcdG\n"
-"snUOhugZitVtbNV4FpWi6cgKOOvyJBNPc1STE4U6G7weNLWLBYy5d4ux2x8gkasJ\n"
-"U26Qzns3dLlwR5EiUWMWea6xrkEmCMgZK9FGqkjWZCrXgzT/LCrBbBlDSgeF59N8\n"
-"9iFo7+ryUp9/k5DPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8E\n"
-"BTADAQH/MB0GA1UdDgQWBBRge2YaRQ2XyolQL30EzTSo//z9SzANBgkqhkiG9w0B\n"
-"AQUFAAOCAQEA1nPnfE920I2/7LqivjTFKDK1fPxsnCwrvQmeU79rXqoRSLblCKOz\n"
-"yj1hTdNGCbM+w6DjY1Ub8rrvrTnhQ7k4o+YviiY776BQVvnGCv04zcQLcFGUl5gE\n"
-"38NflNUVyRRBnMRddWQVDf9VMOyGj/8N7yy5Y0b2qvzfvGn9LhJIZJrglfCm7ymP\n"
-"AbEVtQwdpf5pLGkkeB6zpxxxYu7KyJesF12KwvhHhm4qxFYxldBniYUr+WymXUad\n"
-"DKqC5JlR3XC321Y9YeRq4VzW9v493kHMB65jUr9TU/Qr6cf9tveCX4XSQRjbgbME\n"
-"HMUfpIBvFSDJ3gyICh3WZlXi/EjJKSZp4A==\n"
-"-----END CERTIFICATE-----\n"
-"-----BEGIN CERTIFICATE-----\n"
-"MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n"
-"TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n"
-"cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4\n"
-"WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu\n"
-"ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY\n"
-"MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc\n"
-"h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+\n"
-"0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U\n"
-"A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW\n"
-"T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH\n"
-"B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC\n"
-"B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv\n"
-"KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn\n"
-"OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn\n"
-"jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw\n"
-"qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI\n"
-"rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV\n"
-"HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq\n"
-"hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL\n"
-"ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ\n"
-"3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK\n"
-"NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5\n"
-"ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur\n"
-"TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC\n"
-"jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc\n"
-"oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq\n"
-"4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA\n"
-"mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d\n"
-"emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=\n"
-"-----END CERTIFICATE-----\n";
+#ifndef EDENS_CONTROLLER_FIRMWARE_VERSION
+#define EDENS_CONTROLLER_FIRMWARE_VERSION "EDENS-ESP32-CTRL-v3.0-pnp"
+#endif
 
-/**
- * Use `NAN` for any analog/digital sensor that is disconnected, unpopulated, or failed CRC.
- * Genuine `0.0f` readings are preserved as `0.00` in JSON (never conflated with `null`).
- */
-struct EdensTelemetrySample {
-  float temperatureC = NAN;     // Range: -20 .. 85 °C
-  float humidityPct = NAN;      // Range: 0 .. 100 %
-  float soilMoisturePct = NAN;  // Range: 0 .. 100 %
-  float waterLevelPct = NAN;    // Range: 0 .. 100 % (0.0f triggers dry-run pump lock; NAN = sensor not fitted)
-  float sunlightLux = NAN;      // Range: 0 .. 200000 lx
-  float growLightLux = NAN;     // Range: 0 .. 200000 lx
-  float batteryVoltage = NAN;   // Range: 0 .. 36 V
-  float rainGaugeMm = NAN;      // Range: 0 .. 1000 mm
-  int8_t rainDetected = -1;     // -1 = sensor not fitted (`null`), 0 = dry (`false`), 1 = raining (`true`)
+#ifndef EDENS_CTRL_ROOT_CA_BUNDLE
+#define EDENS_CTRL_ROOT_CA_BUNDLE EDENS_PNP_ROOT_CA_PEM
+#endif
+
+// Watchdog & Tier-1 Local Hardware Safety Constants
+#ifndef EDENS_WDT_TIMEOUT_SECONDS
+#define EDENS_WDT_TIMEOUT_SECONDS 30
+#endif
+#ifndef EDENS_LOCAL_STALE_SENSOR_LOCK_MS
+#define EDENS_LOCAL_STALE_SENSOR_LOCK_MS 45000UL
+#endif
+#ifndef EDENS_LOCAL_MAX_PUMP_PULSE_MS
+#define EDENS_LOCAL_MAX_PUMP_PULSE_MS 120000UL
+#endif
+#ifndef EDENS_LOCAL_PUMP_COOLDOWN_MS
+#define EDENS_LOCAL_PUMP_COOLDOWN_MS 300000UL
+#endif
+#ifndef EDENS_LOCAL_MAX_DAILY_PUMP_MS
+#define EDENS_LOCAL_MAX_DAILY_PUMP_MS 900000UL
+#endif
+
+// HTTP 401 Credential Recovery Thresholds & Anti-Abuse Guards
+#ifndef EDENS_AUTH_RECOVERY_THRESHOLD
+#define EDENS_AUTH_RECOVERY_THRESHOLD 10
+#endif
+#ifndef EDENS_AUTH_RECOVERY_MIN_SPAN_MS
+#define EDENS_AUTH_RECOVERY_MIN_SPAN_MS 120000UL
+#endif
+#ifndef EDENS_AUTH_RECOVERY_COOLDOWN_MS
+#define EDENS_AUTH_RECOVERY_COOLDOWN_MS 1800000UL
+#endif
+
+#ifndef EDENS_CONTROLLER_DEFAULT_CAPABILITIES_JSON
+#define EDENS_CONTROLLER_DEFAULT_CAPABILITIES_JSON \
+  "{\"sensors\":[\"dht22_temp_humidity\",\"capacitive_soil_moisture\",\"water_tank_ultrasonic\",\"ldr_sunlight\",\"rain_detector\",\"battery_voltage\"],\"actuators\":[\"pump\",\"fan\",\"heater\",\"grow_light\",\"roof_vent\"]}"
+#endif
+
+enum EdensSensorHealth : uint8_t {
+  EDENS_SENSOR_OK = 0,
+  EDENS_SENSOR_UNAVAILABLE = 1,
+  EDENS_SENSOR_DISCONNECTED = 2,
+  EDENS_SENSOR_OUT_OF_RANGE = 3
 };
 
-struct EdensActuatorState {
+inline const char* edensHealthToStr(EdensSensorHealth h) {
+  switch (h) {
+    case EDENS_SENSOR_OK:           return "OK";
+    case EDENS_SENSOR_DISCONNECTED: return "DISCONNECTED";
+    case EDENS_SENSOR_OUT_OF_RANGE: return "OUT_OF_RANGE";
+    default:                        return "UNAVAILABLE";
+  }
+}
+
+struct EdensSensorSnapshot {
+  float temperatureC = NAN;
+  float humidityPct = NAN;
+  float soilMoisturePct = NAN;
+  float sunlightLux = NAN;
+  float growLightLux = NAN;
+  float waterLevelPct = NAN;
+  float batteryVoltage = NAN;
+  int8_t rainDetected = -1;
+  float rainGaugeMm = NAN;
+
+  EdensSensorHealth dht22Health = EDENS_SENSOR_UNAVAILABLE;
+  EdensSensorHealth soilHealth = EDENS_SENSOR_UNAVAILABLE;
+  EdensSensorHealth ldrHealth = EDENS_SENSOR_UNAVAILABLE;
+  EdensSensorHealth waterHealth = EDENS_SENSOR_UNAVAILABLE;
+  EdensSensorHealth rainHealth = EDENS_SENSOR_UNAVAILABLE;
+  EdensSensorHealth powerHealth = EDENS_SENSOR_UNAVAILABLE;
+};
+
+struct EdensActuatorSnapshot {
   bool pumpActive = false;
   bool fanActive = false;
-  bool lightActive = false;
   bool heaterActive = false;
-  bool peltierActive = false;
+  bool growLightActive = false;
   bool roofOpen = false;
-  uint32_t pumpContinuousSeconds = 0;
 };
 
 struct EdensSafetyInterlocks {
-  bool rainLocked = false;
   bool waterLowLocked = false;
-  bool thermalLocked = false;
-  bool overIrrigationLocked = false;
+  bool heaterOvertempLocked = false;
+  bool rainRoofLocked = false;
+  bool pumpPulseLimitLocked = false;
+  bool pumpCooldownLocked = false;
+  bool pumpDailyCapLocked = false;
+  bool staleSensorLocked = false;
+  bool emergencyStopLocked = false;
+};
+
+struct EdensLocalRuntimeGuard {
+  unsigned long lastSensorUpdateMs = 0;
+  bool prevPumpActive = false;
+  unsigned long pumpTurnedOnAtMs = 0;
+  unsigned long pumpLastTurnedOffAtMs = 0;
+  unsigned long dayWindowStartMs = 0;
+  unsigned long cumulativePumpMsInWindow = 0;
+  unsigned long lastTickMs = 0;
+  bool emergencyStopActive = false;
 };
 
 /**
- * Authoritative Local Hardware Safety Interlocks.
- * Call EVERY control cycle before driving physical GPIO relays — works 100% offline.
+ * Authoritative Local Hardware Safety Interlock Enforcer.
+ * Runs locally on the ESP32 every control cycle BEFORE and INDEPENDENTLY OF
+ * any Wi-Fi, cloud, or credential recovery state.
  */
-inline EdensSafetyInterlocks edensEnforceLocalSafetyInterlocks(
-  const EdensTelemetrySample& sensors,
-  EdensActuatorState& actuators
+inline void edensEnforceLocalSafetyInterlocks(
+  const EdensSensorSnapshot& sensors,
+  EdensActuatorSnapshot& actuators,
+  EdensSafetyInterlocks* interlocksOut = nullptr
 ) {
   EdensSafetyInterlocks locks;
 
-  // 1. Rain vs Roof Vent Interlock: Immediately close roof if rain is detected
-  if (sensors.rainDetected == 1) {
-    locks.rainLocked = true;
-    actuators.roofOpen = false;
-  }
-
-  // 2. Reservoir Dry-Run Interlock: Lock pump OFF if waterLevel is reported and < 10.0% (including 0.0%)
-  if (!isnan(sensors.waterLevelPct) && sensors.waterLevelPct < 10.0f) {
+  // 1. Water tank low-level dry-run lock (< 10.0% OR water sensor fault)
+  if (isnan(sensors.waterLevelPct) ||
+      sensors.waterHealth != EDENS_SENSOR_OK ||
+      sensors.waterLevelPct < 10.0f) {
     locks.waterLowLocked = true;
     actuators.pumpActive = false;
   }
 
-  // 3. Max Continuous Irrigation Run-Time Interlock (120 seconds max)
-  if (actuators.pumpContinuousSeconds > 120U) {
-    locks.overIrrigationLocked = true;
-    actuators.pumpActive = false;
-  }
-
-  // 4. Thermal Runaway Interlock: Force heater OFF above 32.0°C
-  if (!isnan(sensors.temperatureC) && sensors.temperatureC > 32.0f) {
-    locks.thermalLocked = true;
+  // 2. Heater over-temperature lock (>= 32.0°C OR temperature sensor fault)
+  if (isnan(sensors.temperatureC) ||
+      sensors.dht22Health != EDENS_SENSOR_OK ||
+      sensors.temperatureC >= 32.0f) {
+    locks.heaterOvertempLocked = true;
     actuators.heaterActive = false;
   }
 
-  return locks;
-}
-
-inline void edensAppendNullableFloat(String& out, const char* key, float val, uint8_t decimals = 2, bool trailingComma = true) {
-  out += "\"";
-  out += key;
-  out += "\":";
-  if (isnan(val) || isinf(val)) {
-    out += "null";
-  } else {
-    out += String(val, static_cast<unsigned int>(decimals));
+  // 3. Rain intrusion lock (close motorized roof vent immediately if raining)
+  if (sensors.rainDetected == 1) {
+    locks.rainRoofLocked = true;
+    actuators.roofOpen = false;
   }
-  if (trailingComma) out += ",";
-}
 
-inline bool edensEnsureControllerUtcClock() {
-  time_t now = time(nullptr);
-  if (now > 1704067200) return true;
-  configTime(0, 0, "pool.ntp.org", "time.cloudflare.com", "time.google.com");
-  for (int i = 0; i < 20; ++i) {
-    delay(250);
-    now = time(nullptr);
-    if (now > 1704067200) return true;
+  if (interlocksOut != nullptr) {
+    interlocksOut->waterLowLocked = locks.waterLowLocked;
+    interlocksOut->heaterOvertempLocked = locks.heaterOvertempLocked;
+    interlocksOut->rainRoofLocked = locks.rainRoofLocked;
   }
-  return false;
 }
 
-class EdensControllerCloudSync {
+/**
+ * Enforces local runtime, cooldown, cumulative daily cap, stale-sensor lock,
+ * and local Emergency Stop failsafes in addition to Tier-1 sensor interlocks.
+ */
+inline void edensEnforceWatchdogAndRuntimeLimits(
+  const EdensSensorSnapshot& sensors,
+  EdensActuatorSnapshot& actuators,
+  EdensLocalRuntimeGuard& guard,
+  EdensSafetyInterlocks* interlocksOut = nullptr
+) {
+  unsigned long nowMs = millis();
+
+  // Roll 24h cumulative pump counter window
+  if (guard.dayWindowStartMs == 0 || (nowMs - guard.dayWindowStartMs) >= 86400000UL) {
+    guard.dayWindowStartMs = nowMs;
+    guard.cumulativePumpMsInWindow = 0;
+  }
+
+  unsigned long dtMs = (guard.lastTickMs > 0 && nowMs >= guard.lastTickMs) ? (nowMs - guard.lastTickMs) : 0;
+  guard.lastTickMs = nowMs;
+
+  if (interlocksOut != nullptr) {
+    interlocksOut->pumpPulseLimitLocked = false;
+    interlocksOut->pumpCooldownLocked = false;
+    interlocksOut->pumpDailyCapLocked = false;
+    interlocksOut->staleSensorLocked = false;
+    interlocksOut->emergencyStopLocked = false;
+  }
+
+  // 1. Local Emergency Stop
+  if (guard.emergencyStopActive) {
+    actuators.pumpActive = false;
+    actuators.heaterActive = false;
+    actuators.fanActive = false;
+    actuators.growLightActive = false;
+    actuators.roofOpen = false;
+    if (interlocksOut) interlocksOut->emergencyStopLocked = true;
+  }
+
+  // 2. Stale sensor sample protection (> 45s since fresh sensor read)
+  if (guard.lastSensorUpdateMs > 0 && (nowMs - guard.lastSensorUpdateMs) > EDENS_LOCAL_STALE_SENSOR_LOCK_MS) {
+    actuators.pumpActive = false;
+    actuators.heaterActive = false;
+    if (interlocksOut) interlocksOut->staleSensorLocked = true;
+  }
+
+  // 3. Apply Tier-1 water, heater, and rain interlocks
+  edensEnforceLocalSafetyInterlocks(sensors, actuators, interlocksOut);
+
+  // 4. Pump cooldown, single-pulse ceiling (120s), and 24h cumulative cap (900s)
+  if (actuators.pumpActive) {
+    if (!guard.prevPumpActive) {
+      if (guard.pumpLastTurnedOffAtMs > 0 &&
+          (nowMs - guard.pumpLastTurnedOffAtMs) < EDENS_LOCAL_PUMP_COOLDOWN_MS) {
+        actuators.pumpActive = false;
+        if (interlocksOut) interlocksOut->pumpCooldownLocked = true;
+      } else {
+        guard.pumpTurnedOnAtMs = nowMs;
+      }
+    }
+
+    if (actuators.pumpActive) {
+      guard.cumulativePumpMsInWindow += dtMs;
+      if ((nowMs - guard.pumpTurnedOnAtMs) >= EDENS_LOCAL_MAX_PUMP_PULSE_MS) {
+        actuators.pumpActive = false;
+        guard.pumpLastTurnedOffAtMs = nowMs;
+        if (interlocksOut) interlocksOut->pumpPulseLimitLocked = true;
+      } else if (guard.cumulativePumpMsInWindow >= EDENS_LOCAL_MAX_DAILY_PUMP_MS) {
+        actuators.pumpActive = false;
+        guard.pumpLastTurnedOffAtMs = nowMs;
+        if (interlocksOut) interlocksOut->pumpDailyCapLocked = true;
+      }
+    }
+  } else if (guard.prevPumpActive) {
+    guard.pumpLastTurnedOffAtMs = nowMs;
+  }
+
+  guard.prevPumpActive = actuators.pumpActive;
+}
+
+typedef void (*EdensReadSensorsFn)(EdensSensorSnapshot& outSensors, EdensActuatorSnapshot& outActuators);
+typedef void (*EdensApplySafeActuatorsFn)(const EdensActuatorSnapshot& safeActuators);
+
+class EdensControllerTelemetrySync {
 public:
-  void begin(const char* firmwareVersion = "EDENS-ESP32-CTRL-v2.5") {
-    m_firmwareVersion = firmwareVersion;
+  EdensControllerTelemetrySync()
+    : m_pnp(
+        "esp32_controller",
+        EDENS_CONTROLLER_FIRMWARE_VERSION,
+        EDENS_CONTROLLER_DEFAULT_CAPABILITIES_JSON
+      ) {}
+
+  void begin(
+    EdensReadSensorsFn readFn,
+    EdensApplySafeActuatorsFn applySafeFn = nullptr,
+    bool enableResetPin = true
+  ) {
+    m_readFn = readFn;
+    m_applySafeFn = applySafeFn;
+
+    initHardwareWatchdog();
+
+    m_pnp.setCompileTimeFallback(
+      EDENS_WIFI_SSID,
+      EDENS_WIFI_PASSWORD,
+      EDENS_TELEMETRY_UPLOAD_URL,
+      EDENS_GREENHOUSE_ID,
+      EDENS_CONTROLLER_DEVICE_ID,
+      EDENS_CONTROLLER_DEVICE_KEY
+    );
+    m_pnp.begin(enableResetPin);
+  }
+
+  void setLocalEmergencyStop(bool active) {
+    m_runtimeGuard.emergencyStopActive = active;
   }
 
   /**
-   * Call inside `loop()`. Non-blocking unless an upload interval/backoff timer has elapsed.
+   * Non-blocking periodic sync + watchdog + local safety interlocks.
+   * Call inside `loop()`.
    */
-  bool tick(const EdensTelemetrySample& sensors, const EdensActuatorState& actuators, const EdensSafetyInterlocks& locks) {
-    const uint32_t nowMs = millis();
-    if (nowMs - m_lastAttemptMs < m_nextDelayMs) {
-      return false;
-    }
-    m_lastAttemptMs = nowMs;
+  void tick() {
+    feedHardwareWatchdog();
 
-    bool ok = uploadNow(sensors, actuators, locks);
-    if (ok) {
-      m_consecutiveFailures = 0;
-      m_nextDelayMs = EDENS_TELEMETRY_INTERVAL_MS < 5000UL ? 5000UL : EDENS_TELEMETRY_INTERVAL_MS;
-    } else {
-      m_consecutiveFailures++;
-      uint32_t shift = m_consecutiveFailures > 4 ? 4 : (m_consecutiveFailures - 1);
-      uint32_t backoff = 5000UL * (1UL << shift);
-      m_nextDelayMs = backoff > 60000UL ? 60000UL : backoff;
+    // 1. ALWAYS run local sensor read + watchdog + Tier-1 safety interlocks FIRST!
+    // Even if Wi-Fi is down or device is in HTTP 401 Credential Recovery Mode,
+    // physical greenhouse safety is never interrupted.
+    EdensSensorSnapshot reading;
+    if (m_readFn != nullptr) {
+      m_readFn(reading, m_actuators);
+      m_runtimeGuard.lastSensorUpdateMs = millis();
+      edensEnforceWatchdogAndRuntimeLimits(reading, m_actuators, m_runtimeGuard, &m_interlocks);
+      if (m_applySafeFn != nullptr) {
+        m_applySafeFn(m_actuators);
+      }
+      m_hasLatestReading = true;
+      m_latestReading = reading;
     }
-    return ok;
+
+    // 2. Service PnP SoftAP portal, session timeout, physical reset button, and Wi-Fi reconnect
+    m_pnp.tick();
+
+    if (!m_pnp.isReadyForCloudSync() || !m_hasLatestReading) {
+      return;
+    }
+
+    unsigned long now = millis();
+    unsigned long effectiveInterval = m_backoffMs > EDENS_TELEMETRY_INTERVAL_MS
+      ? m_backoffMs
+      : EDENS_TELEMETRY_INTERVAL_MS;
+
+    if (now - m_lastAttemptMs < effectiveInterval) {
+      return;
+    }
+    m_lastAttemptMs = now;
+
+    String payload = buildJsonPayload(m_latestReading, m_actuators, m_interlocks);
+    bool ok = postTelemetry(payload);
+    if (ok) {
+      m_backoffMs = EDENS_TELEMETRY_INTERVAL_MS;
+    } else {
+      m_backoffMs = min(60000UL, max((unsigned long)EDENS_TELEMETRY_INTERVAL_MS, m_backoffMs * 2UL));
+    }
   }
 
-  bool uploadNow(const EdensTelemetrySample& sensors, const EdensActuatorState& actuators, const EdensSafetyInterlocks& locks) {
-    if (WiFi.status() != WL_CONNECTED) {
-      WiFi.reconnect();
-      Serial.println("[EDENS-CTRL] Wi-Fi disconnected; triggered reconnect.");
-      return false;
-    }
+  EdensPnpProvisioner& provisioner() {
+    return m_pnp;
+  }
 
-    const char* apiKey = EDENS_CONTROLLER_DEVICE_KEY;
-    if (!apiKey || strlen(apiKey) == 0 || strstr(apiKey, "REPLACE_WITH_") != nullptr || apiKey[0] == '<') {
-      Serial.println("[EDENS-CTRL] Upload skipped: EDENS_CONTROLLER_DEVICE_KEY not set in controller_secrets.h");
-      return false;
-    }
-
-    if (isnan(sensors.temperatureC) && isnan(sensors.humidityPct) && isnan(sensors.soilMoisturePct)) {
-      Serial.println("[EDENS-CTRL] Upload skipped: all primary sensors returned NAN.");
-      return false;
-    }
-
-    if (!edensEnsureControllerUtcClock()) {
-      Serial.println("[EDENS-CTRL] Waiting for NTP UTC clock sync before verified TLS handshake...");
-      return false;
-    }
-
-    time_t epoch = time(nullptr);
-    struct tm utcTm;
-    gmtime_r(&epoch, &utcTm);
-    char isoTs[28];
-    strftime(isoTs, sizeof(isoTs), "%Y-%m-%dT%H:%M:%SZ", &utcTm);
-
-    String payload;
-    payload.reserve(640);
-    payload += "{";
-    payload += "\"firmwareVersion\":\"";
-    payload += m_firmwareVersion;
-    payload += "\",";
-    payload += "\"uptimeSeconds\":";
-    payload += String(millis() / 1000UL);
-    payload += ",";
-    payload += "\"wifiRssi\":";
-    payload += String(WiFi.RSSI());
-    payload += ",";
-    payload += "\"freeHeapBytes\":";
-    payload += String(ESP.getFreeHeap());
-    payload += ",";
-    payload += "\"timestamp\":\"";
-    payload += isoTs;
-    payload += "\",";
-
-    payload += "\"telemetry\":{";
-    edensAppendNullableFloat(payload, "temperature", sensors.temperatureC, 2, true);
-    edensAppendNullableFloat(payload, "humidity", sensors.humidityPct, 1, true);
-    edensAppendNullableFloat(payload, "soilMoisture", sensors.soilMoisturePct, 1, true);
-    edensAppendNullableFloat(payload, "waterLevel", sensors.waterLevelPct, 1, true);
-    edensAppendNullableFloat(payload, "sunlight", sensors.sunlightLux, 0, true);
-    edensAppendNullableFloat(payload, "growLight", sensors.growLightLux, 0, true);
-    edensAppendNullableFloat(payload, "batteryVoltage", sensors.batteryVoltage, 2, true);
-    edensAppendNullableFloat(payload, "rainGaugeLevel", sensors.rainGaugeMm, 1, true);
-    payload += "\"rain\":";
-    if (sensors.rainDetected < 0) payload += "null";
-    else payload += (sensors.rainDetected > 0 ? "true" : "false");
-    payload += "},";
-
-    payload += "\"actuators\":{";
-    payload += "\"pumpActive\":"; payload += actuators.pumpActive ? "true," : "false,";
-    payload += "\"fanActive\":"; payload += actuators.fanActive ? "true," : "false,";
-    payload += "\"lightActive\":"; payload += actuators.lightActive ? "true," : "false,";
-    payload += "\"heaterActive\":"; payload += actuators.heaterActive ? "true," : "false,";
-    payload += "\"peltierActive\":"; payload += actuators.peltierActive ? "true," : "false,";
-    payload += "\"roofActive\":"; payload += actuators.roofOpen ? "true" : "false";
-    payload += "},";
-
-    payload += "\"interlocks\":{";
-    payload += "\"rainLocked\":"; payload += locks.rainLocked ? "true," : "false,";
-    payload += "\"waterLowLocked\":"; payload += locks.waterLowLocked ? "true," : "false,";
-    payload += "\"thermalLocked\":"; payload += locks.thermalLocked ? "true," : "false,";
-    payload += "\"overIrrigationLocked\":"; payload += locks.overIrrigationLocked ? "true" : "false";
-    payload += "}";
-    payload += "}";
-
-    WiFiClientSecure secureClient;
-    secureClient.setCACert(EDENS_CTRL_ROOT_CA_BUNDLE);
-    secureClient.setTimeout(12);
-
-    HTTPClient https;
-    https.setConnectTimeout(10000);
-    https.setTimeout(12000);
-
-    bool success = false;
-    if (https.begin(secureClient, EDENS_TELEMETRY_UPLOAD_URL)) {
-      https.addHeader("Content-Type", "application/json");
-      https.addHeader("X-Hardware-Key", apiKey);
-      if (strlen(EDENS_GREENHOUSE_ID) > 0) {
-        https.addHeader("X-Greenhouse-Id", EDENS_GREENHOUSE_ID);
-      }
-      if (strlen(EDENS_CONTROLLER_DEVICE_ID) > 0) {
-        https.addHeader("X-Device-Id", EDENS_CONTROLLER_DEVICE_ID);
-      }
-
-      int httpCode = https.POST(payload);
-      if (httpCode == 200) {
-        m_totalUploaded++;
-        success = true;
-        Serial.printf("[EDENS-CTRL] Telemetry upload OK (HTTP 200, packet #%lu)\n",
-                      static_cast<unsigned long>(m_totalUploaded));
-      } else {
-        Serial.printf("[EDENS-CTRL] Telemetry upload failed (HTTP %d)\n", httpCode);
-      }
-      https.end();
-    } else {
-      Serial.println("[EDENS-CTRL] HTTPS connection init failed");
-    }
-
-    return success;
+  uint16_t consecutiveAuthFailures() const {
+    return m_consecutiveAuthFailures;
   }
 
 private:
-  const char* m_firmwareVersion = "EDENS-ESP32-CTRL-v2.5";
-  uint32_t m_lastAttemptMs = 0;
-  uint32_t m_nextDelayMs = 2000UL;
-  uint32_t m_consecutiveFailures = 0;
-  uint32_t m_totalUploaded = 0;
+  EdensPnpProvisioner m_pnp;
+  EdensReadSensorsFn m_readFn = nullptr;
+  EdensApplySafeActuatorsFn m_applySafeFn = nullptr;
+  EdensSensorSnapshot m_latestReading;
+  EdensActuatorSnapshot m_actuators;
+  EdensSafetyInterlocks m_interlocks;
+  EdensLocalRuntimeGuard m_runtimeGuard;
+  bool m_hasLatestReading = false;
+  bool m_wdtRegistered = false;
+
+  unsigned long m_lastAttemptMs = 0;
+  unsigned long m_backoffMs = EDENS_TELEMETRY_INTERVAL_MS;
+
+  // Consecutive HTTP 401 Credential Recovery state (strictly separated from network errors)
+  uint16_t m_consecutiveAuthFailures = 0;
+  unsigned long m_firstAuthFailureMs = 0;
+  unsigned long m_lastAuthRecoveryAtMs = 0;
+
+  void initHardwareWatchdog() {
+#if defined(ESP_IDF_VERSION) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    esp_task_wdt_config_t twdtConfig = {
+      .timeout_ms = EDENS_WDT_TIMEOUT_SECONDS * 1000,
+      .idle_core_mask = 0,
+      .trigger_panic = true
+    };
+    esp_task_wdt_reconfigure(&twdtConfig);
+#else
+    esp_task_wdt_init(EDENS_WDT_TIMEOUT_SECONDS, true);
+#endif
+    if (esp_task_wdt_add(NULL) == ESP_OK) {
+      m_wdtRegistered = true;
+    }
+  }
+
+  void feedHardwareWatchdog() {
+    if (m_wdtRegistered) {
+      esp_task_wdt_reset();
+    }
+  }
+
+  static bool isVerifiedServerAuthRejection(int httpCode, const String& respBody) {
+    if (httpCode != 401) return false;
+    return respBody.indexOf("UNAUTHORIZED_DEVICE") >= 0 ||
+           respBody.indexOf("DEVICE_REVOKED") >= 0 ||
+           respBody.indexOf("INVALID_HARDWARE_KEY") >= 0 ||
+           respBody.indexOf("MISSING_HARDWARE_KEY") >= 0;
+  }
+
+  void handleUploadAuthOutcome(int httpCode, const String& respBody) {
+    if (httpCode >= 200 && httpCode < 300) {
+      m_consecutiveAuthFailures = 0;
+      m_firstAuthFailureMs = 0;
+      return;
+    }
+
+    // Network errors (<=0), timeouts (408), rate limits (429), and 5xx proxy errors
+    // are temporary transport conditions and MUST NOT increment auth failure count!
+    if (!isVerifiedServerAuthRejection(httpCode, respBody)) {
+      return;
+    }
+
+    unsigned long nowMs = millis();
+    if (m_consecutiveAuthFailures == 0) {
+      m_firstAuthFailureMs = nowMs;
+    }
+    m_consecutiveAuthFailures++;
+
+    Serial.printf(
+      "[EDENS Sync SECURITY] Verified HTTP 401 auth rejection (%u/%u).\n",
+      m_consecutiveAuthFailures,
+      (unsigned)EDENS_AUTH_RECOVERY_THRESHOLD
+    );
+
+    bool spanMet = (nowMs - m_firstAuthFailureMs) >= EDENS_AUTH_RECOVERY_MIN_SPAN_MS;
+    bool cooldownMet =
+      (m_lastAuthRecoveryAtMs == 0) ||
+      ((nowMs - m_lastAuthRecoveryAtMs) >= EDENS_AUTH_RECOVERY_COOLDOWN_MS);
+
+    if (m_consecutiveAuthFailures >= EDENS_AUTH_RECOVERY_THRESHOLD && spanMet && cooldownMet) {
+      m_lastAuthRecoveryAtMs = nowMs;
+      m_consecutiveAuthFailures = 0;
+      m_firstAuthFailureMs = 0;
+      m_pnp.enterCredentialRecoveryMode("CONTROLLER_HTTP_401_REVOKED_OR_ROTATED");
+    }
+  }
+
+  static void appendNullableFloat(String& out, const char* key, float val, int decimals = 1, bool trailingComma = true) {
+    out += "\"";
+    out += key;
+    out += "\":";
+    if (isnan(val) || isinf(val)) {
+      out += "null";
+    } else {
+      out += String(val, decimals);
+    }
+    if (trailingComma) out += ",";
+  }
+
+  String buildJsonPayload(
+    const EdensSensorSnapshot& s,
+    const EdensActuatorSnapshot& a,
+    const EdensSafetyInterlocks& l
+  ) {
+    const EdensProvisionedConfig& cfg = m_pnp.config();
+    String json;
+    json.reserve(960);
+    json += "{\"greenhouseId\":\"";
+    json += cfg.greenhouseId;
+    json += "\",\"deviceId\":\"";
+    json += cfg.deviceId;
+    if (cfg.zoneId.length() > 0) {
+      json += "\",\"zoneId\":\"";
+      json += cfg.zoneId;
+    }
+    json += "\",\"telemetry\":{";
+
+    appendNullableFloat(json, "temperature", s.temperatureC, 1);
+    appendNullableFloat(json, "humidity", s.humidityPct, 1);
+    appendNullableFloat(json, "soilMoisture", s.soilMoisturePct, 1);
+    appendNullableFloat(json, "sunlight", s.sunlightLux, 0);
+    appendNullableFloat(json, "growLight", s.growLightLux, 0);
+    appendNullableFloat(json, "waterLevel", s.waterLevelPct, 1);
+    appendNullableFloat(json, "batteryVoltage", s.batteryVoltage, 2);
+
+    json += "\"rain\":";
+    if (s.rainDetected < 0) json += "null,";
+    else json += (s.rainDetected > 0 ? "true," : "false,");
+
+    appendNullableFloat(json, "rainGaugeLevel", s.rainGaugeMm, 1);
+
+    json += "\"sensorHealth\":{";
+    json += "\"dht22\":\"";        json += edensHealthToStr(s.dht22Health);  json += "\",";
+    json += "\"soilMoisture\":\""; json += edensHealthToStr(s.soilHealth);   json += "\",";
+    json += "\"ldr\":\"";          json += edensHealthToStr(s.ldrHealth);    json += "\",";
+    json += "\"waterLevel\":\"";   json += edensHealthToStr(s.waterHealth);  json += "\",";
+    json += "\"rain\":\"";         json += edensHealthToStr(s.rainHealth);   json += "\",";
+    json += "\"power\":\"";        json += edensHealthToStr(s.powerHealth);  json += "\"";
+    json += "},";
+
+    json += "\"actuators\":{";
+    json += "\"pumpActive\":";      json += (a.pumpActive ? "true," : "false,");
+    json += "\"fanActive\":";       json += (a.fanActive ? "true," : "false,");
+    json += "\"heaterActive\":";    json += (a.heaterActive ? "true," : "false,");
+    json += "\"growLightActive\":"; json += (a.growLightActive ? "true," : "false,");
+    json += "\"roofOpen\":";        json += (a.roofOpen ? "true" : "false");
+    json += "},";
+
+    json += "\"interlocks\":{";
+    json += "\"waterLowLocked\":";         json += (l.waterLowLocked ? "true," : "false,");
+    json += "\"heaterOvertempLocked\":";   json += (l.heaterOvertempLocked ? "true," : "false,");
+    json += "\"rainRoofLocked\":";         json += (l.rainRoofLocked ? "true," : "false,");
+    json += "\"pumpPulseLimitLocked\":";   json += (l.pumpPulseLimitLocked ? "true," : "false,");
+    json += "\"pumpCooldownLocked\":";     json += (l.pumpCooldownLocked ? "true," : "false,");
+    json += "\"pumpDailyCapLocked\":";     json += (l.pumpDailyCapLocked ? "true," : "false,");
+    json += "\"staleSensorLocked\":";      json += (l.staleSensorLocked ? "true," : "false,");
+    json += "\"emergencyStopLocked\":";    json += (l.emergencyStopLocked ? "true" : "false");
+    json += "},";
+
+    json += "\"deviceHealth\":{";
+    json += "\"firmwareVersion\":\"";        json += EDENS_CONTROLLER_FIRMWARE_VERSION; json += "\",";
+    json += "\"hardwareIdentityUid\":\"";    json += cfg.hardwareUid; json += "\",";
+    json += "\"wifiRssi\":";                 json += String(WiFi.RSSI()); json += ",";
+    json += "\"uptimeSeconds\":";            json += String(millis() / 1000UL); json += ",";
+    json += "\"freeHeapBytes\":";            json += String(ESP.getFreeHeap()); json += ",";
+    json += "\"watchdogActive\":true,";
+    json += "\"localSafetyControlActive\":true";
+    json += "}";
+
+    json += "}}";
+    return json;
+  }
+
+  bool postTelemetry(const String& jsonBody) {
+    const EdensProvisionedConfig& cfg = m_pnp.config();
+    String targetUrl = cfg.uploadUrl.length() > 0
+      ? cfg.uploadUrl
+      : (cfg.cloudOrigin + "/api/telemetry/upload");
+
+    HTTPClient http;
+    WiFiClientSecure secureClient;
+    WiFiClient plainClient;
+
+    bool isHttps = targetUrl.startsWith("https://");
+    if (isHttps) {
+      secureClient.setCACert(EDENS_CTRL_ROOT_CA_BUNDLE);
+      secureClient.setTimeout(10);
+      if (!http.begin(secureClient, targetUrl)) {
+        Serial.println("[EDENS Sync] Failed to initialize HTTPS client.");
+        return false;
+      }
+    } else {
+      if (!http.begin(plainClient, targetUrl)) {
+        Serial.println("[EDENS Sync] Failed to initialize HTTP client.");
+        return false;
+      }
+    }
+
+    http.setTimeout(8000);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("X-Hardware-Key", cfg.deviceKey);
+    http.addHeader("X-Greenhouse-Id", cfg.greenhouseId);
+    http.addHeader("X-Device-Id", cfg.deviceId);
+    if (cfg.zoneId.length() > 0) {
+      http.addHeader("X-Zone-Id", cfg.zoneId);
+    }
+
+    int httpCode = http.POST(jsonBody);
+    String respBody = httpCode > 0 ? http.getString() : "";
+    http.end();
+
+    handleUploadAuthOutcome(httpCode, respBody);
+
+    if (httpCode >= 200 && httpCode < 300) {
+      return true;
+    }
+
+    Serial.printf("[EDENS Sync] Upload HTTP status=%d\n", httpCode);
+    return false;
+  }
 };

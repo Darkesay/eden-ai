@@ -452,6 +452,73 @@ export interface ApiFetchOptions extends RequestInit {
 
 const PRODUCTION_RENDER_API_ORIGIN = 'https://edens-ai.onrender.com';
 
+export async function detectAiStudioCookieIntercept(res: Response): Promise<boolean> {
+  const url = (res.url || '').toLowerCase();
+  if (url.includes('__cookie_check.html')) {
+    return true;
+  }
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  if (!ct.includes('text/html')) {
+    return false;
+  }
+  try {
+    const sample = (await res.clone().text()).slice(0, 1024);
+    return sample.includes('_aistudio-iframe.js') || sample.includes('__cookie_check');
+  } catch {
+    return false;
+  }
+}
+
+let inflightProxyCookieRefresh: Promise<boolean> | null = null;
+
+function refreshAiStudioProxyCookieViaHiddenFrame(): Promise<boolean> {
+  if (typeof document === 'undefined' || !document.body) {
+    return Promise.resolve(false);
+  }
+  if (inflightProxyCookieRefresh) {
+    return inflightProxyCookieRefresh;
+  }
+
+  inflightProxyCookieRefresh = new Promise<boolean>((resolve) => {
+    let settled = false;
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.tabIndex = -1;
+    iframe.width = '0';
+    iframe.height = '0';
+    iframe.className = 'hidden pointer-events-none w-0 h-0 border-0';
+
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      inflightProxyCookieRefresh = null;
+      try {
+        iframe.remove();
+      } catch {
+        // Ignore DOM cleanup errors
+      }
+      resolve(ok);
+    };
+
+    const timeoutId = setTimeout(() => finish(false), 2500);
+    iframe.onload = () => {
+      setTimeout(() => {
+        clearTimeout(timeoutId);
+        finish(true);
+      }, 450);
+    };
+    iframe.onerror = () => {
+      clearTimeout(timeoutId);
+      finish(false);
+    };
+
+    iframe.src = '/__cookie_check.html?return_url=%2Fapi%2Fhealth';
+    document.body.appendChild(iframe);
+  });
+
+  return inflightProxyCookieRefresh;
+}
+
 async function isStaticNonJsonApiResponse(res: Response): Promise<boolean> {
   const ct = (res.headers.get('content-type') || '').toLowerCase();
   if (ct.includes('application/json') || ct.includes('+json')) {
@@ -474,7 +541,7 @@ async function isStaticNonJsonApiResponse(res: Response): Promise<boolean> {
 /**
  * Executes a credentialed HTTP request against the EDENS AI backend using `HttpOnly` cookies (`credentials: 'include'`),
  * with automatic private in-memory `Authorization: Bearer` fallback inside restricted cross-origin iframes.
- * Never reads or persists raw session tokens in `localStorage` or `sessionStorage`.
+ * Never reads or persists raw session tokens in Web Storage.
  */
 export async function apiFetch(input: string, init: ApiFetchOptions = {}): Promise<Response> {
   const { baseUrl, fetchImpl = fetch, ...rest } = init;
@@ -500,9 +567,9 @@ export async function apiFetch(input: string, init: ApiFetchOptions = {}): Promi
   };
 
   const targetUrl = resolveApiUrl(input, baseUrl);
-  const primaryRes = await fetchImpl(targetUrl, requestInit);
+  let currentRes = await fetchImpl(targetUrl, requestInit);
 
-  // Automatic browser-only recovery when a static host or misconfigured rewrite returns HTML/404 instead of API JSON
+  // Automatic browser-only recovery when a proxy cookie expires or a static host returns HTML/502/504 instead of API JSON
   const isDefaultBrowserFetch =
     typeof window !== 'undefined' &&
     init.fetchImpl === undefined &&
@@ -511,29 +578,87 @@ export async function apiFetch(input: string, init: ApiFetchOptions = {}): Promi
 
   if (isDefaultBrowserFetch) {
     const normalizedPath = input.startsWith('/') ? input : `/${input}`;
-    const staticMisrouted = await isStaticNonJsonApiResponse(primaryRes);
+    const host = (window.location?.hostname || '').toLowerCase();
 
-    // 1. If an external base URL returned a static page, fall back to same-origin relative /api/*
-    if (staticMisrouted && targetUrl !== normalizedPath) {
-      const sameOriginRes = await fetchImpl(normalizedPath, requestInit);
-      if (!(await isStaticNonJsonApiResponse(sameOriginRes))) {
-        return sameOriginRes;
+    // 1. Silent AI Studio iframe proxy cookie refresh (`/__cookie_check.html`) + transparent replay
+    if (await detectAiStudioCookieIntercept(currentRes)) {
+      await refreshAiStudioProxyCookieViaHiddenFrame();
+      try {
+        const replayedRes = await fetchImpl(targetUrl, requestInit);
+        if (!(await isStaticNonJsonApiResponse(replayedRes))) {
+          return replayedRes;
+        }
+        currentRes = replayedRes;
+      } catch {
+        // Proceed to fallback stages below
       }
     }
 
-    // 2. If hosted on Vercel (*.vercel.app) and rewrite returned a static page or 502/504 proxy timeout, call Render directly
-    const host = (window.location?.hostname || '').toLowerCase();
-    if (
-      host.endsWith('.vercel.app') &&
-      (staticMisrouted || primaryRes.status === 502 || primaryRes.status === 504)
-    ) {
+    let staticMisrouted = await isStaticNonJsonApiResponse(currentRes);
+
+    // 2. If an external base URL returned a static page, fall back to same-origin relative /api/*
+    if (staticMisrouted && targetUrl !== normalizedPath) {
       try {
-        return await fetchImpl(`${PRODUCTION_RENDER_API_ORIGIN}${normalizedPath}`, requestInit);
+        const sameOriginRes = await fetchImpl(normalizedPath, requestInit);
+        if (!(await isStaticNonJsonApiResponse(sameOriginRes))) {
+          return sameOriginRes;
+        }
+        currentRes = sameOriginRes;
+        staticMisrouted = true;
       } catch {
-        return primaryRes;
+        // Proceed to fallback stages below
+      }
+    }
+
+    // 3. One-time brief retry on same-origin container restart / gateway 502/504 / non-JSON 503
+    const currentCt = (currentRes.headers.get('content-type') || '').toLowerCase();
+    const isGatewayTransient =
+      currentRes.status === 502 ||
+      currentRes.status === 504 ||
+      (currentRes.status === 503 && !currentCt.includes('application/json'));
+    const isSameOriginServerHost =
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host.endsWith('.onrender.com') ||
+      host.startsWith('ais-dev-');
+
+    if (isSameOriginServerHost && (staticMisrouted || isGatewayTransient)) {
+      await new Promise((r) => setTimeout(r, 850));
+      try {
+        const retryRes = await fetchImpl(normalizedPath, requestInit);
+        if (!(await isStaticNonJsonApiResponse(retryRes)) && retryRes.status !== 502 && retryRes.status !== 504) {
+          return retryRes;
+        }
+        currentRes = retryRes;
+        staticMisrouted = await isStaticNonJsonApiResponse(currentRes);
+      } catch {
+        // Proceed to cloud fallback if eligible
+      }
+    }
+
+    // 4. Cloud backend fallback for Vercel, static shared previews (ais-pre-*.run.app), or unrecovered static HTML
+    const isLocalLoopback = host === 'localhost' || host === '127.0.0.1';
+    const isRenderOrigin = host.endsWith('.onrender.com');
+    if (
+      !isLocalLoopback &&
+      !isRenderOrigin &&
+      (staticMisrouted || currentRes.status === 502 || currentRes.status === 504)
+    ) {
+      const cloudUrl = `${PRODUCTION_RENDER_API_ORIGIN}${normalizedPath}`;
+      try {
+        return await fetchImpl(cloudUrl, requestInit);
+      } catch {
+        if (normalizedPath.startsWith('/api/ai/') || normalizedPath === '/api/health') {
+          try {
+            return await fetchImpl(cloudUrl, { ...requestInit, credentials: 'omit' });
+          } catch {
+            return currentRes;
+          }
+        }
+        return currentRes;
       }
     }
   }
 
-  return primaryRes;
+  return currentRes;
 }
