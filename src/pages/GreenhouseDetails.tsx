@@ -45,6 +45,7 @@ import { ConnectExistingHardwarePanel } from '../components/ConnectExistingHardw
 import { UniversalHardwareFleetPanel } from '../components/UniversalHardwareFleetPanel';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { DEFAULT_CROPS } from '../lib/hardwareService';
 
 function overallStatusBadge(status: string) {
   switch (status) {
@@ -75,6 +76,157 @@ function dataSourceBadge(tel: any) {
   return { label: 'Disconnected', cls: 'bg-destructive/10 text-destructive' };
 }
 
+interface TrendSample {
+  timestamp: string;
+  temperature: number | null;
+  humidity: number | null;
+  soilMoisture: number | null;
+}
+
+function EnvironmentalTrendChart({
+  samples,
+  tempMin,
+  tempMax
+}: {
+  samples: TrendSample[];
+  tempMin: number;
+  tempMax: number;
+}) {
+  const validTempSamples = samples.filter(
+    (s) => s.temperature !== null && Number.isFinite(s.temperature)
+  );
+
+  if (validTempSamples.length < 2) {
+    return (
+      <div className="rounded-xl bg-muted/50 p-6 text-center space-y-1.5">
+        <p className="text-sm font-semibold text-foreground">
+          {validTempSamples.length === 1
+            ? 'First reading recorded ΓÇö collecting trend history'
+            : 'Trend chart appears once sensor readings arrive'}
+        </p>
+        <p className="text-xs text-muted-foreground max-w-md mx-auto">
+          EDENS AI plots only genuine sensor updates as they arrive during your monitoring session ΓÇö never synthetic trend curves.
+        </p>
+      </div>
+    );
+  }
+
+  const width = 640;
+  const height = 180;
+  const padX = 36;
+  const padY = 20;
+  const innerW = width - padX * 2;
+  const innerH = height - padY * 2;
+
+  const temps = validTempSamples.map((s) => Number(s.temperature));
+  const minVal = Math.min(tempMin - 2, ...temps);
+  const maxVal = Math.max(tempMax + 2, ...temps);
+  const range = Math.max(1, maxVal - minVal);
+
+  const toX = (idx: number) =>
+    padX + (idx / Math.max(1, validTempSamples.length - 1)) * innerW;
+  const toY = (v: number) => padY + innerH - ((v - minVal) / range) * innerH;
+
+  const linePoints = validTempSamples
+    .map((s, idx) => `${toX(idx).toFixed(1)},${toY(Number(s.temperature)).toFixed(1)}`)
+    .join(' ');
+
+  const areaPoints = `${toX(0).toFixed(1)},${(padY + innerH).toFixed(1)} ${linePoints} ${toX(
+    validTempSamples.length - 1
+  ).toFixed(1)},${(padY + innerH).toFixed(1)}`;
+
+  const bandTop = toY(tempMax);
+  const bandBottom = toY(tempMin);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-muted-foreground">
+        <span>Recent Temperature Trend (┬░C)</span>
+        <span className="font-mono tabular-nums">
+          Target band: {tempMin}ΓÇô{tempMax}┬░C ({validTempSamples.length} readings)
+        </span>
+      </div>
+      <div className="w-full overflow-hidden rounded-xl bg-muted/30 p-3 border border-border">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="w-full h-40 overflow-visible"
+          role="img"
+          aria-label="Greenhouse temperature trend chart"
+        >
+          {/* Target Range Band */}
+          <rect
+            x={padX}
+            y={Math.min(bandTop, bandBottom)}
+            width={innerW}
+            height={Math.max(4, Math.abs(bandBottom - bandTop))}
+            fill="var(--chart-1)"
+            fillOpacity={0.1}
+            rx={4}
+          />
+          <line
+            x1={padX}
+            y1={bandTop}
+            x2={width - padX}
+            y2={bandTop}
+            stroke="var(--chart-1)"
+            strokeOpacity={0.35}
+            strokeDasharray="4 4"
+          />
+          <line
+            x1={padX}
+            y1={bandBottom}
+            x2={width - padX}
+            y2={bandBottom}
+            stroke="var(--chart-1)"
+            strokeOpacity={0.35}
+            strokeDasharray="4 4"
+          />
+
+          {/* Area Fill & Line */}
+          <polygon points={areaPoints} fill="var(--chart-1)" fillOpacity={0.14} />
+          <polyline
+            fill="none"
+            stroke="var(--chart-1)"
+            strokeWidth={2.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            points={linePoints}
+          />
+
+          {/* Data Points */}
+          {validTempSamples.map((s, idx) => (
+            <circle
+              key={`${s.timestamp}-${idx}`}
+              cx={toX(idx)}
+              cy={toY(Number(s.temperature))}
+              r={3.5}
+              fill="var(--card)"
+              stroke="var(--chart-1)"
+              strokeWidth={2}
+            />
+          ))}
+
+          {/* Y Axis Labels */}
+          <text
+            x={4}
+            y={padY + 4}
+            className="fill-muted-foreground text-[11px] font-mono"
+          >
+            {maxVal.toFixed(0)}┬░
+          </text>
+          <text
+            x={4}
+            y={padY + innerH}
+            className="fill-muted-foreground text-[11px] font-mono"
+          >
+            {minVal.toFixed(0)}┬░
+          </text>
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 export default function GreenhouseDetails() {
   const { greenhouseId } = useParams<{ greenhouseId: string }>();
   const navigate = useNavigate();
@@ -85,6 +237,7 @@ export default function GreenhouseDetails() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [detail, setDetail] = useState<any | null>(null);
+  const [samples, setSamples] = useState<TrendSample[]>([]);
 
   const [selectedZoneId, setSelectedZoneId] = useState<string>('all');
   const [zoneTelemetry, setZoneTelemetry] = useState<any | null>(null);
@@ -162,6 +315,23 @@ export default function GreenhouseDetails() {
         setFleetZoneSelect((prev) => prev || data.zones[0].id);
       }
       setActiveGreenhouseId(greenhouseId);
+
+      // Append genuine telemetry reading to session trend history if fresh/present
+      const tel = data.latestTelemetry;
+      if (tel && tel.receivedAt && tel.dataSource !== 'DISCONNECTED') {
+        setSamples((prev) => {
+          if (prev.some((p) => p.timestamp === tel.receivedAt)) return prev;
+          return [
+            ...prev.slice(-23),
+            {
+              timestamp: tel.receivedAt,
+              temperature: tel.readings?.temperature ?? null,
+              humidity: tel.readings?.humidity ?? null,
+              soilMoisture: tel.readings?.soilMoisture ?? null
+            }
+          ];
+        });
+      }
       if (data.latestCamera?.analysis && !diagnosisResult) {
         setDiagnosisResult(data.latestCamera.analysis);
       }
@@ -533,6 +703,12 @@ export default function GreenhouseDetails() {
   const cam = detail.latestCamera;
   const tel = selectedZoneId === 'all' ? detail.latestTelemetry : zoneTelemetry || null;
   const canManage = (gh.role === 'owner' || gh.role === 'operator') && !isGuest;
+  const matchedCrop =
+    DEFAULT_CROPS.find(
+      (c) =>
+        c.id.toLowerCase() === String(gh.cropType || '').toLowerCase() ||
+        c.name.toLowerCase().includes(String(gh.cropType || '').toLowerCase())
+    ) || DEFAULT_CROPS[0];
   const zonesList: any[] = detail.zones || [];
   const activeDevices: any[] = (detail.devices || []).filter(
     (d: any) => !d.replacedByDeviceId && d.provisioningStatus !== 'revoked'
@@ -856,6 +1032,12 @@ export default function GreenhouseDetails() {
                 </p>
               </div>
             )}
+
+            <EnvironmentalTrendChart
+              samples={samples}
+              tempMin={matchedCrop.tempMin}
+              tempMax={matchedCrop.tempMax}
+            />
           </CardContent>
         </Card>
       </div>
