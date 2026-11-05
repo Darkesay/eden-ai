@@ -15,7 +15,7 @@ Before flashing or wiring, ensure you have the following bench items:
 1. **ESP32-CAM (AI-Thinker Board)**:
    * OV2640 2-Megapixel Camera Module (standard ribbon cable).
    * FTDI USB-to-UART Serial Adapter (ensure jumper is set to **3.3V or 5V logic** compatible with your FTDI board).
-   * Jumper wire for `GPIO 0` to `GND` (flashing mode switch).
+   * Jumper wire for `GPIO 0` to `GND` (flashing mode switch only).
 2. **Main ESP32 DevKit V1 (ESP32-WROOM-32)**:
    * Micro-USB or Type-C data cable (must carry data, not charge-only).
    * 1x 100µF – 470µF electrolytic capacitor placed across `VIN` and `GND` (absorbs Wi-Fi TX current spikes and eliminates brownout resets).
@@ -26,7 +26,31 @@ Before flashing or wiring, ensure you have the following bench items:
 
 ---
 
-## 2. REPOSITORY FIRMWARE MAP
+## 2. PHYSICAL HARDWARE DETAILS REQUIRED FROM VICTOR
+
+> **ATTENTION (VICTOR):**  
+> To protect physical greenhouse equipment and eliminate any possibility of damaging hardware, the software is strictly decoupled from physical I/O. **No GPIO numbers, sensor IC models, relay logic levels, or electrical wirings are assumed or invented.**  
+> Complete the physical hardware specifications below before field wiring. All items are currently `[PENDING]`:
+
+| # | Physical Hardware Parameter | Status | Victor's Specification (To Be Completed) |
+| :-: | :--- | :---: | :--- |
+| 1 | **Main controller board model** | `[PENDING]` | Exact board variant (e.g., ESP32 DevKit V1 30-pin, 38-pin, NodeMCU-32S, ESP32-S3) |
+| 2 | **Camera board model** | `[PENDING]` | Exact board variant (e.g., AI-Thinker ESP32-CAM with external antenna IPEX or PCB trace) |
+| 3 | **Camera sensor model** | `[PENDING]` | Exact image sensor (e.g., OV2640 2MP 66° FOV, 160° fish-eye, or OV3660 / OV5640) |
+| 4 | **Temperature sensor model** | `[PENDING]` | Exact sensor IC (e.g., DHT22, DS18B20 1-Wire, SHT31 I2C, BME280 I2C) |
+| 5 | **Humidity sensor model** | `[PENDING]` | Exact sensor IC (e.g., DHT22, SHT31, BME280, AHT20) |
+| 6 | **Soil moisture sensor model** | `[PENDING]` | Exact probe (e.g., Capacitive Analog v1.2, Resistive, RS485 Modbus) |
+| 7 | **Other sensor models** | `[PENDING]` | Light intensity (BH1750), Water level (capacitive or float switch), CO2 (SCD30), etc. |
+| 8 | **Relay board model** | `[PENDING]` | Optocoupled 4-channel/8-channel relay module part number |
+| 9 | **Relay polarity** | `[PENDING]` | Active-LOW (`LOW = ON`) vs Active-HIGH (`HIGH = ON`) |
+| 10 | **GPIO mapping** | `[PENDING]` | Exact controller pin assignments for 1-Wire, I2C (SDA/SCL), Analog ADC, and Relays |
+| 11 | **Actuator list** | `[PENDING]` | Water pumps, mist solenoids, exhaust fans, louvers, grow lights (voltages & load currents) |
+| 12 | **Power supply specifications** | `[PENDING]` | Main AC/DC PSU voltage, buck converter models, common ground wiring scheme |
+| 13 | **Greenhouse network configuration** | `[PENDING]` | Dedicated 2.4 GHz SSID, security type (WPA2-PSK), static vs DHCP IP allocation |
+
+---
+
+## 3. REPOSITORY FIRMWARE MAP
 
 | Target Device | Firmware Source Directory | Primary Sketch File | Supported Protocols |
 | :--- | :--- | :--- | :--- |
@@ -38,7 +62,7 @@ Before flashing or wiring, ensure you have the following bench items:
 
 ---
 
-## 3. FLASHING INSTRUCTIONS
+## 4. FLASHING INSTRUCTIONS
 
 ### A. ESP32-CAM (AI-Thinker OV2640)
 
@@ -86,7 +110,7 @@ Before flashing or wiring, ensure you have the following bench items:
 
 ---
 
-## 4. ZERO-CODE ONBOARDING & PROVISIONING
+## 5. ZERO-CODE ONBOARDING & PROVISIONING
 
 Both the ESP32 Controller and ESP32-CAM feature **Plug-and-Play SoftAP Onboarding**:
 
@@ -106,7 +130,7 @@ Both the ESP32 Controller and ESP32-CAM feature **Plug-and-Play SoftAP Onboardin
 
 ---
 
-## 5. LOCAL RELAY OPTIONS FOR EXISTING HARDWARE
+## 6. LOCAL RELAY OPTIONS FOR EXISTING HARDWARE
 
 If you wish to test with an existing camera already at `http://10.87.237.36` without flashing new firmware:
 
@@ -131,7 +155,7 @@ python3 edens_edge_gateway.py config.json
 
 ---
 
-## 6. SENSORS & PHYSICAL SAFETY INVARIANTS
+## 7. SENSORS & PHYSICAL SAFETY INVARIANTS
 
 ### Unconnected Probes Rule
 * If a sensor is not physically connected to the board (e.g. soil probe or water level float), the firmware reports `NAN`, which serializes as JSON `null`.
@@ -145,17 +169,17 @@ python3 edens_edge_gateway.py config.json
 
 ---
 
-## 7. PHYSICAL VERIFICATION TEST MILESTONE
+## 8. PHYSICAL VERIFICATION TEST MILESTONE
 
 Follow these steps on bench to achieve First Physical Milestone sign-off:
 
 1. [ ] **Step 1:** Log in to EDENS AI (`https://eden-ai.vercel.app`).
 2. [ ] **Step 2:** Navigate to **Endpoint Fleet & Hardware** (`/devices`) and click **Add Device**.
-3. [ ] **Step 3:** Enroll 1x ESP32-CAM and 1x ESP32 Controller. Download configuration headers.
+3. [ ] **Step 3:** Enroll 1x ESP32-CAM and 1x ESP32 Controller. Download configuration headers. Note that initial state displays `AUTHENTICATED` (credentials issued, awaiting first physical check-in).
 4. [ ] **Step 4:** Power on ESP32-CAM. Verify in Serial Monitor that Wi-Fi connects and initial JPEG is captured.
-5. [ ] **Step 5:** Check EDENS AI UI: verify badge changes to **CONNECTED** and fresh photograph appears in **Plant Vision**.
+5. [ ] **Step 5:** Check EDENS AI UI: verify badge transitions to **ONLINE** and fresh photograph appears in **Plant Vision**.
 6. [ ] **Step 6:** Power on ESP32 Controller. Verify in Serial Monitor that telemetry is uploaded.
-7. [ ] **Step 7:** Check EDENS AI UI: verify live temperature and humidity update on dashboard.
-8. [ ] **Step 8:** Power off ESP32 Controller. Wait 90s (verify state transitions to **RECONNECTING**), then wait 180s (verify state transitions to **OFFLINE**).
-9. [ ] **Step 9:** Power back on. Confirm automatic recovery to **CONNECTED** within 1 cycle.
-10. [ ] **Step 10:** Confirm zero relay clicks or actuator dispatches occurred.
+7. [ ] **Step 7:** Check EDENS AI UI: verify live temperature and humidity update on dashboard with **ONLINE** status.
+8. [ ] **Step 8:** Power off ESP32 Controller. Wait 30s (transitions to **STALE**), then wait 60s+ (transitions to **OFFLINE**).
+9. [ ] **Step 9:** Power back on. Confirm automatic recovery to **ONLINE** within 1 reporting cycle.
+10. [ ] **Step 10:** Confirm zero relay clicks or actuator dispatches occurred (strictly `MONITORING_ONLY`).

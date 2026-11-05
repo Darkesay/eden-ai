@@ -36,30 +36,19 @@ export CAMERA_PHOTO_URL="http://10.87.237.36/photo"
 python3 edens_edge_gateway.py config.json
 ```
 
-## Running as a systemd Service (Auto-Start on Boot)
+## Local MQTT Broker Requirements (Optional)
 
-Create `/etc/systemd/system/edens-gateway.service`:
-```ini
-[Unit]
-Description=EDENS AI Greenhouse Edge Gateway
-After=network.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/eden-ai/gateway
-ExecStart=/usr/bin/python3 /home/pi/eden-ai/gateway/edens_edge_gateway.py /home/pi/eden-ai/gateway/config.json
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
+If your local greenhouse sensors broadcast over MQTT (`"mqtt_enabled": true`), a local broker must be running on the gateway (or reachable on the local farm network):
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable edens-gateway
-sudo systemctl start edens-gateway
-sudo systemctl status edens-gateway
+sudo apt update
+sudo apt install mosquitto mosquitto-clients
+sudo systemctl enable mosquitto
+sudo systemctl start mosquitto
 ```
+*Note: If local microcontrollers send data via direct HTTP or you are only using the gateway to relay a private camera (`/photo`), set `"mqtt_enabled": false` in `config.json`.*
+
+## Cloud Uplink & Render Architecture
+1. **Primary Protocol:** HTTPS REST (`POST /api/telemetry/upload` and `POST /api/camera/upload`). This works 100% reliably through Render's TLS reverse proxy without opening custom firewall ports.
+2. **WebSocket MQTT Transport:** If MQTT client streaming is required, connect via secure WebSockets to `wss://edens-ai.onrender.com/api/iot/mqtt-ws`. Render does NOT expose arbitrary raw TCP ports (such as raw port 1883).
+3. **Authentication:** The gateway attaches the provisioned `X-Hardware-Key` or `X-Camera-Key` in the HTTP headers. Unauthenticated requests are rejected (fail-closed) by the server.
+

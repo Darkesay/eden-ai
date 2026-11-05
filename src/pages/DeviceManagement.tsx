@@ -42,12 +42,16 @@ import { formatDistanceToNow } from 'date-fns';
 import { cn } from '../lib/utils';
 
 export type UiConnectionState =
+  | 'DISCOVERED'
+  | 'PAIRING'
+  | 'AUTHENTICATED'
   | 'CONNECTED'
-  | 'RECONNECTING'
+  | 'ONLINE'
   | 'OFFLINE'
-  | 'SIMULATED'
-  | 'STALE DATA'
-  | 'AUTHENTICATION FAILED';
+  | 'STALE'
+  | 'ERROR'
+  | 'REVOKED'
+  | 'SIMULATED';
 
 interface EnrolledDevice {
   id: string;
@@ -148,22 +152,32 @@ export default function DeviceManagement() {
 
   // Map server device status to unmistakable UI connection state
   const mapConnectionState = (device: EnrolledDevice): UiConnectionState => {
-    if (device.revokedAt) return 'AUTHENTICATION FAILED';
-    if (!device.hasCredentialIssued) return 'OFFLINE';
+    if (device.revokedAt) return 'REVOKED';
+    if (device.lastErrorCategory === 'AUTH' || device.explicitState === 'AUTHENTICATION_ERROR') {
+      return 'ERROR';
+    }
+    if (device.lastErrorCategory === 'CONNECTION' || device.explicitState === 'CONNECTION_ERROR') {
+      return 'ERROR';
+    }
+    if (!device.hasCredentialIssued) {
+      return 'DISCOVERED';
+    }
 
-    const explicit = device.explicitState || '';
-    if (explicit === 'AUTHENTICATION_ERROR') return 'AUTHENTICATION FAILED';
-    if (explicit === 'ONLINE') return 'CONNECTED';
-    if (explicit === 'STALE') return 'STALE DATA';
-    if (explicit === 'CONNECTION_ERROR') return 'RECONNECTING';
-
-    const lastSeen = device.lastSeenAt || device.lastSuccessfulUploadAt;
-    if (!lastSeen) return 'OFFLINE';
+    const lastSeen = device.lastSuccessfulUploadAt || device.lastSeenAt;
+    if (!lastSeen) {
+      return 'AUTHENTICATED'; // Credentials issued; awaiting first physical connection
+    }
 
     const ageSec = (Date.now() - new Date(lastSeen).getTime()) / 1000;
-    if (ageSec <= 30) return 'CONNECTED';
-    if (ageSec <= 90) return 'RECONNECTING';
-    if (ageSec <= 300) return 'STALE DATA';
+    if (ageSec <= 30) {
+      return 'ONLINE'; // Active, fresh physical hardware check-in
+    }
+    if (ageSec <= 90) {
+      return 'CONNECTED'; // Active connection
+    }
+    if (ageSec <= 300) {
+      return 'STALE'; // Telemetry aged > 90s
+    }
     return 'OFFLINE';
   };
 
@@ -286,31 +300,58 @@ export default function DeviceManagement() {
 
   const getStatusBadge = (state: UiConnectionState) => {
     switch (state) {
-      case 'CONNECTED':
+      case 'ONLINE':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+            ONLINE (ACTIVE)
+          </span>
+        );
+      case 'CONNECTED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
             CONNECTED
           </span>
         );
-      case 'RECONNECTING':
+      case 'AUTHENTICATED':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-            <span className="h-2 w-2 rounded-full bg-amber-500 animate-ping" />
-            RECONNECTING
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+            <ShieldCheck size={12} />
+            AUTHENTICATED
           </span>
         );
-      case 'STALE DATA':
+      case 'PAIRING':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20">
+            <span className="h-2 w-2 rounded-full bg-purple-500 animate-ping" />
+            PAIRING
+          </span>
+        );
+      case 'DISCOVERED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border border-zinc-500/20">
+            DISCOVERED
+          </span>
+        );
+      case 'STALE':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20">
-            STALE DATA (&gt;90s)
+            STALE (&gt;90s)
           </span>
         );
-      case 'AUTHENTICATION FAILED':
+      case 'ERROR':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
+            <AlertTriangle size={12} />
+            ERROR
+          </span>
+        );
+      case 'REVOKED':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
             <XCircle size={12} />
-            AUTHENTICATION FAILED
+            REVOKED
           </span>
         );
       case 'SIMULATED':

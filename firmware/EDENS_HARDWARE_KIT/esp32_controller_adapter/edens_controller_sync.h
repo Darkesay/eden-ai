@@ -653,3 +653,9 @@ private:
     return false;
   }
 };
+
+// Backward-compatibility type aliases
+using EdensControllerCloudSync = EdensControllerTelemetrySync;
+using EdensTelemetrySample = EdensSensorSnapshot;
+using EdensActuatorState = EdensActuatorSnapshot;
+

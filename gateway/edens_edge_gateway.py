@@ -125,8 +125,13 @@ class OfflineBufferDB:
     def enqueue(self, payload: Dict[str, Any]):
         with self.lock:
             try:
-                payload_str = json.dumps(payload)
                 now = time.time()
+                # Lock historical timestamp and sampleId at sample time to prevent duplicate record creation
+                if "timestamp" not in payload:
+                    payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+                if "sampleId" not in payload:
+                    payload["sampleId"] = f"gw_{int(now * 1000)}_{abs(hash(json.dumps(payload, sort_keys=True))) % 10000000}"
+                payload_str = json.dumps(payload)
                 with sqlite3.connect(self.db_path) as conn:
                     # Enforce FIFO retention limit
                     cur = conn.cursor()
