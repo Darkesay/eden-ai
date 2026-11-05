@@ -159,6 +159,17 @@ struct EdensSafetyInterlocks {
   bool emergencyStopLocked = false;
 };
 
+#ifndef EDENS_OFFLINE_BUFFER_CAPACITY
+#define EDENS_OFFLINE_BUFFER_CAPACITY 16
+#endif
+
+struct EdensBufferedSample {
+  EdensSensorSnapshot reading;
+  EdensActuatorSnapshot actuators;
+  EdensSafetyInterlocks interlocks;
+  uint32_t recordedAtMs;
+};
+
 struct EdensLocalRuntimeGuard {
   unsigned long lastSensorUpdateMs = 0;
   bool prevPumpActive = false;
@@ -371,7 +382,9 @@ public:
     bool ok = postTelemetry(payload);
     if (ok) {
       m_backoffMs = EDENS_TELEMETRY_INTERVAL_MS;
+      flushOfflineQueue();
     } else {
+      enqueueOfflineSample(m_latestReading, m_actuators, m_interlocks);
       m_backoffMs = min(60000UL, max((unsigned long)EDENS_TELEMETRY_INTERVAL_MS, m_backoffMs * 2UL));
     }
   }
@@ -382,6 +395,10 @@ public:
 
   uint16_t consecutiveAuthFailures() const {
     return m_consecutiveAuthFailures;
+  }
+
+  uint8_t bufferedSamplesCount() const {
+    return m_queueCount;
   }
 
 private:
@@ -397,6 +414,37 @@ private:
 
   unsigned long m_lastAttemptMs = 0;
   unsigned long m_backoffMs = EDENS_TELEMETRY_INTERVAL_MS;
+
+  // Offline ring buffer queue for intermittent Wi-Fi connectivity
+  EdensBufferedSample m_offlineQueue[EDENS_OFFLINE_BUFFER_CAPACITY];
+  uint8_t m_queueHead = 0;
+  uint8_t m_queueTail = 0;
+  uint8_t m_queueCount = 0;
+
+  void enqueueOfflineSample(const EdensSensorSnapshot& s, const EdensActuatorSnapshot& a, const EdensSafetyInterlocks& l) {
+    m_offlineQueue[m_queueHead] = { s, a, l, millis() };
+    m_queueHead = (m_queueHead + 1) % EDENS_OFFLINE_BUFFER_CAPACITY;
+    if (m_queueCount < EDENS_OFFLINE_BUFFER_CAPACITY) {
+      m_queueCount++;
+    } else {
+      // Buffer full: advance tail to discard oldest sample
+      m_queueTail = (m_queueTail + 1) % EDENS_OFFLINE_BUFFER_CAPACITY;
+    }
+  }
+
+  void flushOfflineQueue() {
+    while (m_queueCount > 0 && WiFi.status() == WL_CONNECTED) {
+      EdensBufferedSample& item = m_offlineQueue[m_queueTail];
+      String payload = buildJsonPayload(item.reading, item.actuators, item.interlocks);
+      if (postTelemetry(payload)) {
+        m_queueTail = (m_queueTail + 1) % EDENS_OFFLINE_BUFFER_CAPACITY;
+        m_queueCount--;
+        delay(50); // slight pause to yield CPU & Wi-Fi MAC
+      } else {
+        break; // retry remaining buffered items on next successful tick
+      }
+    }
+  }
 
   // Consecutive HTTP 401 Credential Recovery state (strictly separated from network errors)
   uint16_t m_consecutiveAuthFailures = 0;

@@ -1,0 +1,19 @@
+{
+  "backend_url": "https://edens-ai.onrender.com",
+  "greenhouse_id": "gh_default_01",
+  "zone_id": "zone_main",
+  "controller_device_id": "ctrl_gh1_main",
+  "controller_key": "edctrl_REPLACE_WITH_ACTUAL_CONTROLLER_KEY",
+  "camera_device_id": "cam_gh1_main",
+  "camera_key": "edcam_REPLACE_WITH_ACTUAL_CAMERA_KEY",
+  "camera_poll_enabled": true,
+  "camera_photo_url": "http://10.87.237.36/photo",
+  "camera_poll_interval_sec": 30,
+  "mqtt_enabled": false,
+  "mqtt_broker_host": "localhost",
+  "mqtt_broker_port": 1883,
+  "mqtt_topic_sensors": "greenhouse/+/sensors",
+  "telemetry_interval_sec": 15,
+  "max_buffered_records": 5000,
+  "db_path": "gateway_buffer.db"
+}

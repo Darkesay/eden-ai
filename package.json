@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test": "tsx test/hardware.test.ts && tsx test/camera_upload.test.ts && tsx test/voice_system.test.ts && tsx test/self_service_greenhouse.test.ts && tsx test/hardware_gateway_security.test.ts && tsx test/auth_and_routing.test.ts && tsx test/phase1_data_foundation.test.ts && tsx test/phase2_provisioning_and_lifecycle.test.ts && tsx test/existing_hardware_http_connection.test.ts && tsx test/master_mission_stages.test.ts",
+    "test": "tsx test/hardware.test.ts && tsx test/camera_upload.test.ts && tsx test/voice_system.test.ts && tsx test/self_service_greenhouse.test.ts && tsx test/hardware_gateway_security.test.ts && tsx test/auth_and_routing.test.ts && tsx test/phase1_data_foundation.test.ts && tsx test/phase2_provisioning_and_lifecycle.test.ts && tsx test/existing_hardware_http_connection.test.ts && tsx test/master_mission_stages.test.ts && tsx test/universal_hardware_connector.test.ts",
     "db:migrate": "tsx scripts/db-migration-tool.ts",
     "camera:relay": "node scripts/camera-lan-relay.mjs"
   },

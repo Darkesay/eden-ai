@@ -1,0 +1,3 @@
+# EDENS AI Edge Gateway Python Requirements
+paho-mqtt>=1.6.1
+requests>=2.31.0
