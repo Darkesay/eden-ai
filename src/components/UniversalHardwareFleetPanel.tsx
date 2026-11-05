@@ -447,7 +447,7 @@ export function UniversalHardwareFleetPanel({
             <span aria-hidden="true">·</span>
             <span className="inline-flex items-center gap-1.5">
               {wsState === 'CONNECTED' && (
-                <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />
+                <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" />
               )}
               <span>Live Telemetry Socket: {wsState}</span>
             </span>
@@ -477,8 +477,8 @@ export function UniversalHardwareFleetPanel({
           className={cn(
             'rounded-xl border px-4 py-3 text-xs font-medium',
             feedback.tone === 'ok'
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200'
-              : 'border-red-200 bg-red-50 text-red-900 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-200'
+              ? 'border-success/30 bg-success/10 text-success'
+              : 'border-destructive/30 bg-destructive/10 text-destructive'
           )}
         >
           {feedback.text}
@@ -516,9 +516,9 @@ export function UniversalHardwareFleetPanel({
                           className={cn(
                             'font-semibold',
                             stateLabel === 'CONNECTED'
-                              ? 'text-emerald-700 dark:text-emerald-400'
+                              ? 'text-success'
                               : stateLabel === 'STALE DATA' || stateLabel === 'RECONNECTING'
-                                ? 'text-amber-700 dark:text-amber-400'
+                                ? 'text-warning'
                                 : 'text-muted-foreground'
                           )}
                         >
@@ -683,7 +683,7 @@ export function UniversalHardwareFleetPanel({
                       <td className="py-2.5 pr-4">
                         {t.quality === 'stale' ? 'STALE DATA' : t.quality.toUpperCase()}
                       </td>
-                      <td className="py-2.5 pr-4 text-emerald-700 dark:text-emerald-400 font-sans font-semibold">
+                      <td className="py-2.5 pr-4 text-success font-sans font-semibold">
                         REAL HARDWARE DATA
                       </td>
                       <td className="py-2.5 text-muted-foreground">
@@ -713,7 +713,7 @@ export function UniversalHardwareFleetPanel({
                     <td className="py-2.5 pr-4 font-semibold text-foreground">
                       {t.value} {t.unit}
                     </td>
-                    <td className="py-2.5 pr-4 text-amber-700 dark:text-amber-400 font-sans font-semibold">
+                    <td className="py-2.5 pr-4 text-warning font-sans font-semibold">
                       SIMULATED DATA
                     </td>
                     <td className="py-2.5 font-sans text-muted-foreground">

@@ -153,7 +153,7 @@ export function LeafCameraModal({ open, onClose, onCapture }: LeafCameraModalPro
       role="dialog"
       aria-modal="true"
       aria-labelledby="leaf-camera-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
     >
       <div className="w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-2xl border border-border bg-card text-foreground shadow-xl">
         <div className="px-4 sm:px-5 py-3.5 sm:py-4 border-b border-border flex items-center justify-between gap-3">
@@ -181,7 +181,7 @@ export function LeafCameraModal({ open, onClose, onCapture }: LeafCameraModalPro
         </div>
 
         <div className="p-4 sm:p-5 space-y-4">
-          <div className="w-full aspect-video rounded-xl overflow-hidden border border-border bg-stone-950 flex items-center justify-center relative">
+          <div className="w-full aspect-video rounded-xl overflow-hidden border border-border bg-black flex items-center justify-center relative">
             {capturedDataUrl ? (
               <img
                 src={capturedDataUrl}
@@ -190,8 +190,8 @@ export function LeafCameraModal({ open, onClose, onCapture }: LeafCameraModalPro
               />
             ) : cameraError ? (
               <div className="p-6 text-center space-y-3 max-w-sm">
-                <AlertTriangle size={24} className="text-amber-400 mx-auto" />
-                <p className="text-xs text-stone-200 leading-relaxed">{cameraError}</p>
+                <AlertTriangle size={24} className="text-warning mx-auto" />
+                <p className="text-xs text-white leading-relaxed">{cameraError}</p>
               </div>
             ) : (
               <>
@@ -203,8 +203,8 @@ export function LeafCameraModal({ open, onClose, onCapture }: LeafCameraModalPro
                   className="w-full h-full object-cover"
                 />
                 {startingCamera && (
-                  <div className="absolute inset-0 bg-stone-950/75 flex flex-col items-center justify-center gap-2 text-stone-200 text-xs">
-                    <Loader2 size={22} className="animate-spin text-emerald-400" />
+                  <div className="absolute inset-0 bg-black/75 flex flex-col items-center justify-center gap-2 text-white text-xs">
+                    <Loader2 size={22} className="animate-spin text-success" />
                     <span>Starting camera...</span>
                   </div>
                 )}

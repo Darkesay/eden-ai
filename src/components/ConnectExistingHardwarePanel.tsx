@@ -82,12 +82,12 @@ function getStateToneClasses(state: UiHardwareConnectionState): string {
   switch (state) {
     case 'CONNECTED':
     case 'IMAGE_RECEIVED':
-      return 'text-emerald-800 dark:text-emerald-300';
+      return 'text-success';
     case 'RECONNECTING':
     case 'CONNECTION_BLOCKED':
-      return 'text-amber-800 dark:text-amber-300';
+      return 'text-warning';
     case 'INVALID_ADDRESS':
-      return 'text-red-700 dark:text-red-400';
+      return 'text-destructive';
     case 'OFFLINE':
     default:
       return 'text-muted-foreground';
@@ -97,11 +97,11 @@ function getStateToneClasses(state: UiHardwareConnectionState): string {
 function getDataCategoryToneClasses(cat: UiDataCategory): string {
   switch (cat) {
     case 'REAL_HARDWARE_DATA':
-      return 'text-emerald-800 dark:text-emerald-300';
+      return 'text-success';
     case 'STALE_DATA':
-      return 'text-amber-800 dark:text-amber-300';
+      return 'text-warning';
     case 'SIMULATED_DATA':
-      return 'text-indigo-800 dark:text-indigo-300';
+      return 'text-info';
     case 'OFFLINE':
     default:
       return 'text-muted-foreground';
@@ -1002,9 +1002,9 @@ export function ConnectExistingHardwarePanel({
                         className={cn(
                           'py-2.5 px-3 font-mono text-[11px] font-semibold whitespace-nowrap',
                           sensor.validity === 'VALID'
-                            ? 'text-emerald-800 dark:text-emerald-300'
+                            ? 'text-success'
                             : sensor.validity === 'STALE'
-                              ? 'text-amber-800 dark:text-amber-300'
+                              ? 'text-warning'
                               : 'text-muted-foreground'
                         )}
                       >
@@ -1224,22 +1224,22 @@ export function ConnectExistingHardwarePanel({
               className={cn(
                 'rounded-xl border px-3.5 py-3 text-xs flex items-start gap-2.5',
                 ctrlMessage.tone === 'ok'
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-100'
+                  ? 'border-success/30 bg-success/10 text-success'
                   : ctrlMessage.tone === 'warn'
-                    ? 'border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-100'
-                    : 'border-red-200 bg-red-50 text-red-950 dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-100'
+                    ? 'border-warning/30 bg-warning/10 text-warning'
+                    : 'border-destructive/30 bg-destructive/10 text-destructive'
               )}
             >
               {ctrlMessage.tone === 'ok' ? (
-                <CheckCircle2 size={15} className="text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5" />
+                <CheckCircle2 size={15} className="text-success shrink-0 mt-0.5" />
               ) : (
                 <AlertTriangle
                   size={15}
                   className={cn(
                     'shrink-0 mt-0.5',
                     ctrlMessage.tone === 'warn'
-                      ? 'text-amber-700 dark:text-amber-400'
-                      : 'text-red-700 dark:text-red-400'
+                      ? 'text-warning'
+                      : 'text-destructive'
                   )}
                 />
               )}
@@ -1507,22 +1507,22 @@ export function ConnectExistingHardwarePanel({
               className={cn(
                 'rounded-xl border px-3.5 py-3 text-xs flex items-start gap-2.5',
                 cameraMessage.tone === 'ok'
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-100'
+                  ? 'border-success/30 bg-success/10 text-success'
                   : cameraMessage.tone === 'warn'
-                    ? 'border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-100'
-                    : 'border-red-200 bg-red-50 text-red-950 dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-100'
+                    ? 'border-warning/30 bg-warning/10 text-warning'
+                    : 'border-destructive/30 bg-destructive/10 text-destructive'
               )}
             >
               {cameraMessage.tone === 'ok' ? (
-                <CheckCircle2 size={15} className="text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5" />
+                <CheckCircle2 size={15} className="text-success shrink-0 mt-0.5" />
               ) : (
                 <AlertTriangle
                   size={15}
                   className={cn(
                     'shrink-0 mt-0.5',
                     cameraMessage.tone === 'warn'
-                      ? 'text-amber-700 dark:text-amber-400'
-                      : 'text-red-700 dark:text-red-400'
+                      ? 'text-warning'
+                      : 'text-destructive'
                   )}
                 />
               )}
@@ -1532,8 +1532,8 @@ export function ConnectExistingHardwarePanel({
 
           {/* Remediation Options when Cloud-to-Private-LAN is Blocked */}
           {cameraState === 'CONNECTION_BLOCKED' && remediationOptions.length > 0 && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50/70 dark:border-amber-800/60 dark:bg-amber-950/30 p-4 space-y-3 text-xs">
-              <p className="font-semibold text-amber-950 dark:text-amber-100">
+            <div className="rounded-xl border border-warning/30 bg-warning/10 p-4 space-y-3 text-xs">
+              <p className="font-semibold text-warning">
                 Supported Local-to-Cloud Camera Mechanisms (Zero Public Device Exposure)
               </p>
               <div className="space-y-2.5">
@@ -1599,14 +1599,14 @@ export function ConnectExistingHardwarePanel({
                         'MJPEG stream interrupted or unreachable. Switched safely back to verified snapshot mode.'
                     });
                   }}
-                  className="w-full h-full object-contain bg-stone-950"
+                  className="w-full h-full object-contain bg-black"
                 />
               ) : verifiedFrame ? (
                 <img
                   src={verifiedFrame.base64DataUri || verifiedFrame.url}
                   alt={`Verified JPEG snapshot from ${cameraName}`}
                   referrerPolicy="no-referrer"
-                  className="w-full h-full object-contain bg-stone-950"
+                  className="w-full h-full object-contain bg-black"
                 />
               ) : (
                 <div className="p-6 text-center max-w-sm space-y-1.5">
@@ -1661,7 +1661,7 @@ export function ConnectExistingHardwarePanel({
             )}
 
             {camDiagnosisErr && (
-              <div className="rounded-xl border border-red-200 bg-red-50 text-red-900 dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-200 px-3.5 py-2.5 text-xs flex items-start gap-2">
+              <div className="rounded-xl border border-destructive/30 bg-destructive/10 text-destructive px-3.5 py-2.5 text-xs flex items-start gap-2">
                 <AlertTriangle size={14} className="shrink-0 mt-0.5" />
                 <span>{camDiagnosisErr}</span>
               </div>
@@ -1670,7 +1670,7 @@ export function ConnectExistingHardwarePanel({
             {camDiagnosis && (
               <div className="rounded-xl border border-border bg-background p-4 space-y-2.5 text-xs">
                 <div className="flex flex-wrap items-center justify-between gap-2 font-mono tabular-nums border-b border-border pb-2">
-                  <span className="font-semibold text-emerald-800 dark:text-emerald-300">
+                  <span className="font-semibold text-success">
                     REAL CAMERA IMAGE
                   </span>
                   <span className="text-muted-foreground">

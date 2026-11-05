@@ -98,6 +98,28 @@ export function HarvestWidget() {
 
   const isNearHarvest = daysRemaining !== null && daysRemaining <= 5;
 
+  const checklist = [
+    'Check fruit size and color',
+    'Test firmness and inspect leaves',
+    `Review the AI confidence score (${confidence}%)`
+  ];
+
+  const recordHarvest = () => {
+    const id = Date.now().toString();
+    const planted = String(store.getValue('plantingDate') || 'Unknown');
+    store.setRow('harvestHistory', id, {
+      cropType,
+      plantingDate: planted,
+      harvestDate: new Date().toISOString().split('T')[0],
+      predictedDate: estimatedHarvestDate,
+    });
+    // Reset planting date for next crop
+    store.setValue('plantingDate', new Date().toISOString().split('T')[0]);
+    setRecordedNotice(true);
+    setTimeout(() => setRecordedNotice(false), 5000);
+    store.delValue('harvestPrediction');
+  };
+
   return (
     <Card className="border border-border bg-card rounded-2xl shadow-xs">
       <CardHeader className="pb-3 border-b border-border flex flex-row items-center justify-between gap-2">
@@ -135,8 +157,8 @@ export function HarvestWidget() {
 
       <CardContent className="pt-4 space-y-4">
         {recordedNotice && (
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200 px-3.5 py-2.5 text-xs font-medium flex items-center gap-2">
-            <CheckCircle2 size={15} className="text-emerald-700 dark:text-emerald-400 shrink-0" />
+          <div className="rounded-lg border border-success/30 bg-success/10 px-3.5 py-2.5 text-xs font-medium flex items-center gap-2 text-success">
+            <CheckCircle2 size={15} className="shrink-0" />
             <span>Harvest saved to your crop log and planting date reset to today.</span>
           </div>
         )}
@@ -186,6 +208,12 @@ export function HarvestWidget() {
                 />
               </div>
             </div>
+            {daysSaved > 0 && (
+              <div className="mt-1.5 flex items-center gap-1.5 text-xs text-success">
+                <CheckCircle2 size={13} aria-hidden="true" />
+                Saved {daysSaved} day{daysSaved === 1 ? '' : 's'} with AI scheduling
+              </div>
+            )}
           </div>
         )}
 
@@ -254,8 +282,8 @@ export function HarvestWidget() {
                           className={cn(
                             'text-[11px] font-mono tabular-nums font-semibold shrink-0 px-1.5 py-0.5 rounded',
                             f.impact > 0
-                              ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
-                              : 'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                              ? 'bg-success/10 text-success'
+                              : 'bg-warning/10 text-warning'
                           )}
                         >
                           {f.impact > 0 ? `+${f.impact}d faster` : `${f.impact}d`}

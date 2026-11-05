@@ -608,7 +608,7 @@ export function CropIntelligenceControlPanel({
               type="button"
               disabled={busyAction === 'estop'}
               onClick={() => handleToggleEmergencyStop(true)}
-              className="h-9 px-3.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold cursor-pointer"
+              className="h-9 px-3.5 bg-destructive hover:bg-destructive/90 text-destructive-foreground text-xs font-semibold cursor-pointer"
             >
               <ShieldAlert size={14} className="mr-1.5" />
               Engage Emergency Stop
@@ -619,14 +619,14 @@ export function CropIntelligenceControlPanel({
 
       {/* Emergency Stop Active Banner */}
       {estopActive && (
-        <div className="rounded-xl border border-red-300 bg-red-50/90 dark:border-red-800/70 dark:bg-red-950/45 p-4 space-y-3">
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 space-y-3">
           <div className="flex items-start gap-2.5">
-            <ShieldAlert size={18} className="text-red-700 dark:text-red-300 shrink-0 mt-0.5" />
+            <ShieldAlert size={18} className="text-destructive shrink-0 mt-0.5" />
             <div className="space-y-1 text-xs">
-              <p className="font-semibold text-sm text-red-950 dark:text-red-100">
+              <p className="font-semibold text-sm text-destructive">
                 Emergency Stop Engaged — All Automated &amp; Recommended Actions Locked
               </p>
-              <p className="text-red-900 dark:text-red-200">
+              <p className="text-destructive">
                 Reason: {ctrlState.emergencyStopReason || 'Activated by farmer'}
                 {ctrlState.emergencyStopAt
                   ? ` · Activated ${new Date(ctrlState.emergencyStopAt).toLocaleTimeString()}`
@@ -636,13 +636,13 @@ export function CropIntelligenceControlPanel({
           </div>
 
           {canManage && (
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-red-200 dark:border-red-800/60">
-              <label className="inline-flex items-center gap-2 text-xs text-red-950 dark:text-red-100 cursor-pointer">
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-destructive/30">
+              <label className="inline-flex items-center gap-2 text-xs text-destructive cursor-pointer">
                 <input
                   type="checkbox"
                   checked={confirmSafeReset}
                   onChange={(e) => setConfirmSafeReset(e.target.checked)}
-                  className="rounded border-red-400"
+                  className="rounded border-destructive"
                 />
                 <span>I have inspected the greenhouse and verified equipment is safe to resume.</span>
               </label>
@@ -651,7 +651,7 @@ export function CropIntelligenceControlPanel({
                 size="sm"
                 disabled={!confirmSafeReset || busyAction === 'estop'}
                 onClick={() => handleToggleEmergencyStop(false)}
-                className="h-8 px-3 bg-red-700 hover:bg-red-800 text-white text-xs font-semibold cursor-pointer"
+                className="h-8 px-3 bg-destructive hover:bg-destructive/90 text-destructive-foreground text-xs font-semibold cursor-pointer"
               >
                 Confirm Safe &amp; Reset
               </Button>
@@ -671,10 +671,10 @@ export function CropIntelligenceControlPanel({
           className={cn(
             'rounded-xl border px-4 py-3 text-xs flex items-center justify-between gap-3',
             banner.tone === 'ok'
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-100'
+              ? 'border-success/30 bg-success/10 text-success'
               : banner.tone === 'warn'
-                ? 'border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/45 dark:text-amber-100'
-                : 'border-red-200 bg-red-50 text-red-950 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-100'
+                ? 'border-warning/30 bg-warning/10 text-warning'
+                : 'border-destructive/30 bg-destructive/10 text-destructive'
           )}
         >
           <span className="font-medium leading-relaxed">{banner.text}</span>
@@ -814,8 +814,8 @@ export function CropIntelligenceControlPanel({
                     className={cn(
                       'font-medium',
                       profile.validationStatus === 'verified'
-                        ? 'text-emerald-700 dark:text-emerald-400'
-                        : 'text-amber-700 dark:text-amber-400'
+                        ? 'text-success'
+                        : 'text-warning'
                     )}
                   >
                     {profile.validationStatus === 'verified'
@@ -1205,10 +1205,10 @@ export function CropIntelligenceControlPanel({
                       className={cn(
                         'font-medium',
                         chk.status === 'within_target'
-                          ? 'text-emerald-700 dark:text-emerald-400'
+                          ? 'text-success'
                           : chk.status === 'unavailable'
                             ? 'text-muted-foreground'
-                            : 'text-amber-700 dark:text-amber-400'
+                            : 'text-warning'
                       )}
                     >
                       {chk.status === 'within_target'
@@ -1724,7 +1724,7 @@ export function CropIntelligenceControlPanel({
                       <button
                         type="button"
                         onClick={() => handleRevokePolicy(pol.id)}
-                        className="text-red-700 dark:text-red-400 font-semibold hover:underline cursor-pointer"
+                        className="text-destructive font-semibold hover:underline cursor-pointer"
                       >
                         Revoke
                       </button>

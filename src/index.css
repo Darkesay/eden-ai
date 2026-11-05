@@ -1,156 +1,203 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 @import "tailwindcss";
+
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Design tokens — BOTANIX / EDENS AI greenhouse console.
+ *
+ * Roles, not appearances: every color is named by what it means and has a
+ * light and a dark value that both clear WCAG AA (4.5:1 for text under 18px).
+ * One accent (deep botanical green) + status colors that are only ever used
+ * for status. Monospace is reserved for telemetry values, IDs and keys.
+ */
+
 @theme inline {
-  --font-heading: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --color-foreground: var(--foreground);
-  --color-background: var(--background);
-  --radius-sm: calc(var(--radius) * 0.65);
-  --radius-md: calc(var(--radius) * 0.85);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.25);
-  --radius-2xl: calc(var(--radius) * 1.5);
-  --radius-3xl: calc(var(--radius) * 1.75);
+    --font-heading: var(--font-sans);
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+    /* Status (semantic — never used decoratively) */
+    --color-success: var(--success);
+    --color-warning: var(--warning);
+    --color-info: var(--info);
+    --color-brand: var(--brand);
+
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+
+    /* One radius scale: controls 10px, cards 14px, inner boxes 8px */
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
 }
 
 :root {
-  --background: #F6F8F6;
-  --foreground: #111C16;
-  --card: #FFFFFF;
-  --card-foreground: #111C16;
-  --popover: #FFFFFF;
-  --popover-foreground: #111C16;
-  --primary: #15803D;
-  --primary-foreground: #FFFFFF;
-  --secondary: #EEF4EF;
-  --secondary-foreground: #163020;
-  --muted: #EFF3EF;
-  --muted-foreground: #4B5B52;
-  --accent: #EAF5EC;
-  --accent-foreground: #14532D;
-  --destructive: #B91C1C;
-  --destructive-foreground: #FFFFFF;
-  --border: #E2E8E3;
-  --input: #D5DFD7;
-  --ring: #15803D;
-  --sidebar: #FFFFFF;
-  --sidebar-foreground: #111C16;
-  --sidebar-primary: #15803D;
-  --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #EFF6F0;
-  --sidebar-accent-foreground: #14532D;
-  --sidebar-border: #E2E8E3;
-  --sidebar-ring: #15803D;
-  --chart-1: #15803D;
-  --chart-2: #0284C7;
-  --chart-3: #D97706;
-  --chart-4: #4F46E5;
-  --chart-5: #0D9488;
-  --radius: 0.625rem;
+    /* Light appearance — neutral paper surfaces, one deep green accent */
+    --background: #F6F7F6;
+    --foreground: #121614;
+    --card: #FFFFFF;
+    --card-foreground: #121614;
+    --popover: #FFFFFF;
+    --popover-foreground: #121614;
+    --primary: #0E7A50;          /* white text on it: 5.4:1 */
+    --primary-foreground: #FFFFFF;
+    --secondary: #EEF2F0;
+    --secondary-foreground: #1B211E;
+    --muted: #EEF2F0;
+    --muted-foreground: #5C6661; /* 5.5:1 on --background */
+    --accent: #E6F2EB;           /* selected / active surface */
+    --accent-foreground: #0B5C3C;
+    --destructive: #B91C1C;
+    --destructive-foreground: #FFFFFF;
+    --border: #E3E7E4;
+    --input: #D6DCD8;
+    --ring: #0E7A50;
+    --brand: #0E7A50;            /* brand-colored text in light mode */
+    --success: #146C43;
+    --warning: #B45309;
+    --info: #1D4ED8;
+    --radius: 0.625rem;
+
+    --sidebar: #FFFFFF;
+    --sidebar-foreground: #121614;
+    --sidebar-primary: #0E7A50;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #EEF2F0;
+    --sidebar-accent-foreground: #1B211E;
+    --sidebar-border: #E3E7E4;
+    --sidebar-ring: #0E7A50;
+
+    --chart-1: #0E7A50;
+    --chart-2: #1D4ED8;
+    --chart-3: #B45309;
+    --chart-4: #6B7280;
+    --chart-5: #B91C1C;
+
+    color-scheme: light;
 }
 
 .dark {
-  --background: #0C120E;
-  --foreground: #F1F5F2;
-  --card: #121A15;
-  --card-foreground: #F1F5F2;
-  --popover: #121A15;
-  --popover-foreground: #F1F5F2;
-  --primary: #22C55E;
-  --primary-foreground: #05180B;
-  --secondary: #1A261E;
-  --secondary-foreground: #E2ECE5;
-  --muted: #18221B;
-  --muted-foreground: #A3B8AB;
-  --accent: #1A2B20;
-  --accent-foreground: #86EFAC;
-  --destructive: #EF4444;
-  --destructive-foreground: #FFFFFF;
-  --border: #233128;
-  --input: #26362B;
-  --ring: #22C55E;
-  --sidebar: #101712;
-  --sidebar-foreground: #F1F5F2;
-  --sidebar-primary: #22C55E;
-  --sidebar-primary-foreground: #05180B;
-  --sidebar-accent: #1A261E;
-  --sidebar-accent-foreground: #86EFAC;
-  --sidebar-border: #233128;
-  --sidebar-ring: #22C55E;
-  --chart-1: #22C55E;
-  --chart-2: #38BDF8;
-  --chart-3: #FBBF24;
-  --chart-4: #818CF8;
-  --chart-5: #2DD4BF;
+    /* Dark appearance — near-black graphite, green reserved for accent + status */
+    --background: #0B0D0C;
+    --foreground: #E9EDEB;
+    --card: #141716;
+    --card-foreground: #E9EDEB;
+    --popover: #141716;
+    --popover-foreground: #E9EDEB;
+    --primary: #0E7A50;          /* white text on it: 5.4:1 */
+    --primary-foreground: #FFFFFF;
+    --secondary: #1E2321;
+    --secondary-foreground: #E9EDEB;
+    --muted: #1A1E1C;
+    --muted-foreground: #9AA4A0; /* 7.1:1 on --card */
+    --accent: #10241A;           /* selected / active surface */
+    --accent-foreground: #6FD3A9;
+    --destructive: #F87171;
+    --destructive-foreground: #2A0808;
+    --border: #262B29;
+    --input: #2E3431;
+    --ring: #45C690;
+    --brand: #45C690;            /* brand-colored text in dark mode: 8.5:1 on card */
+    --success: #4CD98C;
+    --warning: #FBBF24;
+    --info: #60A5FA;
+    --radius: 0.625rem;
+
+    --sidebar: #101312;
+    --sidebar-foreground: #E9EDEB;
+    --sidebar-primary: #45C690;
+    --sidebar-primary-foreground: #06170F;
+    --sidebar-accent: #1E2321;
+    --sidebar-accent-foreground: #E9EDEB;
+    --sidebar-border: #262B29;
+    --sidebar-ring: #45C690;
+
+    --chart-1: #45C690;
+    --chart-2: #60A5FA;
+    --chart-3: #FBBF24;
+    --chart-4: #9AA4A0;
+    --chart-5: #F87171;
+
+    color-scheme: dark;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
-
   html {
     @apply font-sans antialiased;
     color-scheme: light;
     overflow-x: clip;
   }
-
-  html.dark {
-    color-scheme: dark;
-  }
-
-  html.dark body {
-    letter-spacing: 0.005em;
-  }
-
   body {
-    @apply bg-background text-foreground leading-normal;
+    @apply bg-background text-foreground antialiased;
     margin: 0;
     overflow-x: clip;
   }
-
+  /* Native form controls follow the card surface in either theme */
   select option {
     background-color: var(--card);
     color: var(--foreground);
   }
+  /* Instrument readouts: aligned digits in every telemetry value */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
 }
 
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
+/* Quiet scrollbars — containers scroll, chrome stays out of the way */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted-foreground) 35%, transparent) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted-foreground) 35%, transparent);
+  border-radius: 999px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .no-scrollbar {

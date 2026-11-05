@@ -43,21 +43,24 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-background text-foreground p-4">
-          <div className="w-full max-w-md rounded-2xl bg-card p-8 border border-border text-center shadow-xs space-y-4">
-            <div className="w-11 h-11 rounded-xl bg-red-50 border border-red-200 text-red-700 dark:bg-red-950/50 dark:border-red-800/60 dark:text-red-300 flex items-center justify-center mx-auto">
-              <AlertTriangle size={22} />
+        <div className="flex min-h-screen items-center justify-center bg-background p-4 text-foreground">
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-8 text-center">
+            <div className="mx-auto mb-4 flex size-11 items-center justify-center rounded-xl border border-destructive/30 bg-destructive/10 text-destructive">
+              <AlertTriangle size={22} aria-hidden="true" />
             </div>
-            <h1 className="text-xl font-bold text-foreground">Something went wrong</h1>
-            <p className="text-xs text-muted-foreground font-mono">
+            <h1 className="text-lg font-semibold">Something went wrong</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              The app hit an unexpected error. Reloading usually fixes it.
+            </p>
+            <p className="mt-4 break-words rounded-lg bg-muted p-3 font-mono text-xs text-muted-foreground">
               {this.state.error?.message || 'Unexpected display error.'}
             </p>
             <button
               type="button"
               onClick={() => window.location.reload()}
-              className="h-10 px-6 bg-primary text-primary-foreground text-sm font-semibold rounded-xl hover:bg-primary/90 cursor-pointer"
+              className="mt-6 h-11 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             >
-              Reload EDENS AI
+              Reload the app
             </button>
           </div>
         </div>
@@ -77,9 +80,9 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-2.5 bg-background text-foreground">
-        <Loader2 size={26} className="animate-spin text-primary" />
-        <span className="text-xs font-medium text-muted-foreground">Loading your greenhouse workspace...</span>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-2.5 bg-background text-muted-foreground">
+        <Loader2 size={22} className="animate-spin text-primary" aria-hidden="true" />
+        <span className="text-sm">Loading your greenhouse workspace…</span>
       </div>
     );
   }

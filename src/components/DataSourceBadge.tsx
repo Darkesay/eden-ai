@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, Clock, FlaskConical, RefreshCw, WifiOff } from 'lucide-react';
+import { hardwareService } from '../lib/hardwareService';
+import { DataSource } from '../lib/hardwareTypes';
 import { cn } from '../lib/utils';
-import { formatRelativeAge, useFarmerGreenhouseState } from '../lib/greenhouseState';
+import { RefreshCw, AlertTriangle, ShieldCheck, Cpu, WifiOff, Clock } from 'lucide-react';
 
 interface DataSourceBadgeProps {
   className?: string;
@@ -11,171 +12,155 @@ interface DataSourceBadgeProps {
   variant?: 'badge' | 'banner' | 'pill';
 }
 
+const BADGE_LABEL: Record<DataSource, string> = {
+  REAL_HARDWARE: 'Live hardware',
+  SIMULATED: 'Simulation',
+  CACHED: 'Cached',
+  STALE: 'Stale',
+  DISCONNECTED: 'Offline'
+};
+
+const BADGE_TONE: Record<DataSource, string> = {
+  REAL_HARDWARE: 'bg-success/10 text-success',
+  SIMULATED: 'bg-info/10 text-info',
+  CACHED: 'bg-warning/10 text-warning',
+  STALE: 'bg-warning/10 text-warning',
+  DISCONNECTED: 'bg-destructive/10 text-destructive'
+};
+
+const BADGE_DOT: Record<DataSource, string> = {
+  REAL_HARDWARE: 'bg-success',
+  SIMULATED: 'bg-info',
+  CACHED: 'bg-warning',
+  STALE: 'bg-warning',
+  DISCONNECTED: 'bg-destructive'
+};
+
 export function DataSourceBadge({
   className,
   showFreshness = true,
   compact = false,
   variant = 'badge'
 }: DataSourceBadgeProps) {
-  const ghState = useFarmerGreenhouseState();
-  const { provenance, lastUpdatedAgeSeconds, lastUpdatedAt, activeGreenhouse } = ghState;
-  const ageText = formatRelativeAge(lastUpdatedAgeSeconds, lastUpdatedAt);
+  const [dataSource, setDataSource] = useState<DataSource>(hardwareService.getDataSource());
+  const [freshnessSec, setFreshnessSec] = useState<number>(hardwareService.getSensorFreshnessSeconds());
+
+  useEffect(() => {
+    const unsub = hardwareService.subscribe(() => {
+      setDataSource(hardwareService.getDataSource());
+      setFreshnessSec(hardwareService.getSensorFreshnessSeconds());
+    });
+
+    const timer = setInterval(() => {
+      setFreshnessSec(hardwareService.getSensorFreshnessSeconds());
+    }, 1000);
+
+    return () => {
+      unsub();
+      clearInterval(timer);
+    };
+  }, []);
+
+  const config = hardwareService.getConfig();
+
+  const freshnessText =
+    freshnessSec < 2 ? 'updated now' : `updated ${freshnessSec}s ago`;
 
   if (variant === 'banner') {
-    if (provenance === 'REAL_HARDWARE') {
-      return (
-        <div
-          className={cn(
-            'rounded-xl border border-emerald-200 bg-emerald-50/80 dark:border-emerald-800/60 dark:bg-emerald-950/45 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-emerald-950 dark:text-emerald-100',
-            className
-          )}
-        >
-          <div className="flex items-start sm:items-center gap-2.5 min-w-0">
-            <CheckCircle2 size={18} className="text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5 sm:mt-0" />
-            <div className="min-w-0">
-              <span className="font-semibold block sm:inline">Live Greenhouse Hardware Connected</span>
-              <span className="text-emerald-800 dark:text-emerald-200/90 block sm:inline sm:ml-2 text-xs sm:text-sm mt-0.5 sm:mt-0">
-                Showing verified readings from {ghState.greenhouseName}.
-              </span>
-            </div>
-          </div>
-          {showFreshness && (
-            <span className="text-xs font-mono tabular-nums text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-              <Clock size={13} /> Updated {ageText}
-            </span>
-          )}
-        </div>
-      );
-    }
+    const notice: Record<DataSource, { icon: React.ElementType; title: string; note: string; cta?: string }> = {
+      REAL_HARDWARE: {
+        icon: ShieldCheck,
+        title: 'Live hardware connected',
+        note: config.controllerHost ? `Controller at ${config.controllerHost} · ${freshnessText}` : freshnessText
+      },
+      CACHED: {
+        icon: RefreshCw,
+        title: 'Cached telemetry',
+        note: `Showing the last reading while polling retries · last seen ${freshnessSec}s ago`
+      },
+      STALE: {
+        icon: AlertTriangle,
+        title: 'Stale telemetry',
+        note: `Readings are ${freshnessSec}s old — don't treat these as live`
+      },
+      DISCONNECTED: {
+        icon: WifiOff,
+        title: 'Hardware offline',
+        note: 'No signal from the main ESP32 controller',
+        cta: 'Open hardware settings'
+      },
+      SIMULATED: {
+        icon: Cpu,
+        title: 'Simulation mode',
+        note: 'Values are simulated for testing — not real greenhouse readings',
+        cta: 'Connect real hardware'
+      }
+    };
 
-    if (provenance === 'CACHED' || provenance === 'STALE') {
-      return (
-        <div
-          className={cn(
-            'rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-800/60 dark:bg-amber-950/45 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-amber-950 dark:text-amber-100',
-            className
-          )}
-        >
-          <div className="flex items-start sm:items-center gap-2.5 min-w-0">
-            <AlertTriangle size={18} className="text-amber-700 dark:text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
-            <div className="min-w-0">
-              <span className="font-semibold block sm:inline">Sensor Update Delayed</span>
-              <span className="text-amber-900 dark:text-amber-200/90 block sm:inline sm:ml-2 text-xs sm:text-sm mt-0.5 sm:mt-0">
-                Last reading arrived {ageText}. Do not rely on these numbers as live until your controller reconnects.
-              </span>
-            </div>
-          </div>
-          <Link
-            to={activeGreenhouse ? `/greenhouses/${activeGreenhouse.id}` : '/settings?tab=hardware'}
-            className="text-xs font-semibold text-amber-900 dark:text-amber-300 underline underline-offset-4 whitespace-nowrap shrink-0"
-          >
-            Check Connection
-          </Link>
-        </div>
-      );
-    }
-
-    if (provenance === 'SIMULATED') {
-      return (
-        <div
-          className={cn(
-            'rounded-xl border border-indigo-200 bg-indigo-50/80 dark:border-indigo-800/60 dark:bg-indigo-950/45 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-indigo-950 dark:text-indigo-100',
-            className
-          )}
-        >
-          <div className="flex items-start sm:items-center gap-2.5 min-w-0">
-            <FlaskConical size={18} className="text-indigo-700 dark:text-indigo-300 shrink-0 mt-0.5 sm:mt-0" />
-            <div className="min-w-0">
-              <span className="font-semibold block sm:inline">Practice Mode Active</span>
-              <span className="text-indigo-900 dark:text-indigo-200/90 block sm:inline sm:ml-2 text-xs sm:text-sm mt-0.5 sm:mt-0">
-                Numbers shown are simulated for learning — not live readings from a physical greenhouse.
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <Link
-              to="/greenhouses/setup"
-              className="text-xs font-semibold text-indigo-900 dark:text-indigo-300 underline underline-offset-4 whitespace-nowrap"
-            >
-              Connect Real Hardware
-            </Link>
-          </div>
-        </div>
-      );
-    }
+    const item = notice[dataSource];
+    const tone =
+      dataSource === 'REAL_HARDWARE'
+        ? 'border-success/30 bg-success/10 text-success'
+        : dataSource === 'DISCONNECTED'
+          ? 'border-destructive/30 bg-destructive/10 text-destructive'
+          : dataSource === 'SIMULATED'
+            ? 'border-info/30 bg-info/10 text-info'
+            : 'border-warning/30 bg-warning/10 text-warning';
 
     return (
       <div
         className={cn(
-          'rounded-xl border border-border bg-card px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-foreground',
+          'flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-xs',
+          tone,
           className
         )}
       >
-        <div className="flex items-start sm:items-center gap-2.5 min-w-0">
-          <WifiOff size={18} className="text-muted-foreground shrink-0 mt-0.5 sm:mt-0" />
-          <div className="min-w-0">
-            <span className="font-semibold block sm:inline">No Live Sensor Signal</span>
-            <span className="text-muted-foreground block sm:inline sm:ml-2 text-xs sm:text-sm mt-0.5 sm:mt-0">
-              {activeGreenhouse
-                ? `Waiting for ${activeGreenhouse.name} hardware to send verified readings.`
-                : 'Connect your EDENS AI greenhouse kit to view live environmental readings.'}
-            </span>
-          </div>
+        <div className="flex min-w-0 items-center gap-2">
+          <item.icon size={15} className="shrink-0" aria-hidden="true" />
+          <span className="font-medium">{item.title}</span>
+          <span className="truncate opacity-80">{item.note}</span>
         </div>
-        <Link
-          to={activeGreenhouse ? `/greenhouses/${activeGreenhouse.id}/setup` : '/greenhouses/setup'}
-          className="text-xs font-semibold text-primary hover:underline underline-offset-4 whitespace-nowrap shrink-0"
-        >
-          {activeGreenhouse ? 'Open Setup Guide' : 'Set Up Greenhouse'}
-        </Link>
+        {item.cta && (
+          <Link
+            to={item.cta === 'Connect real hardware' ? '/greenhouses/setup' : '/settings?tab=hardware'}
+            className="shrink-0 rounded-md border border-current/30 px-2.5 py-1 font-medium transition-opacity hover:opacity-80"
+          >
+            {item.cta}
+          </Link>
+        )}
       </div>
     );
   }
 
-  // Compact sidebar / header indicator
-  const toneClass =
-    provenance === 'REAL_HARDWARE'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-300'
-      : provenance === 'CACHED' || provenance === 'STALE'
-        ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/45 dark:text-amber-300'
-        : provenance === 'SIMULATED'
-          ? 'border-indigo-200 bg-indigo-50 text-indigo-800 dark:border-indigo-800/60 dark:bg-indigo-950/45 dark:text-indigo-300'
-          : 'border-border bg-muted text-muted-foreground';
-
-  const Icon =
-    provenance === 'REAL_HARDWARE'
-      ? CheckCircle2
-      : provenance === 'CACHED'
-        ? RefreshCw
-        : provenance === 'STALE'
-          ? AlertTriangle
-          : provenance === 'SIMULATED'
-            ? FlaskConical
-            : WifiOff;
-
-  const compactLabel =
-    provenance === 'REAL_HARDWARE'
-      ? 'Live'
-      : provenance === 'CACHED' || provenance === 'STALE'
-        ? 'Delayed'
-        : provenance === 'SIMULATED'
-          ? 'Practice'
-          : 'Offline';
-
+  // Variant: badge / pill — compact status chip for headers
   return (
-    <div
+    <span
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-lg border text-xs font-medium whitespace-nowrap shrink-0',
-        compact ? 'px-2 py-1' : 'px-2.5 py-1',
-        toneClass,
+        'inline-flex max-w-full items-center gap-1.5 rounded-md text-xs font-medium',
+        compact ? 'px-1.5 py-0.5' : 'px-2 py-1',
+        BADGE_TONE[dataSource],
         className
       )}
+      title={
+        dataSource === 'REAL_HARDWARE' && showFreshness
+          ? `Sensor data ${freshnessText}`
+          : BADGE_LABEL[dataSource]
+      }
     >
-      <Icon size={13} className="shrink-0" />
-      <span>{compact ? compactLabel : ghState.provenanceLabel}</span>
-      {showFreshness && provenance === 'REAL_HARDWARE' && lastUpdatedAgeSeconds !== null && (
-        <span className="text-[11px] font-mono tabular-nums opacity-80">· {ageText}</span>
+      <span className={cn('size-1.5 shrink-0 rounded-full', BADGE_DOT[dataSource])} aria-hidden="true" />
+      <span className="truncate">{BADGE_LABEL[dataSource]}</span>
+
+      {showFreshness && dataSource === 'REAL_HARDWARE' && (
+        <span className="hidden text-muted-foreground lg:inline">· {freshnessText}</span>
       )}
-    </div>
+
+      {showFreshness && (dataSource === 'CACHED' || dataSource === 'STALE') && (
+        <span className="hidden text-muted-foreground lg:inline">· {freshnessSec}s ago</span>
+      )}
+
+      {showFreshness && (dataSource === 'CACHED' || dataSource === 'STALE') && (
+        <Clock size={11} className="hidden shrink-0 text-muted-foreground lg:inline" aria-hidden="true" />
+      )}
+    </span>
   );
 }

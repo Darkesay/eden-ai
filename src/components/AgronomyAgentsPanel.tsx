@@ -111,9 +111,9 @@ function SingleAgentRow({ spec }: { spec: AgentCardSpec }) {
   const badgeTone = !enabled
     ? 'bg-muted text-muted-foreground border-border'
     : status === 'ALERT'
-      ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/45 dark:text-amber-300 dark:border-amber-800/60'
+      ? 'bg-warning/10 text-warning border-warning/30'
       : status === 'ADVISORY_READY'
-        ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60'
+        ? 'bg-success/10 text-success border-success/30'
         : 'bg-muted text-muted-foreground border-border';
 
   const badgeLabel = !enabled
@@ -225,7 +225,7 @@ export function AgronomyAgentsPanel() {
               <h2 className="text-base font-semibold text-foreground">
                 5 Specialized Agronomy Agents
               </h2>
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/45 dark:text-emerald-300 dark:border-emerald-800/60">
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md bg-success/10 text-success border border-success/30">
                 <ShieldCheck size={12} />
                 Advisory-Only Hardware Safety
               </span>

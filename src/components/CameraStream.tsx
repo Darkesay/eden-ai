@@ -1,21 +1,22 @@
-import React, { useRef, useState } from 'react';
-import { format } from 'date-fns';
-import {
-  AlertTriangle,
-  Camera,
-  Check,
-  Clock,
-  FileCheck,
-  Loader2,
-  RefreshCw,
-  Upload,
-  Wifi,
-  WifiOff
-} from 'lucide-react';
+import React, { useState, useRef } from 'react';
 import { hardwareService } from '../lib/hardwareService';
-import { formatFrameAge, useCameraConnection } from '../lib/cameraConnectionManager';
+import { useCameraConnection, formatFrameAge } from '../lib/cameraConnectionManager';
 import { Button } from './ui/button';
 import { cn } from '../lib/utils';
+import {
+  Camera,
+  RefreshCw,
+  Check,
+  Upload,
+  Clock,
+  FileCheck,
+  AlertTriangle,
+  Wifi,
+  WifiOff,
+  Loader2,
+  Radio
+} from 'lucide-react';
+import { format } from 'date-fns';
 
 interface CameraStreamProps {
   onCapture?: (base64Image: string) => void;
@@ -43,10 +44,10 @@ export function CameraStream({
     if (frame?.isFresh && frame.base64 && onCapture) {
       onCapture(frame.base64);
     } else if (!frame) {
-      setUploadError('No greenhouse camera photograph is stored on the server yet.');
+      setUploadError('No greenhouse camera photograph is currently available on the cloud server.');
     } else if (!frame.isFresh) {
       setUploadError(
-        `Latest stored photograph is outdated (${formatFrameAge(camera.displayAgeSeconds)}) — not a live capture.`
+        `Latest stored photograph is STALE (${formatFrameAge(camera.displayAgeSeconds)}) — not a fresh live capture.`
       );
     }
   };
@@ -57,7 +58,7 @@ export function CameraStream({
 
     const token = testCameraKey.trim();
     if (!token) {
-      setUploadError('Enter your X-Camera-Key before sending a test JPEG.');
+      setUploadError('Enter X-Camera-Key before sending an authenticated test JPEG.');
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
@@ -93,63 +94,13 @@ export function CameraStream({
   } = camera;
 
   return (
-    <div className={cn('space-y-3', className)}>
-      {/* Metadata Strip Above Viewport */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div className="flex flex-wrap items-center gap-2">
-          <span
-            className={cn(
-              'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-medium',
-              connectionBadge === 'CONNECTED'
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/45 dark:border-emerald-800/60 dark:text-emerald-300'
-                : connectionBadge === 'RECONNECTING'
-                  ? 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/45 dark:border-amber-800/60 dark:text-amber-300'
-                  : 'bg-muted border-border text-muted-foreground'
-            )}
-          >
-            {connectionBadge === 'CONNECTED' ? (
-              <Wifi size={13} />
-            ) : connectionBadge === 'RECONNECTING' ? (
-              <RefreshCw size={13} className="animate-spin" />
-            ) : (
-              <WifiOff size={13} />
-            )}
-            {connectionBadge === 'CONNECTED'
-              ? 'Camera Connected'
-              : connectionBadge === 'RECONNECTING'
-                ? 'Checking Camera...'
-                : 'Camera Offline'}
-          </span>
-
-          {freshnessBadge && status !== 'LIVE_STREAM' && (
-            <span
-              className={cn(
-                'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-medium',
-                freshnessBadge === 'FRESH'
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/45 dark:border-emerald-800/60 dark:text-emerald-300'
-                  : 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/45 dark:border-amber-800/60 dark:text-amber-300'
-              )}
-            >
-              {freshnessBadge === 'FRESH' ? <FileCheck size={13} /> : <AlertTriangle size={13} />}
-              {freshnessBadge === 'FRESH' ? 'Fresh Photo' : 'Outdated Photo'}
-            </span>
-          )}
-
-          <span className="text-muted-foreground">
-            {status === 'LIVE_STREAM' ? 'Local LAN Stream' : 'Uploaded Photograph (Not Live Video)'}
-          </span>
-        </div>
-
-        <span className="font-mono tabular-nums text-muted-foreground flex items-center gap-1.5">
-          <Clock size={13} />
-          {lastImageTimestamp
-            ? `${format(new Date(lastImageTimestamp), 'HH:mm:ss')} (${formatFrameAge(displayAgeSeconds)})`
-            : 'No photo uploaded yet'}
-        </span>
-      </div>
-
-      {/* Camera Frame */}
-      <div className="w-full aspect-video rounded-xl overflow-hidden relative border border-border bg-stone-100 dark:bg-stone-950">
+    <div className={cn('space-y-4', className)}>
+      <div
+        className={cn(
+          'w-full bg-muted rounded-lg overflow-hidden relative border border-border',
+          liveStreamCandidateUrl || latestFrame ? 'aspect-video' : ''
+        )}
+      >
         {liveStreamCandidateUrl ? (
           <img
             src={liveStreamCandidateUrl}
@@ -163,73 +114,143 @@ export function CameraStream({
             key={latestFrame.id}
             src={latestFrame.url}
             alt="ESP32-CAM Greenhouse Snapshot"
-            className={cn('w-full h-full object-contain bg-stone-950', !latestFrame.isFresh && 'opacity-85')}
+            className={cn(
+              'w-full h-full object-cover transition-opacity duration-300',
+              !latestFrame.isFresh && 'opacity-80'
+            )}
           />
         ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-muted/60">
-            <div className="w-12 h-12 rounded-xl bg-card border border-border flex items-center justify-center mb-3 text-muted-foreground">
+          <div className="flex min-h-[300px] w-full flex-col items-center justify-center p-6 pt-24 text-center bg-muted">
+            <div className="flex size-12 items-center justify-center rounded-lg border border-border bg-background mb-3">
               {status === 'RECONNECTING' || status === 'CONNECTING' ? (
-                <Loader2 size={22} className="text-primary animate-spin" />
+                <Loader2 size={22} className="text-warning animate-spin" aria-hidden="true" />
               ) : (
-                <Camera size={22} />
+                <WifiOff size={22} className="text-muted-foreground" aria-hidden="true" />
               )}
             </div>
-            <p className="font-semibold text-foreground text-sm mb-1">{camera.statusHeadline}</p>
+            <p className="text-sm font-semibold text-foreground mb-1">
+              {camera.statusHeadline}
+            </p>
             <p className="text-muted-foreground max-w-md text-xs leading-relaxed mb-4">
               {camera.statusDetail}
             </p>
             <Button
-              type="button"
               size="sm"
               variant="outline"
               onClick={() => void camera.reconnectNow()}
               disabled={camera.isRefreshing}
-              className="h-9 px-3.5 text-xs font-semibold cursor-pointer"
             >
-              <RefreshCw size={13} className={cn('mr-1.5', camera.isRefreshing && 'animate-spin')} />
-              {camera.isRefreshing ? 'Checking...' : 'Check Camera Now'}
+              <RefreshCw size={13} className={cn(camera.isRefreshing && 'animate-spin')} aria-hidden="true" />
+              {camera.isRefreshing ? 'Checking…' : 'Check camera feed'}
             </Button>
           </div>
         )}
-      </div>
 
-      {latestFrame && !latestFrame.isFresh && !camera.isLiveStreamVerified && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/45 dark:text-amber-200 px-3.5 py-2.5 text-xs flex items-start gap-2">
-          <AlertTriangle size={15} className="text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
-          <span>
-            This photograph was captured on{' '}
-            <strong className="font-mono tabular-nums">
-              {format(new Date(latestFrame.timestamp), 'yyyy-MM-dd HH:mm:ss')}
-            </strong>{' '}
-            ({formatFrameAge(displayAgeSeconds)}). Your camera is not currently sending new photos.
+        {/* Top Status & Provenance Bar */}
+        <div className="absolute top-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span
+              className={cn(
+                'flex items-center gap-1.5 rounded-lg border bg-background/80 px-2 py-1 text-xs font-medium',
+                connectionBadge === 'CONNECTED'
+                  ? 'border-success/30 bg-success/10 text-success'
+                  : connectionBadge === 'RECONNECTING'
+                  ? 'border-warning/30 bg-warning/10 text-warning'
+                  : 'border-border bg-background/80 text-muted-foreground'
+              )}
+            >
+              {status === 'LIVE_STREAM' ? (
+                <>
+                  <Radio size={12} className="animate-pulse" aria-hidden="true" />
+                  Connected · live MJPEG
+                </>
+              ) : connectionBadge === 'CONNECTED' ? (
+                <>
+                  <Wifi size={12} aria-hidden="true" />
+                  Connected
+                </>
+              ) : connectionBadge === 'RECONNECTING' ? (
+                <>
+                  <RefreshCw size={12} className="animate-spin" aria-hidden="true" />
+                  Reconnecting{camera.nextRetryInSeconds !== null ? ` (${camera.nextRetryInSeconds}s)` : ''}
+                </>
+              ) : (
+                <>
+                  <WifiOff size={12} aria-hidden="true" />
+                  Disconnected
+                </>
+              )}
+            </span>
+
+            {freshnessBadge && status !== 'LIVE_STREAM' && (
+              <span
+                className={cn(
+                  'flex items-center gap-1.5 rounded-lg border bg-background/80 px-2 py-1 text-xs font-medium',
+                  freshnessBadge === 'FRESH'
+                    ? 'border-success/30 bg-success/10 text-success'
+                    : 'border-warning/30 bg-warning/10 text-warning'
+                )}
+              >
+                {freshnessBadge === 'FRESH' ? (
+                  <>
+                    <FileCheck size={12} aria-hidden="true" />
+                    Fresh · snapshot preview
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle size={12} aria-hidden="true" />
+                    Stale · not live
+                  </>
+                )}
+              </span>
+            )}
+          </div>
+
+          <span className="flex items-center gap-1.5 rounded-lg border border-border bg-background/80 px-2 py-1 text-xs text-foreground">
+            <Clock size={12} className={cn(latestFrame?.isFresh ? 'text-success' : 'text-muted-foreground')} aria-hidden="true" />
+            <span className="font-mono tabular">
+              {lastImageTimestamp
+                ? `${format(new Date(lastImageTimestamp), 'HH:mm:ss')} (${formatFrameAge(displayAgeSeconds)})`
+                : 'Last capture: none'}
+            </span>
           </span>
         </div>
-      )}
 
-      {uploadSuccessMessage && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200 px-3.5 py-2 text-xs font-medium flex items-center gap-2">
-          <Check size={14} className="text-emerald-700 dark:text-emerald-400" /> {uploadSuccessMessage}
-        </div>
-      )}
+        {/* Stale Frame Honesty Warning */}
+        {latestFrame && !latestFrame.isFresh && !camera.isLiveStreamVerified && (
+          <div className="absolute bottom-3 left-3 right-3 px-3 py-2 rounded-lg bg-warning/10 border border-warning/30 text-warning text-xs flex items-center gap-2">
+            <AlertTriangle size={14} className="shrink-0" aria-hidden="true" />
+            <span>
+              Historical snapshot from{' '}
+              <span className="font-mono tabular">{format(new Date(latestFrame.timestamp), 'yyyy-MM-dd HH:mm:ss')}</span>{' '}
+              (<span className="font-mono tabular">{formatFrameAge(displayAgeSeconds)}</span>). Camera is not currently uploading live frames.
+            </span>
+          </div>
+        )}
 
-      {uploadError && (
-        <div className="rounded-xl border border-red-200 bg-red-50 text-red-800 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-200 px-3.5 py-2 text-xs font-medium flex items-center gap-2">
-          <AlertTriangle size={14} className="text-red-700 dark:text-red-400" /> {uploadError}
-        </div>
-      )}
+        {uploadSuccessMessage && (
+          <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-lg bg-success/10 border border-success/30 text-success text-xs flex items-center gap-1.5">
+            <Check size={14} aria-hidden="true" /> {uploadSuccessMessage}
+          </div>
+        )}
+
+        {uploadError && (
+          <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-xs flex items-center gap-1.5">
+            <AlertTriangle size={14} aria-hidden="true" /> {uploadError}
+          </div>
+        )}
+      </div>
 
       {showControls && (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"
-              variant="outline"
               onClick={handleSyncFreshFrame}
               disabled={camera.isRefreshing}
-              className="h-10 px-4 rounded-lg text-xs font-semibold cursor-pointer"
             >
-              <RefreshCw size={14} className={cn('mr-1.5', camera.isRefreshing && 'animate-spin')} />
-              {camera.isRefreshing ? 'Refreshing...' : 'Refresh Snapshot'}
+              <RefreshCw size={15} className={cn(camera.isRefreshing && 'animate-spin')} aria-hidden="true" />
+              {camera.isRefreshing ? 'Refreshing…' : 'Refresh snapshot'}
             </Button>
 
             {allowAdminTestUpload && (
@@ -239,9 +260,10 @@ export function CameraStream({
                   autoComplete="off"
                   value={testCameraKey}
                   onChange={(e) => setTestCameraKey(e.target.value)}
-                  placeholder="Enter X-Camera-Key"
-                  className="h-10 w-44 px-3 rounded-lg bg-background border border-input text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring"
-                  title="One-time X-Camera-Key header for testing POST /api/camera/upload (never saved)"
+                  placeholder="X-Camera-Key"
+                  aria-label="X-Camera-Key for test upload"
+                  className="h-9 w-36 rounded-lg border border-input bg-background px-2.5 text-xs font-mono text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  title="Ephemeral X-Camera-Key header for testing POST /api/camera/upload (never stored)"
                 />
                 <input
                   type="file"
@@ -255,13 +277,17 @@ export function CameraStream({
                   variant="outline"
                   disabled={isUploadingTest}
                   onClick={() => fileInputRef.current?.click()}
-                  className="h-10 px-3.5 rounded-lg text-xs font-semibold cursor-pointer"
                 >
-                  <Upload size={14} className="mr-1.5 text-primary" />
-                  {isUploadingTest ? 'Uploading...' : 'Send Test JPEG'}
+                  <Upload size={15} aria-hidden="true" />
+                  {isUploadingTest ? 'Uploading…' : 'Upload test JPEG'}
                 </Button>
               </>
             )}
+          </div>
+
+          <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <Camera size={13} aria-hidden="true" />
+            <span>Auto-refreshing JPEG snapshot — not a continuous video stream</span>
           </div>
         </div>
       )}

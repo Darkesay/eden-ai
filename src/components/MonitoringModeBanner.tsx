@@ -10,25 +10,25 @@ export function MonitoringModeBanner({ className }: { className?: string }) {
       role="status"
       aria-live="polite"
       className={cn(
-        'rounded-xl border border-amber-200 bg-amber-50/90 text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-100 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs',
+        'rounded-xl border border-warning/30 bg-warning/10 text-warning px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs',
         className
       )}
     >
       <div className="flex items-start sm:items-center gap-2.5 min-w-0">
         <ShieldAlert
           size={16}
-          className="text-amber-700 dark:text-amber-400 shrink-0 mt-0.5 sm:mt-0"
+          className="text-warning shrink-0 mt-0.5 sm:mt-0"
         />
         <div className="min-w-0">
-          <span className="font-bold tracking-tight text-amber-950 dark:text-amber-100">
+          <span className="font-bold tracking-tight text-warning">
             {MONITORING_MODE_LABEL}
           </span>
-          <span className="text-amber-900 dark:text-amber-200/90 sm:ml-2 block sm:inline mt-0.5 sm:mt-0">
+          <span className="text-warning sm:ml-2 block sm:inline mt-0.5 sm:mt-0">
             Real camera inspection, sensor telemetry, Plant Vision diagnosis, and AI recommendations are active; physical relay actuation is locked off.
           </span>
         </div>
       </div>
-      <span className="font-mono tabular-nums text-[11px] text-amber-800 dark:text-amber-300 whitespace-nowrap shrink-0">
+      <span className="font-mono tabular-nums text-[11px] text-warning whitespace-nowrap shrink-0">
         Read-Only Hardware Lock
       </span>
     </div>

@@ -1,88 +1,70 @@
 import React, { useEffect, useState } from 'react';
-import { Outlet, NavLink, Link, useNavigate, useLocation } from 'react-router-dom';
-import {
-  ArrowLeft,
-  Camera,
-  ChevronRight,
-  Home,
-  LogOut,
-  MessageSquare,
-  Moon,
-  Settings,
-  Sprout,
-  Sun
-} from 'lucide-react';
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { Link, Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { useMqtt } from '../lib/mqtt';
 import { AUTH_GATE_ENABLED, useAuth } from '../lib/auth';
 import { useTheme } from '../lib/theme';
+import {
+  ArrowLeft,
+  Leaf,
+  Home,
+  Sprout,
+  MessageSquare,
+  Camera,
+  Settings,
+  PanelLeftClose,
+  PanelLeftOpen,
+  LogOut,
+  Sun,
+  Moon,
+  ChevronRight
+} from 'lucide-react';
+import { cn } from '../lib/utils';
 import { OnboardingTour } from './OnboardingTour';
 import { DataSourceBadge } from './DataSourceBadge';
 import { Button } from './ui/button';
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
 
 interface PrimaryNavItem {
   to: string;
   label: string;
   shortLabel: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-  matchPrefix?: string;
+  icon: React.ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
+  end?: boolean;
 }
 
-const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
-  { to: '/', label: 'Home', shortLabel: 'Home', icon: Home },
-  {
-    to: '/greenhouses',
-    label: 'My Greenhouse',
-    shortLabel: 'Greenhouse',
-    icon: Sprout,
-    matchPrefix: '/greenhouses'
-  },
-  {
-    to: '/assistant',
-    label: 'AI Assistant',
-    shortLabel: 'Assistant',
-    icon: MessageSquare,
-    matchPrefix: '/assistant'
-  },
-  {
-    to: '/vision',
-    label: 'Plant Vision',
-    shortLabel: 'Vision',
-    icon: Camera,
-    matchPrefix: '/vision'
-  },
-  {
-    to: '/settings',
-    label: 'Settings',
-    shortLabel: 'Settings',
-    icon: Settings,
-    matchPrefix: '/settings'
-  }
+const NAV_ITEMS: PrimaryNavItem[] = [
+  { to: '/', label: 'Home', shortLabel: 'Home', icon: Home, end: true },
+  { to: '/greenhouses', label: 'My Greenhouse', shortLabel: 'Greenhouse', icon: Sprout },
+  { to: '/assistant', label: 'AI Assistant', shortLabel: 'Assistant', icon: MessageSquare },
+  { to: '/vision', label: 'Plant Vision', shortLabel: 'Vision', icon: Camera },
+  { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings }
 ];
 
+const MQTT_LABEL: Record<string, string> = {
+  connected: 'Online',
+  connecting: 'Connecting',
+  demo: 'Demo',
+  disconnected: 'Offline'
+};
+
+const SIDEBAR_KEY = 'botanix_nav_collapsed';
+
+function StatusDot({ className }: { className?: string }) {
+  return <span className={cn('size-1.5 rounded-full', className)} aria-hidden="true" />;
+}
+
 function getBreadcrumbLabel(pathname: string, activeGhName?: string): { section: string; detail?: string } {
-  if (pathname === '/') {
-    return { section: 'Home', detail: 'Overview' };
-  }
+  if (pathname === '/') return { section: 'Home', detail: 'Overview' };
   if (pathname.startsWith('/greenhouses/setup') || pathname.endsWith('/setup')) {
-    return { section: 'My Greenhouse', detail: 'Guided Setup' };
+    return { section: 'My Greenhouse', detail: 'Guided setup' };
   }
   if (pathname.startsWith('/greenhouses/')) {
-    return { section: 'My Greenhouse', detail: activeGhName || 'Greenhouse Monitor' };
+    return { section: 'My Greenhouse', detail: activeGhName || 'Greenhouse monitor' };
   }
-  if (pathname.startsWith('/greenhouses')) {
-    return { section: 'My Greenhouse' };
-  }
+  if (pathname.startsWith('/greenhouses')) return { section: 'My Greenhouse' };
   if (pathname.startsWith('/assistant') || pathname.startsWith('/ai-lab')) {
-    return { section: 'AI Assistant', detail: 'Crop & Climate Advisor' };
+    return { section: 'AI Assistant', detail: 'Crop & climate advisor' };
   }
-  if (pathname.startsWith('/vision')) {
-    return { section: 'Plant Vision', detail: 'Leaf & Camera Inspection' };
-  }
+  if (pathname.startsWith('/vision')) return { section: 'Plant Vision', detail: 'Leaf & camera inspection' };
   if (pathname.startsWith('/settings') || pathname.startsWith('/hardware') || pathname.startsWith('/devices')) {
     return { section: 'Settings' };
   }
@@ -90,9 +72,13 @@ function getBreadcrumbLabel(pathname: string, activeGhName?: string): { section:
 }
 
 export default function Layout() {
+  const [navCollapsed, setNavCollapsed] = useState(
+    () => typeof window !== 'undefined' && localStorage.getItem(SIDEBAR_KEY) === '1'
+  );
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, activeGreenhouse, greenhouses, setActiveGreenhouseId, logout } = useAuth();
+  const { status } = useMqtt();
+  const { user, logout, activeGreenhouse, greenhouses, setActiveGreenhouseId } = useAuth();
   const { resolvedTheme, toggleTheme } = useTheme();
   const [forceTour, setForceTour] = useState(false);
 
@@ -108,6 +94,7 @@ export default function Layout() {
     setCanGoBack(idx > 0);
   }, [location.pathname, location.search]);
 
+  // Listen for custom events to trigger the tour from anywhere
   useEffect(() => {
     const handleReplay = () => setForceTour(true);
     window.addEventListener('replay-tour', handleReplay);
@@ -117,6 +104,14 @@ export default function Layout() {
       window.removeEventListener('edens-open-tour', handleReplay);
     };
   }, []);
+
+  const toggleNav = () => {
+    setNavCollapsed((c) => {
+      const next = !c;
+      localStorage.setItem(SIDEBAR_KEY, next ? '1' : '0');
+      return next;
+    });
+  };
 
   const handleLogout = async () => {
     await logout();
@@ -128,265 +123,365 @@ export default function Layout() {
     navigate(-1);
   };
 
+  const statusLabel = MQTT_LABEL[status] ?? status;
+  const statusDotClass =
+    status === 'connected'
+      ? 'bg-success'
+      : status === 'connecting' || status === 'demo'
+        ? 'bg-warning'
+        : 'bg-destructive';
+
+  const initials = user
+    ? (user.displayName
+        .split(' ')
+        .filter(Boolean)
+        .map((part) => part[0])
+        .slice(0, 2)
+        .join('')
+        .toUpperCase() || user.email[0]?.toUpperCase() || '?')
+    : '';
+
   const breadcrumb = getBreadcrumbLabel(location.pathname, activeGreenhouse?.name);
   const isOnAssistant = location.pathname.startsWith('/assistant') || location.pathname.startsWith('/ai-lab');
 
   return (
-    <div className="min-h-screen bg-background text-foreground font-sans flex flex-col md:flex-row">
-      {/* Desktop Sidebar */}
-      <aside className="hidden md:flex md:w-64 lg:w-68 shrink-0 flex-col border-r border-border bg-sidebar sticky top-0 h-screen">
+    <div className="min-h-screen bg-background text-foreground">
+      {/* ---------------------------------------------------------------- */}
+      {/* Desktop side navigation — collapsible rail                       */}
+      {/* ---------------------------------------------------------------- */}
+      <aside
+        className={cn(
+          'fixed inset-y-0 left-0 z-40 hidden border-r border-border bg-card md:flex md:flex-col md:transition-[width] md:duration-200 md:ease-out',
+          navCollapsed ? 'md:w-[68px]' : 'md:w-60'
+        )}
+      >
         {/* Brand */}
-        <div className="h-16 px-5 flex items-center justify-between border-b border-sidebar-border">
-          <Link to="/" className="flex items-center gap-2.5 group">
-            <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
-              <Sprout size={20} />
-            </div>
-            <div>
-              <div className="text-base font-bold tracking-tight text-foreground leading-none">
-                EDENS AI
-              </div>
-              <div className="text-[11px] text-muted-foreground mt-0.5">
-                Greenhouse Advisor
-              </div>
-            </div>
+        <div
+          className={cn(
+            'flex h-14 shrink-0 items-center border-b border-border px-4',
+            navCollapsed && 'justify-center px-0'
+          )}
+        >
+          <Link
+            to="/"
+            className="flex items-center gap-2.5"
+            title={navCollapsed ? 'EDENS AI — Home' : undefined}
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <Leaf size={17} aria-hidden="true" />
+            </span>
+            {!navCollapsed && (
+              <span className="text-[15px] font-semibold tracking-tight">EDENS AI</span>
+            )}
           </Link>
         </div>
 
-        {/* Active Greenhouse Switcher */}
-        <div className="px-4 pt-4 pb-2">
-          {greenhouses.length > 1 ? (
-            <div className="space-y-1">
-              <label htmlFor="sidebar-gh-select" className="text-[11px] font-medium text-muted-foreground px-1">
-                Active Greenhouse
-              </label>
-              <select
-                id="sidebar-gh-select"
-                value={activeGreenhouse?.id || ''}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  setActiveGreenhouseId(id);
-                  if (location.pathname.startsWith('/greenhouses/') && !location.pathname.endsWith('/setup')) {
-                    navigate(`/greenhouses/${id}`);
-                  }
-                }}
-                className="w-full h-10 rounded-lg border border-border bg-background px-3 text-xs font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        {/* Active greenhouse context — expanded only */}
+        {!navCollapsed && (
+          <div className="shrink-0 border-b border-border px-3 py-3">
+            {greenhouses.length > 1 ? (
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="sidebar-gh-select"
+                  className="block px-1 text-[11px] font-medium text-muted-foreground"
+                >
+                  Active greenhouse
+                </label>
+                <select
+                  id="sidebar-gh-select"
+                  value={activeGreenhouse?.id || ''}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setActiveGreenhouseId(id);
+                    if (location.pathname.startsWith('/greenhouses/') && !location.pathname.endsWith('/setup')) {
+                      navigate(`/greenhouses/${id}`);
+                    }
+                  }}
+                  className="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-xs font-medium text-foreground focus:border-ring focus:outline-none focus:ring-3 focus:ring-ring/50"
+                >
+                  {greenhouses.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name} ({g.cropType})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : activeGreenhouse ? (
+              <Link
+                to={`/greenhouses/${activeGreenhouse.id}`}
+                className="block rounded-lg border border-border bg-muted/40 px-3 py-2 transition-colors hover:bg-muted/70"
               >
-                {greenhouses.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name} ({g.cropType})
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : activeGreenhouse ? (
-            <Link
-              to={`/greenhouses/${activeGreenhouse.id}`}
-              className="block rounded-xl border border-border bg-background px-3.5 py-2.5 hover:border-primary/40 transition-colors"
-            >
-              <div className="text-[11px] text-muted-foreground">Active Greenhouse</div>
-              <div className="text-sm font-semibold text-foreground truncate mt-0.5">
-                {activeGreenhouse.name}
-              </div>
-              <div className="text-xs text-muted-foreground truncate">
-                {activeGreenhouse.cropType} · {activeGreenhouse.locationLabel}
-              </div>
-            </Link>
-          ) : (
-            <Link
-              to="/greenhouses/setup"
-              className="block rounded-xl border border-dashed border-primary/40 bg-accent/60 px-3.5 py-2.5 hover:bg-accent transition-colors"
-            >
-              <div className="text-xs font-semibold text-accent-foreground">Set Up Your Greenhouse</div>
-              <div className="text-[11px] text-muted-foreground mt-0.5">
-                Connect sensors &amp; camera in 6 simple steps
-              </div>
-            </Link>
-          )}
-        </div>
-
-        {/* Primary 5-Item Navigation */}
-        <nav aria-label="Main navigation" className="flex-1 px-3 py-3 space-y-1 overflow-y-auto">
-          {PRIMARY_NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
-            const isItemActive =
-              item.to === '/'
-                ? location.pathname === '/'
-                : Boolean(item.matchPrefix && location.pathname.startsWith(item.matchPrefix));
-
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.to === '/'}
-                className={cn(
-                  'h-10 px-3 rounded-lg text-sm font-medium flex items-center gap-3 transition-colors whitespace-nowrap shrink-0',
-                  isItemActive
-                    ? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                )}
+                <div className="text-[11px] text-muted-foreground">Active greenhouse</div>
+                <div className="mt-0.5 truncate text-sm font-medium text-foreground">
+                  {activeGreenhouse.name}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {activeGreenhouse.cropType} · {activeGreenhouse.locationLabel}
+                </div>
+              </Link>
+            ) : (
+              <Link
+                to="/greenhouses/setup"
+                className="block rounded-lg border border-dashed border-primary/40 bg-accent/60 px-3 py-2 transition-colors hover:bg-accent"
               >
-                <Icon
-                  size={18}
-                  className={cn(isItemActive ? 'text-primary' : 'text-muted-foreground')}
-                />
-                <span>{item.label}</span>
-              </NavLink>
-            );
-          })}
-        </nav>
-
-        {/* Sidebar Footer: Honest Data Source + Account */}
-        <div className="p-4 border-t border-sidebar-border space-y-3">
-          <DataSourceBadge className="w-full justify-center py-1.5" />
-
-          <div className="flex items-center justify-between gap-2 pt-1">
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-foreground truncate">
-                {user?.displayName || 'Farmer'}
-              </div>
-              <div className="text-xs text-muted-foreground truncate">
-                {AUTH_GATE_ENABLED ? user?.email || '' : 'Open Testing Mode'}
-              </div>
-            </div>
-            {AUTH_GATE_ENABLED && (
-              <button
-                type="button"
-                onClick={handleLogout}
-                title="Sign out"
-                aria-label="Sign out"
-                className="h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive hover:border-destructive/30 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors shrink-0 cursor-pointer"
-              >
-                <LogOut size={16} />
-              </button>
+                <div className="text-xs font-medium text-accent-foreground">Set up your greenhouse</div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                  Connect sensors &amp; camera in a few steps
+                </div>
+              </Link>
             )}
           </div>
+        )}
+
+        {/* Destinations */}
+        <nav aria-label="Main" className="custom-scrollbar flex-1 overflow-y-auto p-2">
+          <ul className="flex flex-col gap-1">
+            {NAV_ITEMS.map((item) => (
+              <li key={item.to}>
+                <NavLink
+                  to={item.to}
+                  end={item.end}
+                  title={navCollapsed ? item.label : undefined}
+                  className={({ isActive }) =>
+                    cn(
+                      'flex h-10 items-center gap-3 rounded-lg px-3 text-sm transition-colors',
+                      navCollapsed && 'justify-center px-0',
+                      isActive
+                        ? 'bg-muted font-medium text-foreground'
+                        : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                    )
+                  }
+                >
+                  <item.icon size={18} className="shrink-0" aria-hidden="true" />
+                  <span className={cn('truncate', navCollapsed && 'sr-only')}>{item.label}</span>
+                </NavLink>
+              </li>
+            ))}
+          </ul>
+        </nav>
+
+        {/* Footer — data source, account, collapse, and sign out pinned to the bottom */}
+        <div className="shrink-0 border-t border-border p-2">
+          {!navCollapsed && (
+            <div className="mb-1 px-1">
+              <DataSourceBadge variant="badge" />
+            </div>
+          )}
+
+          {/* Signed-in account — context for the sign-out action */}
+          {user && (
+            <div
+              className={cn(
+                'mb-1 flex items-center gap-2.5 rounded-lg px-2 py-1.5',
+                navCollapsed && 'justify-center px-0'
+              )}
+              title={navCollapsed ? `${user.displayName} — ${user.email}` : undefined}
+            >
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-semibold text-foreground">
+                {initials}
+              </span>
+              {!navCollapsed && (
+                <span className="min-w-0 leading-tight">
+                  <span className="block truncate text-[13px] font-medium text-foreground">
+                    {user.displayName}
+                  </span>
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {AUTH_GATE_ENABLED ? user.email : 'Open Testing Mode'}
+                  </span>
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Collapse control */}
+          <button
+            type="button"
+            onClick={toggleNav}
+            aria-label={navCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            title={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!navCollapsed}
+            className={cn(
+              'flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+              navCollapsed && 'justify-center px-0'
+            )}
+          >
+            {navCollapsed ? (
+              <PanelLeftOpen size={17} aria-hidden="true" />
+            ) : (
+              <PanelLeftClose size={17} aria-hidden="true" />
+            )}
+            <span className={cn('font-medium', navCollapsed && 'sr-only')}>
+              {navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            </span>
+          </button>
+
+          {/* Sign out — the last action in the rail (hidden in open testing mode) */}
+          {AUTH_GATE_ENABLED && (
+            <button
+              type="button"
+              onClick={handleLogout}
+              aria-label="Sign out"
+              title={navCollapsed ? 'Sign out' : undefined}
+              className={cn(
+                'flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive',
+                navCollapsed && 'justify-center px-0'
+              )}
+            >
+              <LogOut size={17} aria-hidden="true" />
+              <span className={cn('font-medium', navCollapsed && 'sr-only')}>Sign out</span>
+            </button>
+          )}
         </div>
       </aside>
 
-      {/* Main Content Area */}
-      <div className="flex-1 min-w-0 flex flex-col pb-[calc(5rem+env(safe-area-inset-bottom,0px))] md:pb-0">
-        {/* Top Bar (Compact <= 56px on mobile, 64px on desktop) */}
-        <header className="sticky top-0 z-30 h-14 md:h-16 bg-card/95 backdrop-blur-sm border-b border-border px-3.5 sm:px-6 md:px-8 flex items-center justify-between gap-2">
-          {/* Left: Back Button, Mobile Brand OR Desktop Breadcrumb */}
-          <div className="flex items-center gap-2 min-w-0">
+      {/* ---------------------------------------------------------------- */}
+      {/* Content column                                                    */}
+      {/* ---------------------------------------------------------------- */}
+      <div
+        className={cn(
+          'md:transition-[padding-left] md:duration-200 md:ease-out',
+          navCollapsed ? 'md:pl-[68px]' : 'md:pl-60'
+        )}
+      >
+        <header className="sticky top-0 z-50 border-b border-border bg-background/85 backdrop-blur-lg">
+          <div className="flex h-14 items-center gap-3 px-4 md:px-6">
+            {/* Back button — returns to the page visited before this one */}
             <button
               type="button"
               onClick={handleBack}
               disabled={!canGoBack}
               title="Back to previous page"
               aria-label="Back to previous page"
-              className="shrink-0 h-9 w-9 md:h-10 md:w-10 rounded-lg border border-border bg-background hover:bg-muted text-foreground inline-flex items-center justify-center transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default disabled:hover:bg-background"
+              className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
             >
               <ArrowLeft size={17} />
             </button>
 
-            <Link to="/" className="md:hidden flex items-center gap-2 min-w-0 shrink-0">
-              <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
-                <Sprout size={17} />
-              </div>
-              <span className="font-bold text-sm tracking-tight text-foreground truncate">EDENS AI</span>
+            {/* Brand — mobile only (desktop brand lives in the sidebar) */}
+            <Link to="/" className="flex shrink-0 items-center gap-2.5 md:hidden">
+              <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                <Leaf size={17} aria-hidden="true" />
+              </span>
+              <span className="text-[15px] font-semibold tracking-tight">EDENS AI</span>
             </Link>
 
-            <div className="hidden md:flex items-center gap-2 text-sm min-w-0">
+            {/* Breadcrumb — desktop only */}
+            <div className="hidden min-w-0 items-center gap-2 text-sm md:flex">
               <span className="font-medium text-muted-foreground">EDENS AI</span>
-              <ChevronRight size={14} className="text-muted-foreground/60 shrink-0" />
-              <span className={cn('truncate', breadcrumb.detail ? 'text-muted-foreground' : 'font-semibold text-foreground')}>
+              <ChevronRight size={14} className="shrink-0 text-muted-foreground/60" aria-hidden="true" />
+              <span
+                className={cn(
+                  'truncate',
+                  breadcrumb.detail ? 'text-muted-foreground' : 'font-medium text-foreground'
+                )}
+              >
                 {breadcrumb.section}
               </span>
               {breadcrumb.detail && (
                 <>
-                  <ChevronRight size={14} className="text-muted-foreground/60 shrink-0" />
-                  <span className="font-semibold text-foreground truncate">{breadcrumb.detail}</span>
+                  <ChevronRight size={14} className="shrink-0 text-muted-foreground/60" aria-hidden="true" />
+                  <span className="truncate font-medium text-foreground">{breadcrumb.detail}</span>
                 </>
               )}
             </div>
-          </div>
 
-          {/* Right: Theme Toggle & Primary Assistant Action */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <div className="md:hidden">
-              <DataSourceBadge showFreshness={false} compact />
-            </div>
+            <div className="ml-auto flex items-center gap-2">
+              {/* Data source context — compact on mobile (sidebar covers desktop) */}
+              <span className="lg:hidden">
+                <DataSourceBadge variant="pill" showFreshness={false} compact />
+              </span>
 
-            <button
-              type="button"
-              onClick={toggleTheme}
-              title={resolvedTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-              aria-label={resolvedTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-              className="h-9 md:h-10 w-9 sm:w-auto sm:px-3 rounded-lg border border-border bg-background hover:bg-muted text-foreground inline-flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              {resolvedTheme === 'dark' ? (
-                <>
-                  <Sun size={15} className="text-amber-400 shrink-0" />
-                  <span className="hidden sm:inline">Light</span>
-                </>
-              ) : (
-                <>
-                  <Moon size={15} className="text-muted-foreground shrink-0" />
-                  <span className="hidden sm:inline">Dark</span>
-                </>
-              )}
-            </button>
+              {/* Data source context — desktop only */}
+              <span className="hidden lg:block">
+                <DataSourceBadge variant="badge" />
+              </span>
 
-            {!isOnAssistant && (
-              <Button
-                type="button"
-                onClick={() => navigate('/assistant')}
-                className="h-9 md:h-10 px-2.5 sm:px-3.5 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs md:text-sm font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+              {/* Broker status */}
+              <span
+                className="hidden h-8 items-center gap-1.5 rounded-full border border-border px-2.5 text-xs text-muted-foreground sm:flex"
+                title={`Message broker status: ${statusLabel}`}
               >
-                <MessageSquare size={15} className="sm:mr-1.5 mr-1 shrink-0" />
-                <span className="sm:hidden">Ask AI</span>
-                <span className="hidden sm:inline">Ask EDENS AI</span>
-              </Button>
-            )}
+                <StatusDot className={statusDotClass} />
+                {statusLabel}
+              </span>
 
-            {AUTH_GATE_ENABLED && (
+              {/* Theme toggle */}
               <button
                 type="button"
-                onClick={handleLogout}
-                title="Sign out"
-                aria-label="Sign out"
-                className="md:hidden h-9 w-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-destructive shrink-0 cursor-pointer"
+                onClick={toggleTheme}
+                aria-label={resolvedTheme === 'dark' ? 'Switch to light appearance' : 'Switch to dark appearance'}
+                title={resolvedTheme === 'dark' ? 'Light appearance' : 'Dark appearance'}
+                className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
-                <LogOut size={16} />
+                {resolvedTheme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
               </button>
-            )}
+
+              {/* Primary assistant action */}
+              {!isOnAssistant && (
+                <Button
+                  type="button"
+                  onClick={() => navigate('/assistant')}
+                  className="hidden h-9 px-3 sm:inline-flex"
+                >
+                  <MessageSquare size={15} aria-hidden="true" />
+                  Ask EDENS AI
+                </Button>
+              )}
+
+              {/* Sign out — mobile only (desktop sign-out lives in the sidebar) */}
+              {AUTH_GATE_ENABLED && (
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  aria-label="Sign out"
+                  title="Sign out"
+                  className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+                >
+                  <LogOut size={17} />
+                </button>
+              )}
+            </div>
           </div>
         </header>
 
-        {/* Page Viewport */}
-        <main className="flex-1 w-full max-w-6xl mx-auto px-3.5 sm:px-6 md:px-8 py-4 sm:py-6 md:py-8">
+        {status === 'demo' && (
+          <div className="border-b border-warning/25 bg-warning/10 px-4 py-1.5 text-center text-xs font-medium text-warning">
+            Running in demo mode — no live broker connected
+          </div>
+        )}
+
+        <main className="mx-auto max-w-7xl px-4 py-8 pb-28 md:px-6 md:pb-10 lg:px-8">
           <Outlet />
         </main>
       </div>
 
-      {/* Mobile Bottom Navigation (5 Equal Columns, >=44px touch targets, safe-area aware) */}
+      {/* Mobile bottom navigation — five destinations, always visible */}
       <nav
-        aria-label="Mobile navigation"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-40 h-[calc(4rem+env(safe-area-inset-bottom,0px))] pb-[env(safe-area-inset-bottom,0px)] bg-card/95 backdrop-blur-sm border-t border-border px-1 grid grid-cols-5 items-center"
+        aria-label="Main"
+        className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-lg md:hidden"
       >
-        {PRIMARY_NAV_ITEMS.map((item) => {
-          const Icon = item.icon;
-          const isItemActive =
-            item.to === '/'
-              ? location.pathname === '/'
-              : Boolean(item.matchPrefix && location.pathname.startsWith(item.matchPrefix));
-
-          return (
+        <div className="grid h-16 grid-cols-5">
+          {NAV_ITEMS.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
-              end={item.to === '/'}
-              className={cn(
-                'flex flex-col items-center justify-center min-h-[44px] min-w-0 w-full px-1 py-1 rounded-lg gap-0.5 transition-colors',
-                isItemActive ? 'text-primary font-semibold' : 'text-muted-foreground hover:text-foreground'
-              )}
+              end={item.end}
+              className={({ isActive }) =>
+                cn(
+                  'flex flex-col items-center justify-center gap-1 text-[11px] font-medium transition-colors',
+                  isActive ? 'text-brand' : 'text-muted-foreground'
+                )
+              }
             >
-              <Icon size={20} className="shrink-0" />
-              <span className="text-[11px] leading-tight truncate max-w-full">{item.shortLabel}</span>
+              {({ isActive }) => (
+                <>
+                  <item.icon size={20} strokeWidth={isActive ? 2.2 : 1.8} />
+                  <span>{item.shortLabel}</span>
+                </>
+              )}
             </NavLink>
-          );
-        })}
+          ))}
+        </div>
       </nav>
 
       <OnboardingTour forceShow={forceTour} onClose={() => setForceTour(false)} />

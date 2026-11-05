@@ -356,7 +356,7 @@ export default function PlantVision() {
       {/* Page Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2.5">
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
             <Camera size={24} className="text-primary" />
             Plant Vision
           </h1>
@@ -433,7 +433,7 @@ export default function PlantVision() {
             <div className="flex flex-wrap items-center gap-2 font-mono tabular-nums">
               {manualPhotoDataUrl ? (
                 <>
-                  <span className="font-semibold text-amber-800 dark:text-amber-300">
+                  <span className="font-semibold text-warning">
                     UPLOADED TEST IMAGE
                   </span>
                   <span aria-hidden="true" className="text-muted-foreground">·</span>
@@ -445,31 +445,25 @@ export default function PlantVision() {
                     className={cn(
                       'inline-flex items-center gap-1.5 font-semibold',
                       cameraConnected
-                        ? 'text-emerald-800 dark:text-emerald-300'
-                        : 'text-muted-foreground'
+                        ? 'bg-success/10 border-success/30 text-success'
+                        : 'bg-muted border-border text-muted-foreground'
                     )}
                   >
                     {cameraConnected ? <Wifi size={13} /> : <WifiOff size={13} />}
                     {cameraConnected ? 'CONNECTED' : 'OFFLINE'}
                   </span>
                   {snapshotExists && (
-                    <>
-                      <span aria-hidden="true" className="text-muted-foreground">·</span>
-                      <span className="font-semibold text-emerald-800 dark:text-emerald-300">
-                        REAL CAMERA IMAGE
-                      </span>
-                      <span aria-hidden="true" className="text-muted-foreground">·</span>
-                      <span
-                        className={cn(
-                          'font-medium',
-                          snapshotIsFresh
-                            ? 'text-emerald-800 dark:text-emerald-300'
-                            : 'text-amber-800 dark:text-amber-300'
-                        )}
-                      >
-                        {snapshotIsFresh ? 'Fresh Snapshot (≤90s)' : 'Outdated Snapshot (>90s)'}
-                      </span>
-                    </>
+                    <span
+                      className={cn(
+                        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-semibold',
+                        snapshotIsFresh
+                          ? 'bg-success/10 border-success/30 text-success'
+                          : 'bg-warning/10 border-warning/30 text-warning'
+                      )}
+                    >
+                      {snapshotIsFresh ? <FileCheck size={13} /> : <AlertTriangle size={13} />}
+                      {snapshotIsFresh ? 'Fresh Snapshot (≤90s)' : 'Outdated Snapshot (>90s)'}
+                    </span>
                   )}
                 </>
               )}
@@ -489,14 +483,14 @@ export default function PlantVision() {
               <img
                 src={manualPhotoDataUrl}
                 alt="Selected leaf photo for inspection"
-                className="w-full h-full object-contain bg-stone-950"
+                className="w-full h-full object-contain"
               />
             ) : snapshotExists && snapshotUrl ? (
               <img
                 src={snapshotUrl}
                 alt="Latest ESP32-CAM greenhouse snapshot"
                 className={cn(
-                  'w-full h-full object-contain bg-stone-950',
+                  'w-full h-full object-contain',
                   !snapshotIsFresh && 'opacity-85'
                 )}
               />
@@ -556,11 +550,11 @@ export default function PlantVision() {
 
           {/* Stale Snapshot Honesty Notice */}
           {!manualPhotoDataUrl && snapshotExists && !snapshotIsFresh && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/45 dark:text-amber-100 px-4 py-3 text-xs flex items-start gap-2.5">
-              <AlertTriangle size={16} className="text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div className="rounded-xl border border-warning/30 bg-warning/10 text-warning px-4 py-3 text-xs flex items-start gap-2.5">
+              <AlertTriangle size={16} className="shrink-0 mt-0.5" />
               <div className="space-y-0.5">
-                <p className="font-semibold">Snapshot Is Outdated</p>
-                <p className="text-amber-900 dark:text-amber-200/90 leading-relaxed">
+                <p className="font-semibold">Snapshot is outdated</p>
+                <p className="leading-relaxed">
                   This camera photo is older than 90 seconds, so EDENS AI disables live-camera diagnosis until a fresh photo arrives. You can still upload a leaf photo from your phone right now.
                 </p>
               </div>
@@ -628,8 +622,8 @@ export default function PlantVision() {
           </div>
 
           {analysisError && (
-            <div className="rounded-xl border border-red-200 bg-red-50 text-red-900 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-200 px-4 py-3 text-xs flex items-start gap-2">
-              <AlertTriangle size={15} className="text-red-700 dark:text-red-400 shrink-0 mt-0.5" />
+            <div className="rounded-xl border border-destructive/30 bg-destructive/10 text-destructive px-4 py-3 text-xs flex items-start gap-2">
+              <AlertTriangle size={15} className="shrink-0 mt-0.5" />
               <span className="leading-relaxed">{analysisError}</span>
             </div>
           )}
@@ -677,8 +671,8 @@ export default function PlantVision() {
                   className={cn(
                     'font-semibold',
                     analysisResult.imageOriginLabel === 'UPLOADED_TEST_IMAGE' || Boolean(manualPhotoDataUrl)
-                      ? 'text-amber-800 dark:text-amber-300'
-                      : 'text-emerald-800 dark:text-emerald-300'
+                      ? 'text-warning'
+                      : 'text-success'
                   )}
                 >
                   {analysisResult.imageOriginLabel === 'UPLOADED_TEST_IMAGE' || Boolean(manualPhotoDataUrl)
@@ -698,16 +692,14 @@ export default function PlantVision() {
               <div className="rounded-xl bg-muted/50 p-4 space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-muted-foreground">Plant Identified</span>
-                  <span
-                    className={cn(
-                      'text-xs font-semibold',
-                      analysisResult.healthStatus.toLowerCase().includes('healthy')
-                        ? 'text-emerald-800 dark:text-emerald-300'
-                        : analysisResult.healthStatus.toLowerCase().includes('diseas')
-                          ? 'text-red-700 dark:text-red-400'
-                          : 'text-amber-800 dark:text-amber-300'
-                    )}
-                  >
+                  <span className={cn(
+                    'text-xs font-semibold px-2 py-0.5 rounded border',
+                    /unhealth|diseas|pest|critical|poor|infected/i.test(analysisResult.healthStatus)
+                      ? 'bg-destructive/10 text-destructive border-destructive/30'
+                      : /stress|warn|moderat|fair|caution/i.test(analysisResult.healthStatus)
+                        ? 'bg-warning/10 text-warning border-warning/30'
+                        : 'bg-success/10 text-success border-success/30'
+                  )}>
                     {analysisResult.healthStatus}
                   </span>
                 </div>

@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { hardwareService, DEFAULT_CROPS } from '../lib/hardwareService';
+import { hardwareService } from '../lib/hardwareService';
 import { HardwareConfig, DataSource, DiagnosticLog } from '../lib/hardwareTypes';
 import { DataSourceBadge } from '../components/DataSourceBadge';
 import { CameraStream } from '../components/CameraStream';
@@ -13,14 +12,11 @@ import {
   Cpu, 
   Video, 
   Wifi, 
-  ShieldCheck, 
   ShieldAlert, 
   AlertTriangle, 
   RefreshCw, 
-  Play, 
   Sliders, 
   Check, 
-  Lock, 
   Eye, 
   EyeOff, 
   Server, 
@@ -31,23 +27,42 @@ import {
   Droplet, 
   Save, 
   FileText, 
-  CheckCircle, 
-  Clock,
+  CheckCircle,
+  X,
   Radio,
   Zap,
-  ExternalLink,
   Upload,
   Copy,
-  CheckCheck,
-  Globe,
-  Camera as CameraIcon
+  Globe
 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { motion, AnimatePresence } from 'motion/react';
+
+/* ------------------------------------------------------------------ */
+/* Shared pieces                                                       */
+/* ------------------------------------------------------------------ */
+
+function SectionTitle({ icon: Icon, children, action }: {
+  icon: React.ElementType;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex w-full items-center justify-between gap-2">
+      <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <Icon size={16} className="text-muted-foreground" aria-hidden="true" />
+        {children}
+      </span>
+      {action}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Page                                                                */
+/* ------------------------------------------------------------------ */
 
 export default function HardwareConfigPage() {
   const [config, setConfig] = useState<HardwareConfig>(hardwareService.getConfig());
-  const [dataSource, setDataSource] = useState<DataSource>(hardwareService.getDataSource());
   const [logs, setLogs] = useState<DiagnosticLog[]>(hardwareService.getDiagnosticLogs());
   const [showApiKey, setShowApiKey] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -78,7 +93,6 @@ export default function HardwareConfigPage() {
     }, 6000);
 
     const unsub = hardwareService.subscribe(() => {
-      setDataSource(hardwareService.getDataSource());
       setLogs(hardwareService.getDiagnosticLogs());
     });
     return () => {
@@ -203,35 +217,58 @@ export default function HardwareConfigPage() {
     setIsRunningSuite(false);
   };
 
+  const FIRMWARE_SNIPPET = `// 1. Copy firmware/esp32_cam_cloud_sync/edens_cloud_upload.h into your sketch folder
+// 2. Create camera_secrets.h (gitignored) with EDENS_CAMERA_UPLOAD_KEY
+#include "edens_cloud_upload.h"
+
+// Inside setup(), right after WiFi connection and startCameraServer():
+edensStartCloudUploadTask(); // Verified Root CA TLS (setCACert + NTP) + X-Camera-Key`;
+
+  const diagnosticTests: Array<{ name: string; path: string; description?: string; run: () => Promise<any> }> = [
+    { name: 'GET /status', path: '/status', description: 'Telemetry & interlocks', run: () => hardwareService.getStatus() },
+    { name: 'GET /crops', path: '/crops', description: 'Crop profiles', run: () => hardwareService.getCrops() },
+    { name: 'GET /setPlant?crop=tomato', path: '/setPlant?crop=tomato', description: 'Select active crop', run: () => hardwareService.setPlant('tomato') },
+    { name: 'GET /setCustom', path: '/setCustom', description: 'Thresholds', run: () => hardwareService.setCustom({
+      tempMin: 21, tempMax: 29, humMin: 55, humMax: 75, soilMin: 45, soilMax: 65
+    }) },
+    { name: 'GET /roof?state=open', path: '/roof?state=open', description: 'Roof vent', run: () => hardwareService.setRoof('open') },
+    { name: 'GET /override?device=fan&state=on', path: '/override?device=fan', description: 'Manual relay', run: () => hardwareService.setOverride('fan', 'on', 10) },
+    { name: 'GET /pause?duration=15', path: '/pause?duration=15', description: 'Automation hold', run: () => hardwareService.pauseAutonomous(15) },
+    { name: 'GET /setOption?key=ventSpeed&value=80', path: '/setOption', description: 'Parameter', run: () => hardwareService.setOption('ventSpeed', 80) },
+    { name: 'Camera /capture', path: '/capture', description: 'Still frame', run: () => hardwareService.getCameraSnapshot() },
+  ];
+
+  const modeOptions: Array<{ mode: 'simulation' | 'direct' | 'proxy'; icon: React.ElementType; title: string; description: string }> = [
+    { mode: 'simulation', icon: Cpu, title: 'Simulation', description: 'Test with simulated greenhouse physics. No hardware required.' },
+    { mode: 'direct', icon: Wifi, title: 'Direct HTTP (LAN)', description: 'Calls the ESP32 directly over your local greenhouse Wi-Fi.' },
+    { mode: 'proxy', icon: Server, title: 'Gateway / proxy', description: 'Routes through your local gateway to avoid browser mixed-content blocks.' },
+  ];
+
   return (
-    <div className="space-y-8 pb-16 max-w-7xl mx-auto px-4">
+    <div className="mx-auto max-w-7xl space-y-6 pb-16">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pt-2">
+      <div className="flex flex-wrap items-end justify-between gap-3 pt-2">
         <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-extrabold tracking-tight">Hardware Configuration</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight">Hardware setup</h1>
             <DataSourceBadge variant="badge" />
           </div>
-          <p className="text-xs font-mono uppercase tracking-[0.2em] font-bold text-[#10B981] mt-1">
-            ESP32 Main Controller · ESP32-CAM · Firmware Safety Interlocks
+          <p className="mt-1 text-sm text-muted-foreground">
+            Main ESP32 controller, ESP32-CAM, and firmware safety interlocks.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <HardwareSetupGuide variant="button" />
-          <Button
-            onClick={handleSave}
-            disabled={isSaving}
-            className="bg-[#10B981] hover:bg-[#059669] text-black font-bold h-10 px-5 rounded-xl cursor-pointer shadow-[0_2px_10px_rgba(16,185,129,0.3)] transition-all"
-          >
+          <Button onClick={handleSave} disabled={isSaving}>
             {isSaving ? (
-              <RefreshCw size={16} className="animate-spin mr-2" />
+              <RefreshCw size={15} className="animate-spin" aria-hidden="true" />
             ) : saveSuccess ? (
-              <Check size={16} className="mr-2 text-black" />
+              <Check size={15} aria-hidden="true" />
             ) : (
-              <Save size={16} className="mr-2" />
+              <Save size={15} aria-hidden="true" />
             )}
-            {saveSuccess ? 'Saved!' : 'Save Hardware Settings'}
+            {saveSuccess ? 'Saved' : 'Save settings'}
           </Button>
         </div>
       </div>
@@ -239,426 +276,372 @@ export default function HardwareConfigPage() {
       {/* Connection Mode & Status Banner */}
       <DataSourceBadge variant="banner" />
 
-      {/* Cloud Multi-Device Enrollment & Hardware Kit Banner */}
-      <div className="p-4 rounded-2xl border border-[#10B981]/30 bg-[#10B981]/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-        <div className="space-y-1">
-          <div className="font-bold text-[#10B981] uppercase tracking-wider font-mono">
-            Production Cloud Onboarding & Collaborator Hardware Kit
-          </div>
-          <p className="opacity-85">
-            Register greenhouses, issue revocable per-device keys (<code className="font-mono">X-Hardware-Key</code> &amp;{' '}
-            <code className="font-mono">X-Camera-Key</code>), and download ready-to-flash headers in{' '}
-            <code className="font-mono">firmware/EDENS_HARDWARE_KIT/</code>.
-          </p>
-        </div>
-        <Link
-          to="/greenhouses"
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#10B981] hover:bg-[#059669] text-black font-bold shrink-0"
-        >
-          Manage Cloud Greenhouses <ExternalLink size={13} />
-        </Link>
-      </div>
-
       {/* Main Grid: Settings & Diagnostics */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
 
         {/* Column 1 & 2: Controller & Camera Settings */}
-        <div className="lg:col-span-2 space-y-6">
+        <div className="space-y-6 lg:col-span-2">
 
           {/* 1. Main ESP32 Controller Settings */}
-          <Card className="border border-[#D1E8D1] dark:border-[#1A2A1A] bg-[#FFFFFF]/80 dark:bg-[#080808]/80 backdrop-blur-xl rounded-3xl shadow-sm overflow-hidden">
-            <CardHeader className="pb-4 border-b border-[#D1E8D1] dark:border-[#1A2A1A]">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-[#10B981]/15 text-[#10B981] flex items-center justify-center border border-[#10B981]/30">
-                    <Cpu size={20} />
-                  </div>
-                  <div>
-                    <CardTitle className="text-base font-bold">Main ESP32 Controller Connection</CardTitle>
-                    <CardDescription className="text-xs">
-                      Manages greenhouse sensors (temperature, humidity, soil, rain) and actuators (pump, fan, light, roof)
-                    </CardDescription>
-                  </div>
-                </div>
-              </div>
+          <Card>
+            <CardHeader className="border-b border-border pb-3">
+              <SectionTitle icon={Cpu}>Main controller (ESP32)</SectionTitle>
+              <CardDescription className="text-xs">
+                Reads greenhouse sensors (temperature, humidity, soil, rain) and drives actuators (pump, fan, light, roof).
+              </CardDescription>
             </CardHeader>
 
-            <CardContent className="p-6 space-y-5">
-              {/* Connection Mode Radio Switch */}
+            <CardContent className="space-y-5 pt-4">
+              {/* Operation Mode radio */}
               <div className="space-y-2">
-                <Label className="text-xs font-bold uppercase tracking-wider text-gray-500">Operation Mode</Label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setConfig({ ...config, mode: 'simulation' })}
-                    className={cn(
-                      "p-3.5 rounded-2xl border text-left transition-all cursor-pointer",
-                      config.mode === 'simulation'
-                        ? "bg-purple-500/15 border-purple-500/50 shadow-[0_0_15px_rgba(168,85,247,0.2)]"
-                        : "bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 opacity-70 hover:opacity-100"
-                    )}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-bold text-xs text-purple-400">Simulation Mode</span>
-                      <Cpu size={14} className="text-purple-400" />
-                    </div>
-                    <p className="text-[10px] text-gray-400 leading-relaxed">
-                      Safe testing with synthetic greenhouse physics. No physical hardware required.
-                    </p>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setConfig({ ...config, mode: 'direct' })}
-                    className={cn(
-                      "p-3.5 rounded-2xl border text-left transition-all cursor-pointer",
-                      config.mode === 'direct'
-                        ? "bg-[#10B981]/15 border-[#10B981]/50 shadow-[0_0_15px_rgba(16,185,129,0.2)]"
-                        : "bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 opacity-70 hover:opacity-100"
-                    )}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-bold text-xs text-[#10B981]">Direct HTTP (LAN)</span>
-                      <Wifi size={14} className="text-[#10B981]" />
-                    </div>
-                    <p className="text-[10px] text-gray-400 leading-relaxed">
-                      Direct browser-to-ESP32 calls on local greenhouse Wi-Fi network.
-                    </p>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setConfig({ ...config, mode: 'proxy' })}
-                    className={cn(
-                      "p-3.5 rounded-2xl border text-left transition-all cursor-pointer",
-                      config.mode === 'proxy'
-                        ? "bg-blue-500/15 border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.2)]"
-                        : "bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 opacity-70 hover:opacity-100"
-                    )}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-bold text-xs text-blue-400">Gateway / Proxy</span>
-                      <Server size={14} className="text-blue-400" />
-                    </div>
-                    <p className="text-[10px] text-gray-400 leading-relaxed">
-                      Routes through local gateway server to avoid HTTPS mixed-content restrictions.
-                    </p>
-                  </button>
+                <Label>Operation mode</Label>
+                <div role="radiogroup" aria-label="Operation mode" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {modeOptions.map((opt) => {
+                    const selected = config.mode === opt.mode;
+                    return (
+                      <button
+                        key={opt.mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setConfig({ ...config, mode: opt.mode })}
+                        className={cn(
+                          'rounded-lg border p-3.5 text-left transition-colors cursor-pointer',
+                          selected
+                            ? 'border-brand/40 bg-accent'
+                            : 'border-border bg-card hover:bg-muted/50'
+                        )}
+                      >
+                        <span className="mb-1 flex items-center justify-between gap-2">
+                          <span className={cn('text-sm font-medium', selected ? 'text-accent-foreground' : 'text-foreground')}>
+                            {opt.title}
+                          </span>
+                          <opt.icon size={15} className={cn(selected ? 'text-brand' : 'text-muted-foreground')} aria-hidden="true" />
+                        </span>
+                        <span className="block text-xs leading-relaxed text-muted-foreground">
+                          {opt.description}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
               {/* Host & Port Configuration */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="md:col-span-2 space-y-1.5">
-                  <Label className="text-xs font-semibold">Controller IP / Hostname</Label>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label htmlFor="controller-host">Controller IP or hostname</Label>
                   <Input
+                    id="controller-host"
                     type="text"
                     value={config.controllerHost}
                     onChange={(e) => setConfig({ ...config, controllerHost: e.target.value })}
                     placeholder="e.g. 192.168.1.100 or edens-main.local"
-                    className="bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 rounded-xl text-xs font-mono"
+                    className="font-mono text-sm"
                   />
-                  <p className="text-[10px] text-gray-400">
-                    Enter the static IP or mDNS name assigned to your main ESP32 controller.
+                  <p className="text-xs text-muted-foreground">
+                    The static IP or mDNS name of your main ESP32 controller.
                   </p>
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold">HTTP Port</Label>
+                  <Label htmlFor="controller-port">HTTP port</Label>
                   <Input
+                    id="controller-port"
                     type="number"
                     value={config.controllerPort}
                     onChange={(e) => setConfig({ ...config, controllerPort: Number(e.target.value) || 80 })}
                     placeholder="80"
-                    className="bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 rounded-xl text-xs font-mono"
+                    className="font-mono text-sm"
                   />
-                  <p className="text-[10px] text-gray-400">Default: 80</p>
+                  <p className="text-xs text-muted-foreground">Default: 80</p>
                 </div>
               </div>
 
               {/* API Key / Token Authentication */}
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold flex items-center justify-between">
-                  <span>Hardware API Key / Auth Token</span>
-                  <span className="text-[10px] text-gray-400 font-mono">Protected: never committed to git</span>
-                </Label>
+                <Label htmlFor="controller-api-key">Hardware API key</Label>
                 <div className="relative">
                   <Input
+                    id="controller-api-key"
                     type={showApiKey ? "text" : "password"}
                     value={config.controllerApiKey}
                     onChange={(e) => setConfig({ ...config, controllerApiKey: e.target.value })}
-                    placeholder="Enter firmware authorization key (e.g. edens-auth-key-xxxx)"
-                    className="bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 rounded-xl text-xs font-mono pr-10"
+                    placeholder="e.g. edens-auth-key-xxxx"
+                    className="pr-10 font-mono text-sm"
                   />
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon-sm"
                     onClick={() => setShowApiKey(!showApiKey)}
-                    className="absolute right-3 top-2.5 text-gray-400 hover:text-white cursor-pointer"
+                    aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
+                    title={showApiKey ? 'Hide API key' : 'Show API key'}
+                    className="absolute top-0.5 right-0.5 text-muted-foreground"
                   >
-                    {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                  </button>
+                    {showApiKey ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
+                  </Button>
                 </div>
-                <p className="text-[10px] text-gray-400">
-                  Transmitted strictly via <code className="bg-black/10 dark:bg-white/10 px-1 rounded">X-Hardware-Key</code> / <code className="bg-black/10 dark:bg-white/10 px-1 rounded">X-API-Key</code> HTTP headers only (held in session memory; never saved in browser localStorage or URL query parameters).
+                <p className="text-xs text-muted-foreground">
+                  Sent as a <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-all">?auth=</code> query or <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-all">X-API-Key</code> header so only your farm can send actuator commands.
                 </p>
               </div>
 
               {/* Advanced Parameters: Polling & Safety Interlocks */}
-              <div className="pt-3 border-t border-black/5 dark:border-white/5 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 border-t border-border pt-4 md:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold">Telemetry Polling Interval (ms)</Label>
+                  <Label htmlFor="poll-interval">Telemetry polling interval (ms)</Label>
                   <Input
+                    id="poll-interval"
                     type="number"
                     value={config.pollIntervalMs}
                     onChange={(e) => setConfig({ ...config, pollIntervalMs: Number(e.target.value) || 3000 })}
                     min="1000"
                     max="60000"
-                    className="bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 rounded-xl text-xs font-mono"
+                    className="font-mono text-sm"
                   />
-                  <p className="text-[10px] text-gray-400">Recommended: 3000ms (3 seconds)</p>
+                  <p className="text-xs text-muted-foreground">Recommended: 3000 ms (3 seconds)</p>
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold">Request Timeout (ms)</Label>
+                  <Label htmlFor="request-timeout">Request timeout (ms)</Label>
                   <Input
+                    id="request-timeout"
                     type="number"
                     value={config.timeoutMs}
                     onChange={(e) => setConfig({ ...config, timeoutMs: Number(e.target.value) || 5000 })}
                     min="1000"
                     max="15000"
-                    className="bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 rounded-xl text-xs font-mono"
+                    className="font-mono text-sm"
                   />
-                  <p className="text-[10px] text-gray-400">Abort threshold for unresponsive controller</p>
+                  <p className="text-xs text-muted-foreground">How long to wait before giving up on the controller</p>
                 </div>
               </div>
 
               {/* Safety Interlocks Toggle */}
-              <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-4">
+              <div className="flex items-center justify-between gap-4 rounded-lg border border-warning/30 bg-warning/10 p-4">
                 <div className="flex items-center gap-3">
-                  <ShieldAlert className="text-amber-500 shrink-0" size={24} />
+                  <ShieldAlert size={18} className="shrink-0 text-warning" aria-hidden="true" />
                   <div>
-                    <h4 className="text-xs font-bold text-amber-500 uppercase tracking-wide">
-                      Firmware Safety Interlocks Enforced
+                    <h4 className="text-sm font-semibold">
+                      Firmware safety interlocks
                     </h4>
-                    <p className="text-[11px] text-foreground/80 mt-0.5">
-                      Prevents opening the roof in rain, dry-run pump burns, and overheating. AI cannot override without safety approval.
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Blocks the roof from opening in rain, stops dry-running the pump, and caps overheating. AI agents cannot override these.
                     </p>
                   </div>
                 </div>
                 <input
                   type="checkbox"
+                  aria-label="Enable firmware safety interlocks"
                   checked={config.safetyInterlocksEnabled}
                   onChange={(e) => setConfig({ ...config, safetyInterlocksEnabled: e.target.checked })}
-                  className="w-5 h-5 accent-amber-500 cursor-pointer"
+                  className="size-5 shrink-0 cursor-pointer accent-primary"
                 />
               </div>
             </CardContent>
           </Card>
 
           {/* 2. ESP32-CAM Configuration */}
-          <Card className="border border-[#D1E8D1] dark:border-[#1A2A1A] bg-[#FFFFFF]/80 dark:bg-[#080808]/80 backdrop-blur-xl rounded-3xl shadow-sm overflow-hidden">
-            <CardHeader className="pb-4 border-b border-[#D1E8D1] dark:border-[#1A2A1A]">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-blue-500/15 text-blue-400 flex items-center justify-center border border-blue-500/30">
-                  <Video size={20} />
-                </div>
-                <div>
-                  <CardTitle className="text-base font-bold">ESP32-CAM Video & Snapshot Settings</CardTitle>
-                  <CardDescription className="text-xs">
-                    Provides continuous MJPEG video stream and high-resolution JPEG capture for AI leaf diagnosis
-                  </CardDescription>
-                </div>
-              </div>
+          <Card>
+            <CardHeader className="border-b border-border pb-3">
+              <SectionTitle icon={Video}>Camera (ESP32-CAM)</SectionTitle>
+              <CardDescription className="text-xs">
+                Live MJPEG video stream and high-resolution JPEG capture used for AI leaf diagnosis.
+              </CardDescription>
             </CardHeader>
 
-            <CardContent className="p-6 space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="md:col-span-2 space-y-1.5">
-                  <Label className="text-xs font-semibold">Camera IP / Host</Label>
+            <CardContent className="space-y-4 pt-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label htmlFor="camera-host">Camera IP or hostname</Label>
                   <Input
+                    id="camera-host"
                     type="text"
                     value={config.cameraHost}
                     onChange={(e) => setConfig({ ...config, cameraHost: e.target.value })}
                     placeholder="e.g. 192.168.1.101 or edens-cam.local"
-                    className="bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 rounded-xl text-xs font-mono"
+                    className="font-mono text-sm"
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold">Camera Port</Label>
+                  <Label htmlFor="camera-port">Camera port</Label>
                   <Input
+                    id="camera-port"
                     type="number"
                     value={config.cameraPort}
                     onChange={(e) => setConfig({ ...config, cameraPort: Number(e.target.value) || 81 })}
                     placeholder="81"
-                    className="bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 rounded-xl text-xs font-mono"
+                    className="font-mono text-sm"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
-                <div className="space-y-1">
-                  <Label className="text-[11px] text-gray-400">Stream Path</Label>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="camera-stream-path">Stream path</Label>
                   <Input
+                    id="camera-stream-path"
                     type="text"
                     value={config.cameraStreamPath}
                     onChange={(e) => setConfig({ ...config, cameraStreamPath: e.target.value })}
-                    className="bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 rounded-xl text-xs font-mono"
+                    className="font-mono text-sm"
                   />
                 </div>
 
-                <div className="space-y-1">
-                  <Label className="text-[11px] text-gray-400">Capture Path</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="camera-capture-path">Capture path</Label>
                   <Input
+                    id="camera-capture-path"
                     type="text"
                     value={config.cameraCapturePath}
                     onChange={(e) => setConfig({ ...config, cameraCapturePath: e.target.value })}
-                    className="bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 rounded-xl text-xs font-mono"
+                    className="font-mono text-sm"
                   />
                 </div>
 
-                <div className="space-y-1">
-                  <Label className="text-[11px] text-gray-400">Status Path</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="camera-status-path">Status path</Label>
                   <Input
+                    id="camera-status-path"
                     type="text"
                     value={config.cameraStatusPath}
                     onChange={(e) => setConfig({ ...config, cameraStatusPath: e.target.value })}
-                    className="bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 rounded-xl text-xs font-mono"
+                    className="font-mono text-sm"
                   />
                 </div>
               </div>
 
               {/* Embedded Camera Preview */}
-              <div className="pt-3 border-t border-black/5 dark:border-white/5">
-                <Label className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2 block">
-                  Camera Feed Preview
-                </Label>
+              <div className="border-t border-border pt-4">
+                <span className="mb-2 block text-xs font-medium text-muted-foreground">
+                  Camera feed preview
+                </span>
                 <CameraStream showControls={true} allowAdminTestUpload={true} />
               </div>
             </CardContent>
           </Card>
 
           {/* 3. ESP32-CAM Push Upload Gateway Card */}
-          <Card className="border border-emerald-500/30 bg-emerald-950/10 dark:bg-emerald-950/20 backdrop-blur-xl rounded-3xl shadow-sm overflow-hidden">
-            <CardHeader className="pb-4 border-b border-emerald-500/20">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-[#10B981]/20 text-[#10B981] flex items-center justify-center border border-[#10B981]/40">
-                    <Upload size={20} />
-                  </div>
-                  <div>
-                    <CardTitle className="text-base font-bold text-emerald-400">
-                      ESP32-CAM Push Upload Gateway
-                    </CardTitle>
-                    <CardDescription className="text-xs">
-                      Dedicated intake endpoint for receiving uploaded JPEG snapshots directly from greenhouse camera firmware
-                    </CardDescription>
-                  </div>
-                </div>
-                <span className="text-[10px] font-mono px-3 py-1 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold uppercase tracking-wider">
-                  HTTP POST Intake
-                </span>
-              </div>
+          <Card>
+            <CardHeader className="border-b border-border pb-3">
+              <SectionTitle
+                icon={Upload}
+                action={
+                  <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                    HTTP POST intake
+                  </span>
+                }
+              >
+                Camera push upload gateway
+              </SectionTitle>
+              <CardDescription className="text-xs">
+                Where the camera firmware uploads JPEG snapshots directly to the cloud.
+              </CardDescription>
             </CardHeader>
 
-            <CardContent className="p-6 space-y-6">
+            <CardContent className="space-y-5 pt-4">
               {/* Endpoint Specifications Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 rounded-2xl bg-black/40 border border-emerald-500/20 space-y-2">
-                  <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
-                    Upload Endpoint Route
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-4">
+                  <span className="block text-xs font-medium text-muted-foreground">
+                    Upload endpoint
                   </span>
                   <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold text-xs font-mono">POST</span>
-                    <code className="text-sm font-mono font-bold text-white">/api/camera/upload</code>
+                    <span className="rounded-md bg-accent px-1.5 py-0.5 font-mono text-xs font-medium text-accent-foreground">POST</span>
+                    <code className="font-mono tabular text-sm font-medium">/api/camera/upload</code>
                   </div>
-                  <p className="text-[10px] text-gray-400 leading-relaxed mt-1">
-                    Accepts raw binary JPEG frames (<code className="text-emerald-400">image/jpeg</code>).
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Accepts raw JPEG frames (<code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-all">image/jpeg</code>).
                   </p>
                 </div>
 
-                <div className="p-4 rounded-2xl bg-black/40 border border-emerald-500/20 space-y-2">
-                  <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
-                    Authentication Credentials
+                <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-4">
+                  <span className="block text-xs font-medium text-muted-foreground">
+                    Authentication
                   </span>
-                  <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-bold text-xs font-mono">HEADER</span>
-                    <code className="text-xs font-mono text-gray-300">X-Camera-Key: &lt;configured_key&gt;</code>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs font-medium text-foreground">HEADER</span>
+                    <code className="break-all font-mono tabular text-xs">X-Camera-Key: &lt;configured_key&gt;</code>
                   </div>
-                  <p className="text-[10px] text-gray-400 leading-relaxed mt-1">
-                    Validated against server-side <code className="text-gray-300">CAMERA_UPLOAD_KEY</code>. Never pass keys in URLs.
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Checked against the server-side <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-all">CAMERA_UPLOAD_KEY</code>. Never put keys in URLs.
                   </p>
                 </div>
               </div>
 
               {/* Network Reachability & Deployment Guidance */}
-              <div className="p-4 rounded-2xl bg-black/20 border border-black/10 dark:border-white/10 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-gray-300 flex items-center gap-2">
-                    <Globe size={14} className="text-emerald-400" /> Direct Camera-to-Cloud Architecture
+              <div className="space-y-2.5 rounded-lg border border-border p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                    <Globe size={14} aria-hidden="true" /> Direct camera-to-cloud
                   </span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
-                    Production Standard
+                  <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                    Recommended
                   </span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  <div className="p-3 rounded-xl bg-black/30 border border-emerald-500/20 space-y-1">
-                    <span className="font-bold text-emerald-400 text-[11px]">Primary: Direct ESP32-CAM HTTPS Upload</span>
-                    <p className="text-[11px] text-gray-400">
-                      Include <code className="text-emerald-300">firmware/esp32_cam_cloud_sync/edens_cloud_upload.h</code> in your ESP32-CAM sketch for non-blocking, CA-verified TLS uploads directly to cloud:
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1 rounded-lg bg-muted/40 p-3">
+                    <span className="text-xs font-medium">Direct HTTPS upload from the ESP32-CAM</span>
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      Include <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-all">firmware/esp32_cam_cloud_sync/edens_cloud_upload.h</code> in your sketch for non-blocking, CA-verified TLS uploads:
                     </p>
-                    <code className="block text-[11px] font-mono text-emerald-300 bg-black/50 p-1.5 rounded">
+                    <code className="block break-all rounded-lg bg-muted/50 p-2 font-mono tabular text-xs">
                       POST https://edens-ai.onrender.com/api/camera/upload
                     </code>
                   </div>
-                  <div className="p-3 rounded-xl bg-black/30 border border-white/5 space-y-1">
-                    <span className="font-bold text-blue-400 text-[11px]">Local Endpoints Preserved on LAN</span>
-                    <p className="text-[11px] text-gray-400">
-                      Background FreeRTOS upload copies each JPEG into PSRAM in ~4ms so local <code className="text-blue-300">/photo</code>, <code className="text-blue-300">/status</code>, and <code className="text-blue-300">:81/stream</code> remain responsive without any PC relay.
+                  <div className="space-y-1 rounded-lg bg-muted/40 p-3">
+                    <span className="text-xs font-medium">Local endpoints stay available on the LAN</span>
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      The background FreeRTOS upload copies each JPEG into PSRAM in about 4ms, so local <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-all">/photo</code>, <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-all">/status</code>, and <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-all">:81/stream</code> keep working without a PC relay.
                     </p>
                   </div>
                 </div>
               </div>
 
               {/* Live Intake Status & Telemetry */}
-              <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex flex-wrap items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <Activity size={14} /> Intake Status & Metrics
+              <div className="flex flex-wrap items-end justify-between gap-4 rounded-lg border border-border bg-muted/40 p-4">
+                <div className="space-y-1.5">
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Activity size={14} aria-hidden="true" /> Intake status
                   </span>
-                  <div className="flex items-center gap-3 text-xs text-gray-300 font-mono tabular-nums">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono tabular text-xs text-muted-foreground">
                     <span>
-                      Total Frames: <strong className="text-white">{uploadInfo?.totalUploadsReceived ?? 0}</strong>
+                      Frames received: <strong className="font-medium text-foreground">{uploadInfo?.totalUploadsReceived ?? 0}</strong>
                     </span>
-                    <span>·</span>
+                    <span aria-hidden="true">·</span>
                     <span>
-                      Latest Upload: <strong className="text-white">{uploadInfo?.latestUploadTimestamp ? new Date(uploadInfo.latestUploadTimestamp).toLocaleTimeString() : 'None'}</strong>
+                      Latest: <strong className="font-medium text-foreground">{uploadInfo?.latestUploadTimestamp ? new Date(uploadInfo.latestUploadTimestamp).toLocaleTimeString() : 'None'}</strong>
                     </span>
-                    <span>·</span>
+                    <span aria-hidden="true">·</span>
                     <span>
-                      Max Size: <strong className="text-white">{uploadInfo?.maxSizeMb ?? 10} MB</strong>
+                      Max size: <strong className="font-medium text-foreground">{uploadInfo?.maxSizeMb ?? 10} MB</strong>
                     </span>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input
-                    type="password"
-                    autoComplete="off"
-                    placeholder="Enter X-Camera-Key to test..."
-                    value={testCameraKey}
-                    onChange={(e) => setTestCameraKey(e.target.value)}
-                    className="h-9 w-52 bg-black/50 border-emerald-500/30 text-xs font-mono text-white placeholder:text-gray-500 rounded-xl"
-                  />
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="test-camera-key">X-Camera-Key</Label>
+                    <Input
+                      id="test-camera-key"
+                      type="password"
+                      autoComplete="off"
+                      placeholder="Key for the test upload"
+                      value={testCameraKey}
+                      onChange={(e) => setTestCameraKey(e.target.value)}
+                      className="w-52 font-mono text-sm"
+                    />
+                  </div>
                   <Button
                     type="button"
-                    size="sm"
+                    variant="outline"
                     onClick={handleSendSampleUpload}
                     disabled={isUploadingSample}
-                    className="bg-[#10B981] hover:bg-[#059669] text-black font-bold h-9 px-4 rounded-xl text-xs cursor-pointer shadow-md"
                   >
-                    <Upload size={14} className="mr-1.5" />
-                    {isUploadingSample ? 'Uploading Test Frame...' : 'Test Upload Endpoint'}
+                    <Upload size={15} aria-hidden="true" />
+                    {isUploadingSample ? 'Uploading test frame…' : 'Test upload'}
                   </Button>
                 </div>
               </div>
@@ -666,19 +649,19 @@ export default function HardwareConfigPage() {
               {/* Sample Upload Test Result Banner */}
               {sampleUploadResult && (
                 <div className={cn(
-                  "p-3.5 rounded-2xl border text-xs font-mono transition-all",
+                  "rounded-lg border p-3.5 text-xs",
                   sampleUploadResult.success 
-                    ? "bg-emerald-950/60 border-emerald-500/40 text-emerald-300"
-                    : "bg-red-950/60 border-red-500/40 text-red-300"
+                    ? "border-success/30 bg-success/10 text-success"
+                    : "border-destructive/30 bg-destructive/10 text-destructive"
                 )}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-bold flex items-center gap-1.5">
-                      {sampleUploadResult.success ? <Check size={14} /> : <AlertTriangle size={14} />}
-                      {sampleUploadResult.success ? 'Upload Endpoint Test PASSED (HTTP 200)' : 'Upload Endpoint Test FAILED'}
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 font-medium">
+                      {sampleUploadResult.success ? <Check size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}
+                      {sampleUploadResult.success ? 'Test upload succeeded (HTTP 200)' : 'Test upload failed'}
                     </span>
-                    <span className="text-[10px] opacity-75">{new Date().toLocaleTimeString()}</span>
+                    <span className="font-mono tabular text-muted-foreground">{new Date().toLocaleTimeString()}</span>
                   </div>
-                  <pre className="text-[11px] overflow-x-auto p-2 rounded bg-black/60 mt-2">
+                  <pre className="mt-2 overflow-x-auto rounded-lg bg-muted/50 p-3 font-mono tabular text-xs">
                     {JSON.stringify(sampleUploadResult.data || sampleUploadResult.error, null, 2)}
                   </pre>
                 </div>
@@ -686,96 +669,83 @@ export default function HardwareConfigPage() {
 
               {/* Firmware Integration Code Snippet */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-bold uppercase tracking-wider text-gray-400">
-                    ESP32-CAM Verified HTTPS Cloud Upload Integration (C++ / Arduino)
-                  </Label>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Firmware integration (C++ / Arduino)
+                  </span>
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => handleCopySnippet(`// 1. Copy firmware/esp32_cam_cloud_sync/edens_cloud_upload.h into your sketch folder
-// 2. Create camera_secrets.h (gitignored) with EDENS_CAMERA_UPLOAD_KEY
-#include "edens_cloud_upload.h"
-
-// Inside setup(), right after WiFi connection and startCameraServer():
-edensStartCloudUploadTask(); // Verified Root CA TLS + X-Camera-Key + non-blocking Core 0 task`)}
-                    className="h-7 px-2.5 text-xs text-emerald-400 hover:bg-emerald-500/10 cursor-pointer"
+                    onClick={() => handleCopySnippet(FIRMWARE_SNIPPET)}
                   >
-                    {copiedCode ? <CheckCheck size={13} className="mr-1" /> : <Copy size={13} className="mr-1" />}
-                    {copiedCode ? 'Copied!' : 'Copy Code'}
+                    {copiedCode ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+                    {copiedCode ? 'Copied' : 'Copy code'}
                   </Button>
                 </div>
 
-                <div className="p-3.5 rounded-2xl bg-black/70 border border-white/10 font-mono text-[11px] text-gray-300 overflow-x-auto leading-relaxed">
-                  <pre>{`// 1. Copy firmware/esp32_cam_cloud_sync/edens_cloud_upload.h into your sketch folder
-// 2. Create camera_secrets.h (gitignored) with EDENS_CAMERA_UPLOAD_KEY
-#include "edens_cloud_upload.h"
-
-// Inside setup(), right after WiFi connection and startCameraServer():
-edensStartCloudUploadTask(); // Verified Root CA TLS (setCACert + NTP) + X-Camera-Key`}</pre>
-                </div>
+                <pre className="overflow-x-auto rounded-lg bg-muted/50 p-3 font-mono tabular text-xs leading-relaxed">
+                  {FIRMWARE_SNIPPET}
+                </pre>
               </div>
             </CardContent>
           </Card>
 
-          {/* 3. Simulation Sandbox (Available in Simulation Mode) */}
+          {/* 4. Simulation Sandbox (Available in Simulation Mode) */}
           {config.mode === 'simulation' && (
-            <Card className="border border-purple-500/30 bg-purple-500/5 backdrop-blur-xl rounded-3xl overflow-hidden shadow-sm">
-              <CardHeader className="pb-3 border-b border-purple-500/20">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Sliders size={18} className="text-purple-400" />
-                    <CardTitle className="text-sm font-bold text-purple-300">
-                      Simulation Environmental Testing Sandbox
-                    </CardTitle>
-                  </div>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-bold uppercase">
-                    Interactive Testbed
-                  </span>
-                </div>
+            <Card>
+              <CardHeader className="border-b border-border pb-3">
+                <SectionTitle
+                  icon={Sliders}
+                  action={
+                    <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                      Test mode
+                    </span>
+                  }
+                >
+                  Simulation sandbox
+                </SectionTitle>
                 <CardDescription className="text-xs">
-                  Inject mock sensor conditions to verify automated agent reactions and hardware safety interlocks before physical deployment
+                  Inject mock sensor conditions to check agent reactions and safety interlocks before deploying real hardware.
                 </CardDescription>
               </CardHeader>
 
-              <CardContent className="p-5 space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <CardContent className="pt-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                   {/* Rain Toggle */}
-                  <div className="p-3.5 rounded-2xl bg-black/40 border border-purple-500/20 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-gray-300 flex items-center gap-1.5">
-                        <CloudRain size={14} className="text-blue-400" /> Rain Sensor
+                  <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        <CloudRain size={14} aria-hidden="true" /> Rain sensor
                       </span>
-                      <button
+                      <Button
                         type="button"
+                        variant={simRain ? 'default' : 'outline'}
+                        size="sm"
+                        aria-pressed={simRain}
                         onClick={() => {
                           const next = !simRain;
                           setSimRain(next);
                           hardwareService.setSimulationRain(next);
                         }}
-                        className={cn(
-                          "px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer",
-                          simRain ? "bg-blue-500 text-white" : "bg-white/10 text-gray-400"
-                        )}
                       >
-                        {simRain ? 'RAINING (ACTIVE)' : 'DRY'}
-                      </button>
+                        {simRain ? 'Raining' : 'Dry'}
+                      </Button>
                     </div>
-                    <p className="text-[10px] text-gray-400">
-                      {simRain ? 'Rain interlock engaged: Roof vent cannot open.' : 'Normal weather.'}
+                    <p className={cn('text-xs', simRain ? 'text-info' : 'text-muted-foreground')}>
+                      {simRain ? 'Rain interlock engaged: the roof vent cannot open.' : 'Normal weather.'}
                     </p>
                   </div>
 
                   {/* Temp Slider */}
-                  <div className="p-3.5 rounded-2xl bg-black/40 border border-purple-500/20 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-gray-300 flex items-center gap-1.5">
-                        <Thermometer size={14} className="text-amber-400" /> Temp: {simTemp}°C
-                      </span>
-                    </div>
+                  <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3.5">
+                    <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <Thermometer size={14} aria-hidden="true" /> Temperature
+                      <span className="font-mono tabular font-medium text-foreground">{simTemp}°C</span>
+                    </span>
                     <input
                       type="range"
+                      aria-label="Simulated temperature"
                       min="12"
                       max="40"
                       value={simTemp}
@@ -784,22 +754,22 @@ edensStartCloudUploadTask(); // Verified Root CA TLS (setCACert + NTP) + X-Camer
                         setSimTemp(val);
                         hardwareService.setSimulationTemperature(val);
                       }}
-                      className="w-full accent-amber-500 cursor-pointer"
+                      className="w-full cursor-pointer accent-primary"
                     />
-                    <p className="text-[10px] text-gray-400">
-                      {simTemp > 35 ? '⚠️ Extreme heat: Emergency cooling triggers' : 'Healthy tropical range'}
+                    <p className={cn('text-xs', simTemp > 35 ? 'text-warning' : 'text-muted-foreground')}>
+                      {simTemp > 35 ? 'Extreme heat: emergency cooling triggers' : 'Healthy tropical range'}
                     </p>
                   </div>
 
                   {/* Water Reservoir Slider */}
-                  <div className="p-3.5 rounded-2xl bg-black/40 border border-purple-500/20 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-gray-300 flex items-center gap-1.5">
-                        <Droplet size={14} className="text-emerald-400" /> Reservoir: {simWater}%
-                      </span>
-                    </div>
+                  <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3.5">
+                    <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <Droplet size={14} aria-hidden="true" /> Reservoir
+                      <span className="font-mono tabular font-medium text-foreground">{simWater}%</span>
+                    </span>
                     <input
                       type="range"
+                      aria-label="Simulated water reservoir level"
                       min="0"
                       max="100"
                       value={simWater}
@@ -808,10 +778,10 @@ edensStartCloudUploadTask(); // Verified Root CA TLS (setCACert + NTP) + X-Camer
                         setSimWater(val);
                         hardwareService.setSimulationWaterLevel(val);
                       }}
-                      className="w-full accent-emerald-500 cursor-pointer"
+                      className="w-full cursor-pointer accent-primary"
                     />
-                    <p className="text-[10px] text-gray-400">
-                      {simWater < 10 ? '🚨 Low water: Pump lockout engaged' : 'Adequate irrigation water'}
+                    <p className={cn('text-xs', simWater < 10 ? 'text-destructive' : 'text-muted-foreground')}>
+                      {simWater < 10 ? 'Low water: pump lockout engaged' : 'Adequate irrigation water'}
                     </p>
                   </div>
                 </div>
@@ -825,252 +795,108 @@ edensStartCloudUploadTask(); // Verified Root CA TLS (setCACert + NTP) + X-Camer
         <div className="space-y-6">
 
           {/* Diagnostic Endpoint Tester */}
-          <Card className="border border-[#D1E8D1] dark:border-[#1A2A1A] bg-[#FFFFFF]/80 dark:bg-[#080808]/80 backdrop-blur-xl rounded-3xl shadow-sm overflow-hidden">
-            <CardHeader className="pb-3 border-b border-[#D1E8D1] dark:border-[#1A2A1A]">
-              <div className="flex items-center gap-2">
-                <Activity size={18} className="text-[#10B981]" />
-                <CardTitle className="text-sm font-bold">Live Endpoint Diagnostics</CardTitle>
-              </div>
+          <Card>
+            <CardHeader className="border-b border-border pb-3">
+              <SectionTitle icon={Activity}>Live endpoint diagnostics</SectionTitle>
               <CardDescription className="text-xs">
-                Test communication with each supported firmware endpoint
+                Test each firmware endpoint on its own, or run the whole suite.
               </CardDescription>
             </CardHeader>
 
-            <CardContent className="p-4 space-y-3">
+            <CardContent className="space-y-3 pt-4">
               {/* Full Automated Suite Button */}
               <Button
                 type="button"
+                variant="outline"
                 onClick={handleRunFullSuite}
                 disabled={isRunningSuite}
-                className="w-full bg-gradient-to-r from-[#10B981] to-[#059669] hover:from-[#059669] hover:to-[#047857] text-black font-extrabold text-xs h-10 rounded-xl cursor-pointer shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all flex items-center justify-center gap-2"
+                className="w-full"
               >
                 {isRunningSuite ? (
                   <>
-                    <RefreshCw size={15} className="animate-spin text-black" />
-                    <span>Executing Hardware Handshakes...</span>
+                    <RefreshCw size={15} className="animate-spin" aria-hidden="true" />
+                    Running diagnostics…
                   </>
                 ) : (
                   <>
-                    <Zap size={15} className="fill-black text-black" />
-                    <span>Run Full Automated Diagnostic Suite</span>
+                    <Zap size={15} aria-hidden="true" />
+                    Run full diagnostic suite
                   </>
                 )}
               </Button>
 
               {/* Suite Results Drawer */}
               {suiteResults && (
-                <div className="p-3.5 rounded-2xl bg-black/40 border border-[#10B981]/30 space-y-2">
-                  <div className="flex items-center justify-between text-xs font-mono font-bold">
-                    <span className="text-[#10B981] flex items-center gap-1.5">
-                      <CheckCircle size={14} /> Diagnostic Suite Results
+                <div className="space-y-2 rounded-lg bg-muted/50 p-3">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="flex items-center gap-1.5 font-medium text-foreground">
+                      <CheckCircle size={14} className="text-success" aria-hidden="true" /> Suite results
                     </span>
-                    <span className="text-gray-400">
-                      {suiteResults.filter(r => r.pass).length}/{suiteResults.length} Passed
+                    <span className="font-mono tabular text-muted-foreground">
+                      {suiteResults.filter(r => r.pass).length}/{suiteResults.length} passed
                     </span>
                   </div>
-                  <div className="space-y-1.5 max-h-48 overflow-y-auto scrollbar-thin font-mono text-[10px]">
+                  <div className="custom-scrollbar max-h-48 space-y-1.5 overflow-y-auto">
                     {suiteResults.map((r, i) => (
-                      <div key={i} className="flex items-center justify-between p-1.5 rounded-lg bg-white/5 border border-white/5">
-                        <div className="flex items-center gap-2">
-                          <span className={r.pass ? "text-[#10B981]" : "text-red-400"}>
-                            {r.pass ? '✓' : '✗'}
-                          </span>
-                          <span className="font-semibold text-gray-200">{r.name}</span>
-                          <span className="opacity-50 text-[9px]">({r.endpoint})</span>
-                        </div>
-                        <span className="opacity-60">{r.latencyMs}ms</span>
+                      <div key={i} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5">
+                        <span className="flex min-w-0 items-center gap-2">
+                          {r.pass
+                            ? <Check size={13} className="shrink-0 text-success" aria-hidden="true" />
+                            : <X size={13} className="shrink-0 text-destructive" aria-hidden="true" />}
+                          <span className="truncate text-xs font-medium">{r.name}</span>
+                          <span className="hidden shrink-0 font-mono text-xs text-muted-foreground sm:inline">({r.endpoint})</span>
+                        </span>
+                        <span className="shrink-0 font-mono tabular text-xs text-muted-foreground">{r.latencyMs} ms</span>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
 
-              <div className="text-[10px] uppercase font-mono tracking-wider font-bold opacity-50 pt-1">
-                Individual Endpoint Tests
+              <div className="pt-1 text-xs font-medium text-muted-foreground">
+                Individual endpoint tests
               </div>
 
-              {/* Test 1: GET /status */}
-              <button
-                type="button"
-                disabled={testingEndpoint !== null}
-                onClick={() => handleRunDiagnostic('GET /status', () => hardwareService.getStatus())}
-                className="w-full flex items-center justify-between p-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-[#10B981]/15 border border-black/10 dark:border-white/10 text-xs font-mono transition-all text-left cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-[#10B981]">GET</span>
-                  <span>/status</span>
-                  <span className="opacity-50 text-[10px]">— Telemetry & interlocks</span>
-                </div>
-                {testingEndpoint === 'GET /status' ? (
-                  <RefreshCw size={13} className="animate-spin text-[#10B981]" />
-                ) : (
-                  <Play size={12} className="opacity-50" />
-                )}
-              </button>
-
-              {/* Test 2: GET /crops */}
-              <button
-                type="button"
-                disabled={testingEndpoint !== null}
-                onClick={() => handleRunDiagnostic('GET /crops', () => hardwareService.getCrops())}
-                className="w-full flex items-center justify-between p-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-[#10B981]/15 border border-black/10 dark:border-white/10 text-xs font-mono transition-all text-left cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-blue-400">GET</span>
-                  <span>/crops</span>
-                  <span className="opacity-50 text-[10px]">— Crop profiles</span>
-                </div>
-                {testingEndpoint === 'GET /crops' ? (
-                  <RefreshCw size={13} className="animate-spin text-blue-400" />
-                ) : (
-                  <Play size={12} className="opacity-50" />
-                )}
-              </button>
-
-              {/* Test 3: GET /setPlant */}
-              <button
-                type="button"
-                disabled={testingEndpoint !== null}
-                onClick={() => handleRunDiagnostic('GET /setPlant?crop=tomato', () => hardwareService.setPlant('tomato'))}
-                className="w-full flex items-center justify-between p-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-[#10B981]/15 border border-black/10 dark:border-white/10 text-xs font-mono transition-all text-left cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-emerald-400">GET</span>
-                  <span>/setPlant?crop=tomato</span>
-                </div>
-                {testingEndpoint === 'GET /setPlant?crop=tomato' ? (
-                  <RefreshCw size={13} className="animate-spin text-emerald-400" />
-                ) : (
-                  <Play size={12} className="opacity-50" />
-                )}
-              </button>
-
-              {/* Test 4: GET /setCustom */}
-              <button
-                type="button"
-                disabled={testingEndpoint !== null}
-                onClick={() => handleRunDiagnostic('GET /setCustom', () => hardwareService.setCustom({
-                  tempMin: 21, tempMax: 29, humMin: 55, humMax: 75, soilMin: 45, soilMax: 65
-                }))}
-                className="w-full flex items-center justify-between p-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-[#10B981]/15 border border-black/10 dark:border-white/10 text-xs font-mono transition-all text-left cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-teal-400">GET</span>
-                  <span>/setCustom</span>
-                  <span className="opacity-50 text-[10px]">— Thresholds</span>
-                </div>
-                {testingEndpoint === 'GET /setCustom' ? (
-                  <RefreshCw size={13} className="animate-spin text-teal-400" />
-                ) : (
-                  <Play size={12} className="opacity-50" />
-                )}
-              </button>
-
-              {/* Test 5: GET /roof */}
-              <button
-                type="button"
-                disabled={testingEndpoint !== null}
-                onClick={() => handleRunDiagnostic('GET /roof?state=open', () => hardwareService.setRoof('open'))}
-                className="w-full flex items-center justify-between p-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-[#10B981]/15 border border-black/10 dark:border-white/10 text-xs font-mono transition-all text-left cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-amber-400">GET</span>
-                  <span>/roof?state=open</span>
-                </div>
-                {testingEndpoint === 'GET /roof?state=open' ? (
-                  <RefreshCw size={13} className="animate-spin text-amber-400" />
-                ) : (
-                  <Play size={12} className="opacity-50" />
-                )}
-              </button>
-
-              {/* Test 6: GET /override */}
-              <button
-                type="button"
-                disabled={testingEndpoint !== null}
-                onClick={() => handleRunDiagnostic('GET /override?device=fan&state=on', () => hardwareService.setOverride('fan', 'on', 10))}
-                className="w-full flex items-center justify-between p-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-[#10B981]/15 border border-black/10 dark:border-white/10 text-xs font-mono transition-all text-left cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-orange-400">GET</span>
-                  <span>/override?device=fan</span>
-                </div>
-                {testingEndpoint === 'GET /override?device=fan&state=on' ? (
-                  <RefreshCw size={13} className="animate-spin text-orange-400" />
-                ) : (
-                  <Play size={12} className="opacity-50" />
-                )}
-              </button>
-
-              {/* Test 7: GET /pause */}
-              <button
-                type="button"
-                disabled={testingEndpoint !== null}
-                onClick={() => handleRunDiagnostic('GET /pause?duration=15', () => hardwareService.pauseAutonomous(15))}
-                className="w-full flex items-center justify-between p-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-[#10B981]/15 border border-black/10 dark:border-white/10 text-xs font-mono transition-all text-left cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-indigo-400">GET</span>
-                  <span>/pause?duration=15</span>
-                </div>
-                {testingEndpoint === 'GET /pause?duration=15' ? (
-                  <RefreshCw size={13} className="animate-spin text-indigo-400" />
-                ) : (
-                  <Play size={12} className="opacity-50" />
-                )}
-              </button>
-
-              {/* Test 8: GET /setOption */}
-              <button
-                type="button"
-                disabled={testingEndpoint !== null}
-                onClick={() => handleRunDiagnostic('GET /setOption?key=ventSpeed&value=80', () => hardwareService.setOption('ventSpeed', 80))}
-                className="w-full flex items-center justify-between p-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-[#10B981]/15 border border-black/10 dark:border-white/10 text-xs font-mono transition-all text-left cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-pink-400">GET</span>
-                  <span>/setOption</span>
-                  <span className="opacity-50 text-[10px]">— Parameter</span>
-                </div>
-                {testingEndpoint === 'GET /setOption?key=ventSpeed&value=80' ? (
-                  <RefreshCw size={13} className="animate-spin text-pink-400" />
-                ) : (
-                  <Play size={12} className="opacity-50" />
-                )}
-              </button>
-
-              {/* Test 9: Camera /capture */}
-              <button
-                type="button"
-                disabled={testingEndpoint !== null}
-                onClick={() => handleRunDiagnostic('Camera /capture', () => hardwareService.getCameraSnapshot())}
-                className="w-full flex items-center justify-between p-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-[#10B981]/15 border border-black/10 dark:border-white/10 text-xs font-mono transition-all text-left cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-purple-400">CAM</span>
-                  <span>/capture</span>
-                  <span className="opacity-50 text-[10px]">— Still Frame</span>
-                </div>
-                {testingEndpoint === 'Camera /capture' ? (
-                  <RefreshCw size={13} className="animate-spin text-purple-400" />
-                ) : (
-                  <Play size={12} className="opacity-50" />
-                )}
-              </button>
+              {/* 9 individual tests */}
+              {diagnosticTests.map((test) => (
+                <button
+                  key={test.name}
+                  type="button"
+                  disabled={testingEndpoint !== null}
+                  onClick={() => handleRunDiagnostic(test.name, test.run)}
+                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-left transition-colors hover:bg-muted/50 disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="font-mono tabular text-xs font-medium">{test.path}</span>
+                    {test.description && (
+                      <span className="text-xs text-muted-foreground">{test.description}</span>
+                    )}
+                  </span>
+                  {testingEndpoint === test.name ? (
+                    <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-brand">
+                      <RefreshCw size={13} className="animate-spin" aria-hidden="true" /> Testing…
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-xs font-medium text-muted-foreground">Run test</span>
+                  )}
+                </button>
+              ))}
 
               {/* Test Result Inspector */}
               {lastTestResult && (
                 <div className={cn(
-                  "p-3 rounded-xl border text-[11px] font-mono mt-3 overflow-x-auto max-h-48",
+                  "mt-2 rounded-lg border p-3",
                   lastTestResult.success 
-                    ? "bg-[#10B981]/10 border-[#10B981]/30 text-foreground"
-                    : "bg-red-500/10 border-red-500/30 text-red-400"
+                    ? "border-success/30 bg-success/10"
+                    : "border-destructive/30 bg-destructive/10"
                 )}>
-                  <div className="flex items-center justify-between mb-1 font-bold">
-                    <span>{lastTestResult.testName} Result:</span>
-                    <span>{lastTestResult.success ? 'HTTP 200 OK' : 'FAILED'}</span>
+                  <div className="mb-1 flex items-center justify-between gap-2 text-xs font-medium">
+                    <span className="text-foreground">{lastTestResult.testName}</span>
+                    <span className={lastTestResult.success ? 'text-success' : 'text-destructive'}>
+                      {lastTestResult.success ? 'Passed' : 'Failed'}
+                    </span>
                   </div>
-                  <pre className="whitespace-pre-wrap text-[10px] opacity-80">
+                  <pre className="max-h-48 overflow-x-auto whitespace-pre-wrap font-mono tabular text-xs text-muted-foreground">
                     {JSON.stringify(lastTestResult.data || lastTestResult.error, null, 2)}
                   </pre>
                 </div>
@@ -1079,40 +905,42 @@ edensStartCloudUploadTask(); // Verified Root CA TLS (setCACert + NTP) + X-Camer
           </Card>
 
           {/* Diagnostic Event Log Console */}
-          <Card className="border border-[#D1E8D1] dark:border-[#1A2A1A] bg-[#FFFFFF]/80 dark:bg-[#080808]/80 backdrop-blur-xl rounded-3xl shadow-sm overflow-hidden">
-            <CardHeader className="pb-3 border-b border-[#D1E8D1] dark:border-[#1A2A1A]">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Terminal size={16} className="text-gray-400" />
-                  <CardTitle className="text-sm font-bold">Connection Log</CardTitle>
-                </div>
-                <span className="text-[10px] font-mono opacity-50">
-                  {logs.length} events
-                </span>
-              </div>
+          <Card>
+            <CardHeader className="border-b border-border pb-3">
+              <SectionTitle
+                icon={Terminal}
+                action={
+                  <span className="text-xs text-muted-foreground">
+                    {logs.length} event{logs.length === 1 ? '' : 's'}
+                  </span>
+                }
+              >
+                Connection log
+              </SectionTitle>
             </CardHeader>
 
-            <CardContent className="p-3">
-              <div className="h-64 overflow-y-auto space-y-2 font-mono text-[10px] scrollbar-thin">
+            <CardContent className="pt-4">
+              <div className="custom-scrollbar max-h-64 space-y-2 overflow-y-auto">
                 {logs.length === 0 ? (
-                  <p className="text-gray-500 text-center py-6">No diagnostic events recorded yet.</p>
+                  <p className="py-6 text-center text-xs text-muted-foreground">No connection events recorded yet.</p>
                 ) : (
                   logs.map((log) => (
                     <div
                       key={log.id}
-                      className={cn(
-                        "p-2 rounded-lg border leading-tight space-y-0.5",
-                        log.status === 'SUCCESS' && "bg-[#10B981]/5 border-[#10B981]/20 text-[#10B981]",
-                        log.status === 'ERROR' && "bg-red-500/5 border-red-500/20 text-red-400",
-                        log.status === 'WARNING' && "bg-amber-500/5 border-amber-500/20 text-amber-400",
-                        log.status === 'TIMEOUT' && "bg-red-500/5 border-red-500/20 text-red-400"
-                      )}
+                      className="space-y-0.5 rounded-lg bg-muted/50 p-3 font-mono tabular text-xs"
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold">{log.endpoint}</span>
-                        <span className="opacity-60">{log.latencyMs}ms</span>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={cn(
+                          "font-medium",
+                          log.status === 'SUCCESS' && "text-success",
+                          log.status === 'WARNING' && "text-warning",
+                          (log.status === 'ERROR' || log.status === 'TIMEOUT') && "text-destructive"
+                        )}>
+                          {log.endpoint}
+                        </span>
+                        <span className="text-muted-foreground">{log.latencyMs} ms</span>
                       </div>
-                      <div className="opacity-90">{log.message}</div>
+                      <div className="break-words text-muted-foreground">{log.message}</div>
                     </div>
                   ))
                 )}
@@ -1121,27 +949,27 @@ edensStartCloudUploadTask(); // Verified Root CA TLS (setCACert + NTP) + X-Camer
           </Card>
 
           {/* Hardware Engineer Checklist Box */}
-          <div className="p-5 rounded-3xl bg-gradient-to-br from-[#10B981]/10 via-[#059669]/5 to-transparent border border-[#10B981]/30 space-y-3">
-            <div className="flex items-center gap-2 text-[#10B981]">
-              <FileText size={16} />
-              <h4 className="text-xs font-bold uppercase tracking-wider">Required From Hardware Engineer</h4>
+          <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <FileText size={15} aria-hidden="true" />
+              <h4 className="text-[13px] font-semibold">What your hardware engineer needs to provide</h4>
             </div>
-            <ul className="text-[11px] space-y-1.5 opacity-90 text-foreground">
+            <ul className="space-y-1.5 text-xs text-muted-foreground">
               <li className="flex items-start gap-2">
-                <CheckCircle size={13} className="text-[#10B981] shrink-0 mt-0.5" />
-                <span>Static IP / mDNS hostname for main ESP32 controller</span>
+                <CheckCircle size={13} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span>Static IP or mDNS hostname for the main ESP32 controller</span>
               </li>
               <li className="flex items-start gap-2">
-                <CheckCircle size={13} className="text-[#10B981] shrink-0 mt-0.5" />
-                <span>Static IP for ESP32-CAM module</span>
+                <CheckCircle size={13} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span>Static IP for the ESP32-CAM module</span>
               </li>
               <li className="flex items-start gap-2">
-                <CheckCircle size={13} className="text-[#10B981] shrink-0 mt-0.5" />
-                <span>API Authorization token / Shared secret</span>
+                <CheckCircle size={13} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span>API authorization token (shared secret)</span>
               </li>
               <li className="flex items-start gap-2">
-                <CheckCircle size={13} className="text-[#10B981] shrink-0 mt-0.5" />
-                <span>CORS header <code className="bg-black/10 dark:bg-white/10 px-1 rounded">Access-Control-Allow-Origin: *</code> on firmware webserver</span>
+                <CheckCircle size={13} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span>CORS header <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-all">Access-Control-Allow-Origin: *</code> on the firmware web server</span>
               </li>
             </ul>
           </div>

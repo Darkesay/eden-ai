@@ -485,7 +485,7 @@ export default function AiAssistant() {
       {/* Header & Language Controls */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2.5">
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
             <MessageSquareText size={24} className="text-primary" />
             AI Farming Assistant
           </h1>
@@ -571,12 +571,12 @@ export default function AiAssistant() {
       </div>
 
       {micHintBanner && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/45 dark:text-emerald-200 px-4 py-3 text-xs flex items-center justify-between gap-2">
+        <div className="rounded-xl border border-success/30 bg-success/10 text-success px-4 py-3 text-xs flex items-center justify-between gap-2">
           <span className="font-medium">{micHintBanner}</span>
           <button
             type="button"
             onClick={() => setMicHintBanner(null)}
-            className="text-emerald-800 dark:text-emerald-300 cursor-pointer"
+            className="cursor-pointer"
           >
             <X size={15} />
           </button>
@@ -584,15 +584,15 @@ export default function AiAssistant() {
       )}
 
       {errorBanner && (
-        <div className="rounded-xl border border-red-200 bg-red-50 text-red-900 dark:border-red-800/60 dark:bg-red-950/45 dark:text-red-200 px-4 py-3 text-xs flex items-start justify-between gap-3">
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 text-destructive px-4 py-3 text-xs flex items-start justify-between gap-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle size={15} className="text-red-700 dark:text-red-400 shrink-0 mt-0.5" />
+            <AlertTriangle size={15} className="shrink-0 mt-0.5" />
             <span>{errorBanner}</span>
           </div>
           <button
             type="button"
             onClick={() => setErrorBanner(null)}
-            className="text-red-800 dark:text-red-300 cursor-pointer"
+            className="cursor-pointer"
           >
             <X size={15} />
           </button>
@@ -728,11 +728,11 @@ export default function AiAssistant() {
 
           {/* Active Voice Recording Bar */}
           {isRecording ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 dark:border-red-800/60 dark:bg-red-950/45 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5 text-sm font-semibold text-red-900 dark:text-red-200">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-600 dark:bg-red-400 animate-pulse" />
+            <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 text-sm font-semibold text-destructive">
+                <span className="w-2.5 h-2.5 rounded-full bg-destructive animate-pulse" />
                 <span>Speaking in {selectedLang.name}...</span>
-                <span className="font-mono tabular-nums text-xs bg-card text-foreground px-2 py-0.5 rounded border border-red-200 dark:border-red-800/60">
+                <span className="font-mono tabular-nums text-xs bg-card text-foreground px-2 py-0.5 rounded border border-destructive/30">
                   {Math.floor(recordingSeconds / 60)}:
                   {String(recordingSeconds % 60).padStart(2, '0')}
                 </span>
