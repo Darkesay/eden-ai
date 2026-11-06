@@ -173,6 +173,12 @@
     margin: 0;
     overflow-x: clip;
   }
+  /* Touch — no double-tap zoom delay on controls, no grey tap flash */
+  a,
+  button {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
   /* Native form controls follow the card surface in either theme */
   select option {
     background-color: var(--card);
@@ -253,6 +259,156 @@
 
 .hero-rise {
   animation: hero-rise 0.56s var(--ease-standard) backwards;
+}
+
+/* Skip link — visually hidden until focused (keyboard / screen reader) */
+.skip-link {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 60;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--card);
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--foreground);
+  transform: translateY(-300%);
+  transition: transform 0.18s var(--ease-standard);
+}
+.skip-link:focus-visible {
+  transform: translateY(0);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Hero marquee — crops and field notes. Pauses on hover; frozen under reduced motion. */
+@keyframes marquee-x {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.marquee-track {
+  width: max-content;
+  animation: marquee-x 46s linear infinite;
+}
+.marquee-track:hover {
+  animation-play-state: paused;
+}
+
+/* Liquid Glass (web approximation of Apple's material) — for floating surfaces over media.
+   Regular variant: ~66% opaque fill, blur + saturation boost, hairline highlight, one inset edge light. */
+.glass-panel {
+  background: color-mix(in srgb, var(--card) 66%, transparent);
+  backdrop-filter: blur(22px) saturate(1.35);
+  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow:
+    0 24px 60px -24px rgba(6, 32, 17, 0.55),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.8);
+}
+.glass-chip {
+  background: color-mix(in srgb, var(--card) 55%, transparent);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+@supports not (backdrop-filter: blur(1px)) {
+  .glass-panel,
+  .glass-chip {
+    background: var(--card);
+  }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .glass-panel {
+    background: var(--card);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-color: var(--border);
+    box-shadow:
+      0 18px 40px -18px rgba(6, 32, 17, 0.45),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.6);
+  }
+  .glass-chip {
+    background: var(--muted);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-color: var(--border);
+  }
+}
+
+/* Live status ring — soft, transform-only pulse on the field-node dot */
+@keyframes live-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  75%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+.live-ring {
+  animation: live-ring 2.1s var(--ease-standard) infinite;
+}
+
+/* Equaliser bars — telemetry heartbeat in the console header */
+@keyframes eq-pulse {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+.eq-bar {
+  transform-origin: bottom;
+  animation: eq-pulse 1.5s ease-in-out infinite;
+}
+.eq-bar:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.eq-bar:nth-child(3) {
+  animation-delay: 0.32s;
+}
+.eq-bar:nth-child(4) {
+  animation-delay: 0.48s;
+}
+
+/* Camera sweep — horizontal light bar in the monitoring mock */
+@keyframes scan-y {
+  0% {
+    transform: translateY(-110%);
+    opacity: 0;
+  }
+  14% {
+    opacity: 0.9;
+  }
+  86% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateY(12rem);
+    opacity: 0;
+  }
+}
+.scan-line {
+  animation: scan-y 3.6s cubic-bezier(0.45, 0, 0.15, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track,
+  .eq-bar,
+  .live-ring,
+  .scan-line {
+    animation: none !important;
+  }
 }
 
 /* Route shell fades and rises on navigation (keyed remount replays it) */
