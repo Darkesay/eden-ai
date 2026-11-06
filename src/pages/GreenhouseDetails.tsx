@@ -45,6 +45,7 @@ import { ConnectExistingHardwarePanel } from '../components/ConnectExistingHardw
 import { UniversalHardwareFleetPanel } from '../components/UniversalHardwareFleetPanel';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Skeleton } from '../components/ui/skeleton';
 import { DEFAULT_CROPS } from '../lib/hardwareService';
 
 function overallStatusBadge(status: string) {
@@ -680,9 +681,20 @@ export default function GreenhouseDetails() {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 py-20">
-        <Loader2 size={24} className="animate-spin text-muted-foreground" aria-hidden="true" />
-        <span className="text-sm text-muted-foreground">Loading greenhouse state…</span>
+      <div
+        className="flex flex-col items-center justify-center gap-4 py-20"
+        role="status"
+        aria-live="polite"
+        aria-label="Loading greenhouse state"
+      >
+        <Skeleton className="h-5 w-44" />
+        <Skeleton className="h-3.5 w-64" />
+        <div className="grid w-full max-w-3xl grid-cols-1 gap-3 sm:grid-cols-3">
+          <Skeleton className="h-24 rounded-xl" />
+          <Skeleton className="h-24 rounded-xl" />
+          <Skeleton className="h-24 rounded-xl" />
+        </div>
+        <span className="sr-only">Loading greenhouse state…</span>
       </div>
     );
   }

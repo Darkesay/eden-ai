@@ -5,7 +5,9 @@
 
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
+import { MotionConfig } from 'motion/react';
+import { Skeleton } from './components/ui/skeleton';
 import { initStore } from './lib/store';
 import { MqttProvider } from './lib/mqtt';
 import { AUTH_GATE_ENABLED, AuthProvider, useAuth } from './lib/auth';
@@ -80,8 +82,18 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-2.5 bg-background text-muted-foreground">
-        <Loader2 size={22} className="animate-spin text-primary" aria-hidden="true" />
+      <div
+        className="flex min-h-screen flex-col items-center justify-center gap-5 bg-background p-6 text-muted-foreground"
+        role="status"
+        aria-live="polite"
+        aria-label="Loading your greenhouse workspace"
+      >
+        <Skeleton className="size-11 rounded-xl" />
+        <div className="w-full max-w-44 space-y-2">
+          <Skeleton className="mx-auto h-4 w-44" />
+          <Skeleton className="mx-auto h-3 w-32" />
+        </div>
+        <Skeleton className="h-3 w-56" />
         <span className="text-sm">Loading your greenhouse workspace…</span>
       </div>
     );
@@ -106,7 +118,8 @@ export default function App() {
     <ThemeProvider>
       <ErrorBoundary>
         <AuthProvider>
-          <BrowserRouter>
+          <MotionConfig reducedMotion="user">
+            <BrowserRouter>
             <Routes>
               <Route
                 path="/login"
@@ -142,6 +155,7 @@ export default function App() {
               </Route>
             </Routes>
           </BrowserRouter>
+          </MotionConfig>
         </AuthProvider>
       </ErrorBoundary>
     </ThemeProvider>

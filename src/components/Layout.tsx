@@ -130,7 +130,7 @@ export default function Layout() {
       {/* ---------------------------------------------------------------- */}
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-40 hidden border-r border-border bg-card md:flex md:flex-col md:transition-[width] md:duration-200 md:ease-out',
+          'fixed inset-y-0 left-0 z-40 hidden border-r border-border bg-card md:flex md:flex-col md:transition-[width] md:duration-200 md:ease-[cubic-bezier(0.22,1,0.36,1)]',
           navCollapsed ? 'md:w-[68px]' : 'md:w-60'
         )}
       >
@@ -223,7 +223,7 @@ export default function Layout() {
                   title={navCollapsed ? item.label : undefined}
                   className={({ isActive }) =>
                     cn(
-                      'flex h-10 items-center gap-3 rounded-lg px-3 text-sm transition-colors',
+                      'group flex h-10 items-center gap-3 rounded-lg px-3 text-sm transition-colors',
                       navCollapsed && 'justify-center px-0',
                       isActive
                         ? 'bg-muted font-medium text-foreground'
@@ -231,7 +231,7 @@ export default function Layout() {
                     )
                   }
                 >
-                  <item.icon size={18} className="shrink-0" aria-hidden="true" />
+                  <item.icon size={18} className="shrink-0 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.08]" aria-hidden="true" />
                   <span className={cn('truncate', navCollapsed && 'sr-only')}>{item.label}</span>
                 </NavLink>
               </li>
@@ -312,7 +312,7 @@ export default function Layout() {
       {/* ---------------------------------------------------------------- */}
       <div
         className={cn(
-          'md:transition-[padding-left] md:duration-200 md:ease-out',
+          'md:transition-[padding-left] md:duration-200 md:ease-[cubic-bezier(0.22,1,0.36,1)]',
           navCollapsed ? 'md:pl-[68px]' : 'md:pl-60'
         )}
       >
@@ -406,7 +406,10 @@ export default function Layout() {
         )}
 
         <main className="mx-auto max-w-7xl px-4 py-8 pb-28 md:px-6 md:pb-10 lg:px-8">
-          <Outlet />
+          {/* Route content fades and rises in on navigation — exit is instant, so taps never feel delayed */}
+          <div key={location.pathname} className="page-enter">
+            <Outlet />
+          </div>
         </main>
       </div>
 
@@ -430,7 +433,14 @@ export default function Layout() {
             >
               {({ isActive }) => (
                 <>
-                  <item.icon size={20} strokeWidth={isActive ? 2.2 : 1.8} />
+                  <item.icon
+                    size={20}
+                    strokeWidth={isActive ? 2.2 : 1.8}
+                    className={cn(
+                      'transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]',
+                      isActive && 'scale-110'
+                    )}
+                  />
                   <span>{item.shortLabel}</span>
                 </>
               )}

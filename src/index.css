@@ -209,6 +209,43 @@
   display: none;
 }
 
+/* Motion — one curve everywhere (mirrors --ease in src/lib/motion.ts) */
+:root {
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Route shell fades and rises on navigation (keyed remount replays it) */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-enter {
+  animation: page-in 0.24s var(--ease-standard) backwards;
+}
+
+/* Cards fade up once when they mount — GPU-friendly, no layout movement */
+.card-enter {
+  animation: card-in 0.32s var(--ease-standard) backwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
