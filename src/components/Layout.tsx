@@ -31,7 +31,7 @@ interface PrimaryNavItem {
 }
 
 const NAV_ITEMS: PrimaryNavItem[] = [
-  { to: '/', label: 'Home', shortLabel: 'Home', icon: Home, end: true },
+  { to: '/dashboard', label: 'Home', shortLabel: 'Home', icon: Home, end: true },
   { to: '/greenhouses', label: 'My Greenhouse', shortLabel: 'Greenhouse', icon: Sprout },
   { to: '/assistant', label: 'AI Assistant', shortLabel: 'Assistant', icon: MessageSquare },
   { to: '/vision', label: 'Plant Vision', shortLabel: 'Vision', icon: Camera },
@@ -142,7 +142,7 @@ export default function Layout() {
           )}
         >
           <Link
-            to="/"
+            to="/dashboard"
             className="flex items-center gap-2.5"
             title={navCollapsed ? 'EDENS AI — Home' : undefined}
           >
@@ -319,7 +319,7 @@ export default function Layout() {
         <header className="sticky top-0 z-50 border-b border-border bg-background/85 backdrop-blur-lg">
           <div className="flex h-14 items-center gap-3 px-4 md:px-6">
             {/* Back button — returns to the page visited before this one; never shown on the home dashboard */}
-            {location.pathname !== '/' && (
+            {location.pathname !== '/dashboard' && (
               <button
                 type="button"
                 onClick={handleBack}
@@ -333,7 +333,7 @@ export default function Layout() {
             )}
 
             {/* Brand — mobile only (desktop brand lives in the sidebar) */}
-            <Link to="/" className="flex shrink-0 items-center gap-2.5 md:hidden">
+            <Link to="/dashboard" className="flex shrink-0 items-center gap-2.5 md:hidden">
               <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                 <Leaf size={17} aria-hidden="true" />
               </span>

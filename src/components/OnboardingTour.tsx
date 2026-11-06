@@ -68,7 +68,7 @@ export function OnboardingTour({ forceShow = false, onClose }: { forceShow?: boo
       setHasSeen(false);
       setStepIndex(-1);
       localStorage.removeItem('hasCompletedOnboarding');
-      navigate('/');
+      navigate('/dashboard');
     };
     window.addEventListener('replay-tour', handleReplay);
     return () => window.removeEventListener('replay-tour', handleReplay);

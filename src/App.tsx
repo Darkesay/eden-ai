@@ -13,6 +13,7 @@ import { MqttProvider } from './lib/mqtt';
 import { AUTH_GATE_ENABLED, AuthProvider, useAuth } from './lib/auth';
 import { ThemeProvider } from './lib/theme';
 import Layout from './components/Layout';
+import Landing from './pages/Landing';
 import Login from './pages/Login';
 import ControlCenter from './pages/ControlCenter';
 import Greenhouses from './pages/Greenhouses';
@@ -129,8 +130,9 @@ export default function App() {
                 path="/register"
                 element={<Navigate to={AUTH_GATE_ENABLED ? '/login' : '/'} replace />}
               />
+              {/* Public landing page — the default entry point of the app */}
+              <Route path="/" element={<Landing />} />
               <Route
-                path="/"
                 element={
                   <RequireAuth>
                     <MqttProvider>
@@ -140,7 +142,7 @@ export default function App() {
                   </RequireAuth>
                 }
               >
-                <Route index element={<ControlCenter />} />
+                <Route path="/dashboard" element={<ControlCenter />} />
                 <Route path="greenhouses" element={<Greenhouses />} />
                 <Route path="greenhouses/setup" element={<GreenhouseSetupWizard />} />
                 <Route path="greenhouses/:greenhouseId" element={<GreenhouseDetails />} />
