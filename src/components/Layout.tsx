@@ -11,8 +11,8 @@ import {
   MessageSquare,
   Camera,
   Settings,
-  PanelLeftClose,
-  PanelLeftOpen,
+  ChevronsLeft,
+  ChevronsRight,
   LogOut,
   Sun,
   Moon
@@ -300,9 +300,9 @@ export default function Layout() {
           className="absolute right-0 top-1/2 z-10 flex size-6 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           {navCollapsed ? (
-            <PanelLeftOpen size={13} aria-hidden="true" />
+            <ChevronsRight size={14} aria-hidden="true" />
           ) : (
-            <PanelLeftClose size={13} aria-hidden="true" />
+            <ChevronsLeft size={14} aria-hidden="true" />
           )}
         </button>
       </aside>
@@ -318,17 +318,19 @@ export default function Layout() {
       >
         <header className="sticky top-0 z-50 border-b border-border bg-background/85 backdrop-blur-lg">
           <div className="flex h-14 items-center gap-3 px-4 md:px-6">
-            {/* Back button — returns to the page visited before this one */}
-            <button
-              type="button"
-              onClick={handleBack}
-              disabled={!canGoBack}
-              title="Back to previous page"
-              aria-label="Back to previous page"
-              className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-            >
-              <ArrowLeft size={17} />
-            </button>
+            {/* Back button — returns to the page visited before this one; never shown on the home dashboard */}
+            {location.pathname !== '/' && (
+              <button
+                type="button"
+                onClick={handleBack}
+                disabled={!canGoBack}
+                title="Back to previous page"
+                aria-label="Back to previous page"
+                className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              >
+                <ArrowLeft size={17} />
+              </button>
+            )}
 
             {/* Brand — mobile only (desktop brand lives in the sidebar) */}
             <Link to="/" className="flex shrink-0 items-center gap-2.5 md:hidden">
