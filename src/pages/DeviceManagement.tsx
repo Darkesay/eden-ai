@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../co
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
+import { CameraOnboardingWizard } from '../components/CameraOnboardingWizard';
 import {
   Copy,
   Check,
@@ -123,6 +124,7 @@ export default function DeviceManagement() {
   const [copiedSnippet, setCopiedSnippet] = useState(false);
   const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [cameraWizardOpen, setCameraWizardOpen] = useState(false);
 
   const activeGhId = activeGreenhouse?.id || (greenhouses && greenhouses[0]?.id) || '';
 
@@ -413,8 +415,16 @@ export default function DeviceManagement() {
           </Button>
 
           <Button
+            variant="outline"
+            onClick={() => setCameraWizardOpen(true)}
+            className="border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 font-semibold h-10 px-3.5 rounded-xl gap-2 cursor-pointer"
+          >
+            <Camera size={16} /> Guided Camera Setup
+          </Button>
+
+          <Button
             onClick={() => setEnrollModalOpen(true)}
-            className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold h-10 px-4 rounded-xl gap-2 shadow-sm"
+            className="bg-[#10B981] hover:bg-[#059669] text-black font-semibold h-10 px-4 rounded-xl gap-2 shadow-sm cursor-pointer"
           >
             <Plus size={18} /> Add Device
           </Button>
@@ -807,6 +817,13 @@ export default function DeviceManagement() {
           )}
         </DialogContent>
       </Dialog>
+
+      <CameraOnboardingWizard
+        isOpen={cameraWizardOpen}
+        onClose={() => setCameraWizardOpen(false)}
+        greenhouseId={activeGhId}
+        onCompleted={() => setRefreshKey((k) => k + 1)}
+      />
     </div>
   );
 }

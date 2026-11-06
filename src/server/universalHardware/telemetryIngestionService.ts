@@ -1,36 +1,23 @@
 /**
  * EDENS AI — Universal Telemetry Ingestion Service
- * Protocol-agnostic telemetry intake, zero vs null preservation, offline replay deduplication,
- * and Agricultural Intelligence bridge.
+ * Ingests, normalizes, deduplicates, and validates agricultural sensor telemetry.
  */
 
-import type { PlatformDatabase } from '../database.ts';
-import { generateSecureId } from '../telemetryContract.ts';
+import type { PlatformDatabase, DeviceRecord } from '../database.ts';
+import { validateControllerTelemetryPayload } from '../telemetryContract.ts';
 import { globalAdapterManager } from './adapterManager.ts';
 import type { DynamicSensorRegistry } from './sensorRegistry.ts';
 import type {
   IngestionContext,
   NormalizedIngestionOutput,
-  StandardReadingOutput,
   SupportedIotProtocol,
   TelemetrySource
 } from './types.ts';
 
-export interface IngestionResult {
-  ok: boolean;
-  statusCode: number;
-  readingId?: string;
-  sampleId?: string;
-  errorCode?: string;
-  message?: string;
-  normalizedCount: number;
-  readings: StandardReadingOutput[];
-}
-
 export class TelemetryIngestionService {
   private readonly platformDb: PlatformDatabase;
   private readonly sensorRegistry: DynamicSensorRegistry;
-  private readonly processedSampleHashes = new Set<string>();
+  private readonly processedSampleIds = new Set<string>();
 
   constructor(deps: {
     platformDb: PlatformDatabase;
@@ -41,143 +28,127 @@ export class TelemetryIngestionService {
   }
 
   /**
-   * Ingests, validates, deduplicates, and stores telemetry from any supported protocol.
+   * Ingests a telemetry payload across any supported protocol.
+   * Differentiates exact 0 (e.g. 0% tank or 0 lux) from null (unpopulated/missing probe).
    */
   public ingestTelemetry(params: {
-    deviceId: string;
-    greenhouseId: string;
-    zoneId?: string | null;
+    device: DeviceRecord;
     protocol: SupportedIotProtocol;
     rawPayload: unknown;
     remoteIp?: string;
     topicOrPath?: string;
-  }): IngestionResult {
-    const { deviceId, greenhouseId, zoneId, protocol, rawPayload, remoteIp, topicOrPath } = params;
+  }): {
+    ok: boolean;
+    statusCode: number;
+    errorCode?: string;
+    message?: string;
+    readingId?: string;
+    normalized?: NormalizedIngestionOutput;
+  } {
+    const { device, protocol, rawPayload, remoteIp, topicOrPath } = params;
     const nowIso = new Date().toISOString();
 
-    // Context
-    const context: IngestionContext = {
-      deviceId,
-      greenhouseId,
-      zoneId: zoneId || null,
-      protocol,
-      topicOrPath,
-      remoteIp,
-      receivedAtIso: nowIso
-    };
-
-    // Lookup device profile to pick best adapter
-    const driver = this.platformDb.getDriver();
-    const devRow = driver.queryOne<any>('SELECT * FROM devices WHERE id = ?', [deviceId]);
-    const boardModel = devRow?.hardware_model || 'esp32_devkit_v1';
-    const adapterMatch = globalAdapterManager.selectBestAdapter({
-      deviceId,
-      boardModel,
-      chipFamily: 'esp32',
-      cameraCapable: false
-    });
-
-    const plugin = globalAdapterManager.getPlugin(adapterMatch.selectedAdapterId) || globalAdapterManager.listPlugins()[0];
-    const normalized: NormalizedIngestionOutput = plugin.normalizePayload(rawPayload, context);
-
-    if (!normalized.ok) {
-      return {
-        ok: false,
-        statusCode: 400,
-        errorCode: normalized.errorCode || 'NORMALIZATION_FAILED',
-        message: normalized.message || 'Payload normalization failed.',
-        normalizedCount: 0,
-        readings: []
-      };
-    }
-
-    // Deduplication check: (deviceId + timestamp)
-    const primaryTs = normalized.readings[0]?.timestamp || nowIso;
-    const dedupeKey = `${deviceId}:${primaryTs}`;
-    if (this.processedSampleHashes.has(dedupeKey)) {
+    // Check for duplicate sample replay if sampleId provided
+    const body = (rawPayload && typeof rawPayload === 'object' ? rawPayload : {}) as Record<string, unknown>;
+    const sampleId = typeof body.sampleId === 'string' ? body.sampleId : undefined;
+    if (sampleId && this.processedSampleIds.has(sampleId)) {
       return {
         ok: true,
         statusCode: 200,
-        message: 'Duplicate sample acknowledged without redundant storage.',
-        normalizedCount: normalized.readings.length,
-        readings: normalized.readings
+        message: 'Duplicate sample already ingested (idempotent ignore).'
       };
     }
-    this.processedSampleHashes.add(dedupeKey);
-    // Keep deduplication set bounded (LRU-like cap)
-    if (this.processedSampleHashes.size > 2000) {
-      const iter = this.processedSampleHashes.values();
-      for (let i = 0; i < 500; i++) {
-        const val = iter.next().value;
-        if (val) this.processedSampleHashes.delete(val);
-      }
+
+    const context: IngestionContext = {
+      deviceId: device.id,
+      greenhouseId: device.greenhouseId,
+      zoneId: device.zoneId || null,
+      protocol,
+      topicOrPath,
+      remoteIp,
+      receivedAtIso: nowIso,
+      rawSampleId: sampleId
+    };
+
+    // Use adapter manager to normalize
+    const adapter = globalAdapterManager.getPlugin('esp32_standard_controller_adapter');
+    const normalized = adapter
+      ? adapter.normalizePayload(rawPayload, context)
+      : { ok: false, errorCode: 'NO_ADAPTER', message: 'No telemetry adapter available.', readings: [] };
+
+    if (!normalized.ok) {
+      this.platformDb.recordDeviceError({
+        greenhouseId: device.greenhouseId,
+        deviceId: device.id,
+        expectedType: 'esp32_controller',
+        category: 'CONNECTION',
+        errorCode: normalized.errorCode || 'INGESTION_ERROR',
+        message: normalized.message || 'Failed to normalize telemetry.',
+        ipAddress: remoteIp || null
+      });
+
+      return {
+        ok: false,
+        statusCode: 400,
+        errorCode: normalized.errorCode,
+        message: normalized.message
+      };
     }
 
-    // Store in iot_sensor_registry and update device telemetry
-    const mappedReadings: Record<string, number | null> = {};
-    let provenance: TelemetrySource = 'REAL_HARDWARE';
-
+    // Persist individual normalized sensors in sensorRegistry
+    const provenance: TelemetrySource = (body.source === 'SIMULATED' || body.simulated === true) ? 'SIMULATED' : 'REAL_HARDWARE';
     for (const r of normalized.readings) {
-      provenance = r.source;
-      mappedReadings[r.sensorType] = r.value;
       this.sensorRegistry.updateSensorReading({
-        deviceId,
-        greenhouseId,
-        zoneId: zoneId || null,
+        deviceId: device.id,
+        greenhouseId: device.greenhouseId,
+        zoneId: device.zoneId || null,
         rawKey: r.sensorId.split(':').pop() || r.sensorType,
         rawValue: r.value,
         timestampIso: r.timestamp,
-        provenance: r.source,
+        provenance,
         sensorModel: r.sensorModel
       });
     }
 
-    // Also persist in legacy / analytical telemetry_readings table for Agricultural Intelligence
+    // Also persist into canonical platform database controller telemetry
+    const validated = validateControllerTelemetryPayload(rawPayload);
     let readingId: string | undefined;
-    if (Object.keys(mappedReadings).length > 0) {
-      readingId = generateSecureId('read', 12);
-      driver.run(
-        `INSERT INTO telemetry_readings (
-           id, greenhouse_id, zone_id, device_id, temperature, humidity,
-           soil_moisture, sunlight, grow_light, water_level, battery_voltage,
-           rain_detected, raw_payload_json, ip_address, recorded_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          readingId,
-          greenhouseId,
-          zoneId || null,
-          deviceId,
-          mappedReadings.temperature ?? null,
-          mappedReadings.humidity ?? null,
-          mappedReadings.soil_moisture ?? null,
-          mappedReadings.light_intensity ?? null,
-          null, // grow_light
-          mappedReadings.water_level ?? null,
-          mappedReadings.battery_voltage ?? null,
-          mappedReadings.rainfall !== undefined && mappedReadings.rainfall !== null ? (mappedReadings.rainfall > 0 ? 1 : 0) : null,
-          JSON.stringify(rawPayload),
-          remoteIp || null,
-          primaryTs
-        ]
-      );
+
+    if (!('errorCode' in validated)) {
+      const stored = this.platformDb.storeControllerTelemetry({
+        greenhouseId: device.greenhouseId,
+        deviceId: device.id,
+        zoneId: device.zoneId || null,
+        telemetry: validated,
+        ipAddress: remoteIp
+      });
+      readingId = stored.readingId;
+    } else {
+      this.platformDb.recordDeviceCheckIn({
+        deviceId: device.id,
+        greenhouseId: device.greenhouseId,
+        ipAddress: remoteIp,
+        checkInKind: 'telemetry_upload',
+        dataTimestamp: nowIso
+      });
     }
 
-    // Record device check-in
-    this.platformDb.recordDeviceCheckIn({
-      deviceId,
-      greenhouseId,
-      ipAddress: remoteIp,
-      checkInKind: 'telemetry_upload',
-      dataTimestamp: primaryTs
-    });
+    if (sampleId) {
+      this.processedSampleIds.add(sampleId);
+      if (this.processedSampleIds.size > 2000) {
+        // Prune older sample IDs
+        const arr = Array.from(this.processedSampleIds);
+        for (let i = 0; i < 500; i++) {
+          this.processedSampleIds.delete(arr[i]);
+        }
+      }
+    }
 
     return {
       ok: true,
       statusCode: 200,
       readingId,
-      sampleId: dedupeKey,
-      normalizedCount: normalized.readings.length,
-      readings: normalized.readings
+      normalized
     };
   }
 }

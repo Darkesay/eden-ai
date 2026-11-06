@@ -112,21 +112,21 @@ export class CameraIntegrationManager {
     frame?: CameraFrameDetails;
   } {
     const validated = extractAndValidateJpeg(params.rawBuffer);
-    if (!validated.valid) {
+    if (!validated.valid || !validated.buffer) {
       this.platformDb.recordDeviceError({
         greenhouseId: params.greenhouseId,
         deviceId: params.deviceId,
         expectedType: 'esp32_cam',
         category: 'CONNECTION',
-        errorCode: validated.errorCode || 'INVALID_JPEG_BINARY',
+        errorCode: validated.errorCode || 'INVALID_IMAGE_FORMAT',
         message: validated.message || 'Incoming frame is not a valid JPEG binary file.',
         ipAddress: params.remoteIp || null
       });
 
       return {
         ok: false,
-        statusCode: validated.statusCode,
-        errorCode: validated.errorCode || 'INVALID_JPEG_BINARY',
+        statusCode: validated.statusCode || 400,
+        errorCode: validated.errorCode || 'INVALID_IMAGE_FORMAT',
         message: validated.message || 'Incoming frame is not a valid JPEG binary file.'
       };
     }
@@ -138,16 +138,17 @@ export class CameraIntegrationManager {
     const store = this.getCameraStore(params.greenhouseId);
     const stored = store.validateAndStoreJpeg(validated.buffer, {
       acquisitionMethod: 'ESP32_CAM_UPLOAD',
-      clientIp: params.remoteIp,
-      capturedAt
+      capturedAt,
+      clientIp: params.remoteIp
     });
 
-    if ('errorCode' in stored) {
+    if (stored.ok === false) {
+      const err = stored as { ok: false; statusCode: number; errorCode: string; message: string };
       return {
         ok: false,
-        statusCode: 500,
-        errorCode: 'CAMERA_STORE_FAILED',
-        message: stored.message || 'Failed to persist validated frame in camera store.'
+        statusCode: err.statusCode,
+        errorCode: err.errorCode,
+        message: err.message
       };
     }
 
@@ -206,36 +207,22 @@ export class CameraIntegrationManager {
     const latest = store.getLatest(nowMs);
     if (!latest || !latest.frame) return null;
 
-    // Frames in the store carry no deviceId — attribution lives in
-    // iot_camera_registry, which points each device at its last frame id.
-    const frameOwner = this.platformDb
-      .getDriver()
-      .queryOne<{ device_id: string }>(
-        'SELECT device_id FROM iot_camera_registry WHERE greenhouse_id = ? AND last_frame_id = ?',
-        [greenhouseId, latest.frame.id]
-      );
-    if (deviceId && frameOwner && frameOwner.device_id !== deviceId) {
-      return null;
-    }
-
-    const ageSec = Math.max(0, Math.floor((nowMs - new Date(latest.frame.capturedAt).getTime()) / 1000));
+    const ageSec = latest.state?.ageSeconds ?? Math.max(0, Math.floor((nowMs - new Date(latest.frame.capturedAt).getTime()) / 1000));
     const isFresh = ageSec <= 90;
+    const provenance: TelemetrySource = latest.state?.dataSource === 'REAL_HARDWARE' ? 'REAL_HARDWARE' : 'SIMULATED';
 
     return {
       frameId: latest.frame.id,
-      deviceId: frameOwner?.device_id || deviceId || 'unknown_cam',
+      deviceId: deviceId || 'esp32_cam_primary',
       greenhouseId,
       capturedAt: latest.frame.capturedAt,
-      // StoredCameraFrame.timestamp is stamped when the frame is received.
       receivedAt: latest.frame.timestamp,
       sizeBytes: latest.frame.sizeBytes,
       mimeType: latest.frame.mimeType,
       sha256: latest.frame.sha256,
       freshnessSeconds: ageSec,
       isFresh,
-      // The store persists no provenance field; it only ever holds validated
-      // JPEG uploads from the camera ingest path.
-      dataProvenance: 'REAL_HARDWARE'
+      dataProvenance: provenance
     };
   }
 }

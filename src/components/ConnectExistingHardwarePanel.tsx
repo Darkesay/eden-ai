@@ -33,6 +33,7 @@ import { useStoreValue } from '../lib/store';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { cn } from '../lib/utils';
+import { CameraOnboardingWizard } from './CameraOnboardingWizard';
 
 export type UiHardwareConnectionState =
   | 'CONNECTED'
@@ -202,6 +203,9 @@ export function ConnectExistingHardwarePanel({
     Array<{ id: string; title: string; description: string; command?: string }>
   >([]);
   const [copiedCmd, setCopiedCmd] = useState<boolean>(false);
+
+  // Camera Onboarding Wizard
+  const [wizardOpen, setWizardOpen] = useState<boolean>(false);
 
   // Inline Plant Vision Diagnosis on Real Verified Camera Image
   const [diagnosingCam, setDiagnosingCam] = useState<boolean>(false);
@@ -1284,10 +1288,22 @@ export function ConnectExistingHardwarePanel({
         <section className="xl:col-span-6 rounded-2xl border border-border bg-card p-5 sm:p-6 space-y-5">
           <div className="flex flex-wrap items-start justify-between gap-2 pb-3 border-b border-border">
             <div>
-              <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-                <Camera size={17} className="text-primary shrink-0" />
-                GREENHOUSE CAMERA
-              </h2>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                  <Camera size={17} className="text-primary shrink-0" />
+                  GREENHOUSE CAMERA
+                </h2>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setWizardOpen(true)}
+                  className="h-7 text-xs gap-1.5 border-primary/30 text-primary hover:bg-primary/10 cursor-pointer"
+                >
+                  <Video size={13} />
+                  Camera Setup Wizard
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Configure existing ESP32-CAM HTTP endpoints or outbound JPEG uploads for Plant Vision.
               </p>
@@ -1709,6 +1725,16 @@ export function ConnectExistingHardwarePanel({
           </div>
         </section>
       </div>
+
+      {wizardOpen && (
+        <CameraOnboardingWizard
+          greenhouseId={greenhouseId}
+          onClose={() => setWizardOpen(false)}
+          onSuccess={() => {
+            loadHardwareHttpState();
+          }}
+        />
+      )}
     </div>
   );
 }

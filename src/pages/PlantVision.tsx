@@ -34,6 +34,7 @@ import { base64PcmToWavUrl, playAudioUrl, speakWithBrowserTts, stopAllAudio } fr
 import { formatRelativeAge } from '../lib/greenhouseState';
 import { store, useStoreTable, useStoreValue } from '../lib/store';
 import { LeafCameraModal } from '../components/LeafCameraModal';
+import { CameraOnboardingWizard } from '../components/CameraOnboardingWizard';
 import { MonitoringModeBanner } from '../components/MonitoringModeBanner';
 import { prepareImageForDiagnosis } from '../lib/imageUtils';
 import { Button } from '../components/ui/button';
@@ -161,6 +162,8 @@ export default function PlantVision() {
     }
   };
 
+  const [wizardOpen, setWizardOpen] = useState(false);
+
   // Resolve active greenhouse camera frame vs global cameraConnectionManager frame
   const hasEnrolledGh = Boolean(activeGreenhouse?.id);
   const snapshotExists = hasEnrolledGh
@@ -180,6 +183,25 @@ export default function PlantVision() {
     : Boolean(camera.latestFrame?.isFresh);
 
   const cameraConnected = snapshotExists && snapshotIsFresh;
+
+  const getCameraTruthfulState = (): {
+    label: 'LIVE' | 'FRESH IMAGE' | 'STALE IMAGE' | 'RECONNECTING' | 'DISCONNECTED' | 'SIMULATED';
+    badgeClass: string;
+  } => {
+    if (manualPhotoDataUrl) {
+      return { label: 'SIMULATED', badgeClass: 'bg-muted text-foreground border-border' };
+    }
+    if (!snapshotExists) {
+      return { label: 'DISCONNECTED', badgeClass: 'bg-muted text-muted-foreground border-border' };
+    }
+    if (camera.isRefreshing || loadingGhCam) {
+      return { label: 'RECONNECTING', badgeClass: 'bg-warning/10 text-warning border-warning/30' };
+    }
+    if (snapshotIsFresh) {
+      return { label: 'FRESH IMAGE', badgeClass: 'bg-success/10 text-success border-success/30' };
+    }
+    return { label: 'STALE IMAGE', badgeClass: 'bg-warning/10 text-warning border-warning/30' };
+  };
 
   const handleManualPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -409,6 +431,16 @@ export default function PlantVision() {
           <Button
             type="button"
             variant="outline"
+            onClick={() => setWizardOpen(true)}
+            className="h-10 px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer border-primary/30 text-primary hover:bg-primary/5"
+          >
+            <Camera size={14} className="mr-1.5" />
+            Camera Setup Wizard
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
             onClick={handleRefreshSnapshot}
             disabled={camera.isRefreshing || loadingGhCam}
             className="h-10 px-3.5 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer"
@@ -441,40 +473,50 @@ export default function PlantVision() {
                 </>
               ) : (
                 <>
-                  <span
-                    className={cn(
-                      'inline-flex items-center gap-1.5 font-semibold',
-                      cameraConnected
-                        ? 'bg-success/10 border-success/30 text-success'
-                        : 'bg-muted border-border text-muted-foreground'
-                    )}
-                  >
-                    {cameraConnected ? <Wifi size={13} /> : <WifiOff size={13} />}
-                    {cameraConnected ? 'CONNECTED' : 'OFFLINE'}
-                  </span>
-                  {snapshotExists && (
-                    <span
-                      className={cn(
-                        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-semibold',
-                        snapshotIsFresh
-                          ? 'bg-success/10 border-success/30 text-success'
-                          : 'bg-warning/10 border-warning/30 text-warning'
-                      )}
-                    >
-                      {snapshotIsFresh ? <FileCheck size={13} /> : <AlertTriangle size={13} />}
-                      {snapshotIsFresh ? 'Fresh Snapshot (≤90s)' : 'Outdated Snapshot (>90s)'}
+                  {(() => {
+                    const st = getCameraTruthfulState();
+                    return (
+                      <span
+                        className={cn(
+                          'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-semibold text-xs',
+                          st.badgeClass
+                        )}
+                      >
+                        {st.label === 'FRESH IMAGE' || st.label === 'LIVE' ? (
+                          <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
+                        ) : st.label === 'RECONNECTING' ? (
+                          <RefreshCw size={12} className="animate-spin" />
+                        ) : (
+                          <WifiOff size={12} />
+                        )}
+                        {st.label}
+                      </span>
+                    );
+                  })()}
+                  {snapshotExists && snapshotTimestamp && (
+                    <span className="text-muted-foreground">
+                      Captured {formatRelativeAge(null, snapshotTimestamp)}
                     </span>
                   )}
                 </>
               )}
             </div>
 
-            <Link
-              to="/settings?tab=hardware"
-              className="text-xs font-semibold text-primary hover:underline underline-offset-4 whitespace-nowrap shrink-0"
-            >
-              CONNECT EXISTING HARDWARE
-            </Link>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setWizardOpen(true)}
+                className="text-xs font-semibold text-primary hover:underline underline-offset-4 cursor-pointer"
+              >
+                Launch Setup Wizard
+              </button>
+              <Link
+                to="/settings?tab=hardware"
+                className="text-xs font-semibold text-muted-foreground hover:text-foreground hover:underline underline-offset-4 whitespace-nowrap shrink-0"
+              >
+                Hardware Settings
+              </Link>
+            </div>
           </div>
 
           {/* Image Viewport */}
@@ -817,6 +859,15 @@ export default function PlantVision() {
           setAnalysisResult(null);
           setManualPhotoDataUrl(dataUrl);
           setManualPhotoName(fileName);
+        }}
+      />
+
+      <CameraOnboardingWizard
+        isOpen={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        greenhouseId={activeGreenhouse?.id}
+        onCompleted={() => {
+          handleRefreshSnapshot();
         }}
       />
     </div>

@@ -28,7 +28,6 @@ export class UniversalDeviceRegistry {
    */
   public registerDeviceSlot(params: {
     greenhouseId: string;
-    actorUserId: string;
     zoneId?: string | null;
     deviceType: 'esp32_controller' | 'esp32_cam' | 'environmental_node';
     label: string;
@@ -38,41 +37,37 @@ export class UniversalDeviceRegistry {
     firmwareVersion?: string;
     serialNumber?: string;
     capabilities?: string[];
-  }):
-    | { ok: true; device: DeviceRecord; profile: DeviceProfile }
-    | { ok: false; statusCode: number; errorCode: string; message: string } {
-    if (params.deviceType === 'environmental_node') {
-      return {
-        ok: false,
-        statusCode: 400,
-        errorCode: 'UNSUPPORTED_DEVICE_TYPE',
-        message: 'environmental_node devices are not yet supported by the platform device registry.'
-      };
-    }
+  }): { ok: boolean; device: DeviceRecord; profile: DeviceProfile } {
+    const driver = this.platformDb.getDriver();
+    const owner = driver.queryOne<{ user_id: string }>(
+      'SELECT user_id FROM greenhouse_members WHERE greenhouse_id = ? AND role = "owner" LIMIT 1',
+      [params.greenhouseId]
+    );
+    const actorUserId = owner?.user_id || 'usr_system';
+    const targetType = params.deviceType === 'esp32_cam' ? 'esp32_cam' : 'esp32_controller';
 
-    const res = this.platformDb.registerOrUpdateDevice({
+    const regRes = this.platformDb.registerOrUpdateDevice({
       greenhouseId: params.greenhouseId,
-      actorUserId: params.actorUserId,
-      deviceType: params.deviceType,
-      zoneId: params.zoneId || null,
+      actorUserId,
+      deviceType: targetType,
       label: params.label,
-      serialNumber: params.serialNumber,
+      zoneId: params.zoneId || null,
+      serialNumber: params.serialNumber || null,
+      createAdditionalSlot: true,
       capabilities: {
         sensors: params.capabilities || [],
         actuators: []
-      },
-      createAdditionalSlot: true
+      }
     });
 
-    if ('errorCode' in res) {
-      return res;
+    if ('errorCode' in regRes || !regRes.ok || !regRes.device) {
+      throw new Error(('message' in regRes && regRes.message) || 'Failed to register device slot');
     }
 
-    const dev = res.device;
+    const dev = regRes.device;
     const nowIso = new Date().toISOString();
 
     // Persist hardware profile info
-    const driver = this.platformDb.getDriver();
     const boardModel = params.boardModel || (params.deviceType === 'esp32_cam' ? 'esp32_cam' : 'esp32_devkit_v1');
     const spec = globalCapabilityRegistry.getBoardSpec(boardModel);
     const chipFamily = params.chipFamily || spec?.chipFamily || 'esp32';

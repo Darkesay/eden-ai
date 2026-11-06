@@ -29,6 +29,16 @@ export interface PlantAnalysisResult {
   confidenceCalibrated?: boolean;
   confidenceScore?: number | null;
   confidenceNote?: string;
+  // Independent Plant Vision structured fields
+  cropIdentification?: string;
+  visibleSymptoms?: string;
+  possibleDiseaseOrPest?: string;
+  confidenceLevel?: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNAVAILABLE';
+  supportingVisualObservations?: string[];
+  recommendedNextSteps?: string[];
+  humanConfirmationRequired?: boolean;
+  aiConfigured?: boolean;
+  status?: string;
 }
 
 export interface HarvestPredictionResult {
