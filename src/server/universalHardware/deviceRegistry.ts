@@ -28,6 +28,7 @@ export class UniversalDeviceRegistry {
    */
   public registerDeviceSlot(params: {
     greenhouseId: string;
+    actorUserId: string;
     zoneId?: string | null;
     deviceType: 'esp32_controller' | 'esp32_cam' | 'environmental_node';
     label: string;
@@ -37,20 +38,35 @@ export class UniversalDeviceRegistry {
     firmwareVersion?: string;
     serialNumber?: string;
     capabilities?: string[];
-  }): { ok: boolean; device: DeviceRecord; profile: DeviceProfile } {
-    const res = this.platformDb.registerDeviceSlot({
+  }):
+    | { ok: true; device: DeviceRecord; profile: DeviceProfile }
+    | { ok: false; statusCode: number; errorCode: string; message: string } {
+    if (params.deviceType === 'environmental_node') {
+      return {
+        ok: false,
+        statusCode: 400,
+        errorCode: 'UNSUPPORTED_DEVICE_TYPE',
+        message: 'environmental_node devices are not yet supported by the platform device registry.'
+      };
+    }
+
+    const res = this.platformDb.registerOrUpdateDevice({
       greenhouseId: params.greenhouseId,
-      zoneId: params.zoneId || null,
+      actorUserId: params.actorUserId,
       deviceType: params.deviceType,
+      zoneId: params.zoneId || null,
       label: params.label,
       serialNumber: params.serialNumber,
       capabilities: {
         sensors: params.capabilities || [],
         actuators: []
       },
-      actorUserId: 'system',
       createAdditionalSlot: true
     });
+
+    if ('errorCode' in res) {
+      return res;
+    }
 
     const dev = res.device;
     const nowIso = new Date().toISOString();
