@@ -15,8 +15,7 @@ import {
   PanelLeftOpen,
   LogOut,
   Sun,
-  Moon,
-  ChevronRight
+  Moon
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { OnboardingTour } from './OnboardingTour';
@@ -50,25 +49,6 @@ const SIDEBAR_KEY = 'botanix_nav_collapsed';
 
 function StatusDot({ className }: { className?: string }) {
   return <span className={cn('size-1.5 rounded-full', className)} aria-hidden="true" />;
-}
-
-function getBreadcrumbLabel(pathname: string, activeGhName?: string): { section: string; detail?: string } {
-  if (pathname === '/') return { section: 'Home', detail: 'Overview' };
-  if (pathname.startsWith('/greenhouses/setup') || pathname.endsWith('/setup')) {
-    return { section: 'My Greenhouse', detail: 'Guided setup' };
-  }
-  if (pathname.startsWith('/greenhouses/')) {
-    return { section: 'My Greenhouse', detail: activeGhName || 'Greenhouse monitor' };
-  }
-  if (pathname.startsWith('/greenhouses')) return { section: 'My Greenhouse' };
-  if (pathname.startsWith('/assistant') || pathname.startsWith('/ai-lab')) {
-    return { section: 'AI Assistant', detail: 'Crop & climate advisor' };
-  }
-  if (pathname.startsWith('/vision')) return { section: 'Plant Vision', detail: 'Leaf & camera inspection' };
-  if (pathname.startsWith('/settings') || pathname.startsWith('/hardware') || pathname.startsWith('/devices')) {
-    return { section: 'Settings' };
-  }
-  return { section: 'Home' };
 }
 
 export default function Layout() {
@@ -141,7 +121,6 @@ export default function Layout() {
         .toUpperCase() || user.email[0]?.toUpperCase() || '?')
     : '';
 
-  const breadcrumb = getBreadcrumbLabel(location.pathname, activeGreenhouse?.name);
   const isOnAssistant = location.pathname.startsWith('/assistant') || location.pathname.startsWith('/ai-lab');
 
   return (
@@ -260,7 +239,7 @@ export default function Layout() {
           </ul>
         </nav>
 
-        {/* Footer — data source, account, collapse, and sign out pinned to the bottom */}
+        {/* Footer — data source, account, and sign out pinned to the bottom */}
         <div className="shrink-0 border-t border-border p-2">
           {!navCollapsed && (
             <div className="mb-1 px-1">
@@ -293,28 +272,6 @@ export default function Layout() {
             </div>
           )}
 
-          {/* Collapse control */}
-          <button
-            type="button"
-            onClick={toggleNav}
-            aria-label={navCollapsed ? 'Expand navigation' : 'Collapse navigation'}
-            title={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-expanded={!navCollapsed}
-            className={cn(
-              'flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-              navCollapsed && 'justify-center px-0'
-            )}
-          >
-            {navCollapsed ? (
-              <PanelLeftOpen size={17} aria-hidden="true" />
-            ) : (
-              <PanelLeftClose size={17} aria-hidden="true" />
-            )}
-            <span className={cn('font-medium', navCollapsed && 'sr-only')}>
-              {navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            </span>
-          </button>
-
           {/* Sign out — the last action in the rail (hidden in open testing mode) */}
           {AUTH_GATE_ENABLED && (
             <button
@@ -332,6 +289,22 @@ export default function Layout() {
             </button>
           )}
         </div>
+
+        {/* Collapse handle — icon centered on the sidebar's right border */}
+        <button
+          type="button"
+          onClick={toggleNav}
+          aria-label={navCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+          title={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!navCollapsed}
+          className="absolute right-0 top-1/2 z-10 flex size-6 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          {navCollapsed ? (
+            <PanelLeftOpen size={13} aria-hidden="true" />
+          ) : (
+            <PanelLeftClose size={13} aria-hidden="true" />
+          )}
+        </button>
       </aside>
 
       {/* ---------------------------------------------------------------- */}
@@ -364,26 +337,6 @@ export default function Layout() {
               </span>
               <span className="text-[15px] font-semibold tracking-tight">EDENS AI</span>
             </Link>
-
-            {/* Breadcrumb — desktop only */}
-            <div className="hidden min-w-0 items-center gap-2 text-sm md:flex">
-              <span className="font-medium text-muted-foreground">EDENS AI</span>
-              <ChevronRight size={14} className="shrink-0 text-muted-foreground/60" aria-hidden="true" />
-              <span
-                className={cn(
-                  'truncate',
-                  breadcrumb.detail ? 'text-muted-foreground' : 'font-medium text-foreground'
-                )}
-              >
-                {breadcrumb.section}
-              </span>
-              {breadcrumb.detail && (
-                <>
-                  <ChevronRight size={14} className="shrink-0 text-muted-foreground/60" aria-hidden="true" />
-                  <span className="truncate font-medium text-foreground">{breadcrumb.detail}</span>
-                </>
-              )}
-            </div>
 
             <div className="ml-auto flex items-center gap-2">
               {/* Data source context — compact on mobile (sidebar covers desktop) */}
