@@ -452,7 +452,24 @@ async function runTests() {
     console.log('\n🎉 ALL 10 PRODUCTION STARTUP & SELF-SERVICE GREENHOUSE TESTS PASSED!\n');
   } finally {
     child.kill('SIGTERM');
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    // Wait for the server to finish its graceful shutdown (SQLite WAL flush can
+    // take a moment) before deleting its working directory — on Windows an open
+    // handle makes rmSync throw EPERM.
+    if (child.exitCode === null && child.signalCode === null) {
+      await Promise.race([
+        new Promise((resolve) => child.once('exit', resolve)),
+        new Promise((resolve) => setTimeout(resolve, 6000))
+      ]);
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+        break;
+      } catch (err) {
+        if (attempt === 2) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+    }
   }
 }
 

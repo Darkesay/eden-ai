@@ -199,11 +199,19 @@ async function main() {
   if (runOnce) {
     try {
       await syncOnce();
-      process.exit(0);
+      // Let the event loop drain instead of force-exiting: process.exit() while
+      // undici's sockets are still tearing down trips a libuv assertion on
+      // Windows (uv/async.c "handle->flags & UV_HANDLE_CLOSING"). The unref'd
+      // fallback timer still guarantees termination if a pooled keep-alive
+      // socket would otherwise hold the loop open.
+      process.exitCode = 0;
+      setTimeout(() => process.exit(0), 500).unref();
     } catch (err) {
       console.error(`[EDENS Camera Relay] Single-shot relay failed: ${err.message}`);
-      process.exit(1);
+      process.exitCode = 1;
+      setTimeout(() => process.exit(1), 500).unref();
     }
+    return;
   }
 
   while (!shuttingDown) {

@@ -127,6 +127,8 @@ async function runSuite() {
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
+  let directDb: PlatformDatabase | null = null;
+
   try {
     await waitForServer(unconfigPort);
 
@@ -756,7 +758,7 @@ async function runSuite() {
     );
 
     // Direct SQLite aging & migration check
-    const directDb = new PlatformDatabase({ dbFilePath: path.join(tmpDir, 'aging.sqlite') });
+    directDb = new PlatformDatabase({ dbFilePath: path.join(tmpDir, 'aging.sqlite') });
     await directDb.init();
     const agedVal = validateControllerTelemetryPayload({
       telemetry: { temperature: 25, humidity: 58, soilMoisture: 48 }
@@ -768,7 +770,30 @@ async function runSuite() {
   } finally {
     mainChild.kill('SIGTERM');
     await new Promise<void>((resolve) => mockEsp32Server.close(() => resolve()));
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    // Close the direct SQLite handle opened mid-suite (it lives inside tmpDir and
+    // would otherwise keep aging.sqlite locked on Windows).
+    try {
+      await directDb?.close();
+    } catch {
+      /* already closed or never initialised */
+    }
+    // Wait for the server's graceful shutdown (WAL flush) before deleting — an
+    // open handle makes rmSync throw EPERM on Windows.
+    if (mainChild.exitCode === null && mainChild.signalCode === null) {
+      await Promise.race([
+        new Promise((resolve) => mainChild.once('exit', resolve)),
+        new Promise((resolve) => setTimeout(resolve, 6000))
+      ]);
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        break;
+      } catch (err) {
+        if (attempt === 2) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+    }
   }
 }
 
